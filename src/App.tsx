@@ -258,8 +258,7 @@ export default function App() {
               <h2>解析エラー</h2>
               <p className="error-message">{error}</p>
               <p className="error-hint">
-                MySQL 形式の SELECT / UPDATE / DELETE 文を入力してください。
-                INSERT 文や構文エラーには対応していません。
+                MySQL 形式の SELECT / UPDATE / DELETE 文を入力してください。INSERT など上記以外の文種は未対応です。
               </p>
             </div>
           )}

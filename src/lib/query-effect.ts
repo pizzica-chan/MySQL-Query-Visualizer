@@ -2,7 +2,6 @@ import type { ConditionNode, JoinEdge, ParsedQuery, SelectColumn, SetClause, Tab
 import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
-  formatEffectiveInnerJoinScopeLine,
   type EffectiveInnerReason,
 } from './join-effective-inner';
 import { resolveJoinLayoutSources } from './join-graph-layout';
@@ -12,7 +11,7 @@ export type EffectAction = 'select' | 'update' | 'delete';
 
 export type EffectLineKind = 'target' | 'scope' | 'filter' | 'aggregate' | 'change' | 'info';
 
-export type ConditionEffectType = 'and' | 'or' | 'not' | 'leaf';
+export type ConditionEffectType = 'and' | 'or' | 'not' | 'leaf' | 'join';
 
 export interface ConditionEffectNode {
   id: string;
@@ -22,10 +21,25 @@ export interface ConditionEffectNode {
   children?: ConditionEffectNode[];
 }
 
+export interface TablePresenceJoin {
+  type: string;
+  condition: ConditionEffectNode;
+}
+
+export interface TablePresenceEntry {
+  tableLabel: string;
+  join?: TablePresenceJoin;
+}
+
 export interface TablePresenceGroup {
   label: string;
   kind: 'required' | 'optional';
-  tables: string[];
+  entries: TablePresenceEntry[];
+}
+
+export interface QueryEffectFilterPart {
+  label: string;
+  root: ConditionEffectNode;
 }
 
 export interface QueryEffectSection {
@@ -33,6 +47,8 @@ export interface QueryEffectSection {
   title?: string;
   lines?: string[];
   presenceGroups?: TablePresenceGroup[];
+  /** 行の絞り込み: 結合条件と WHERE を分けて表示 */
+  filterParts?: QueryEffectFilterPart[];
   conditionRoot?: ConditionEffectNode;
 }
 
@@ -139,32 +155,6 @@ const ACTION_LABELS: Record<ParsedQuery['statementType'], { action: EffectAction
   SELECT: { action: 'select', label: '表示', verb: '表示される' },
   UPDATE: { action: 'update', label: '更新', verb: '更新される' },
   DELETE: { action: 'delete', label: '削除', verb: '削除される' },
-};
-
-const JOIN_SCOPE: Record<string, (left: string, right: string, condition: string) => string> = {
-  'INNER JOIN': (l, r, c) =>
-    `${l} と ${r} を INNER JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
-  JOIN: (l, r, c) =>
-    `${l} と ${r} を JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
-  'LEFT JOIN': (l, r, c) =>
-    `${l} の行をすべて残し ${r} を LEFT JOIN — 結合条件「${c}」（${r} が無い行も ${l} は残る）`,
-  'RIGHT JOIN': (l, r, c) =>
-    `${r} の行をすべて残し ${l} を RIGHT JOIN — 結合条件「${c}」`,
-  'FULL JOIN': (l, r, c) => `${l} と ${r} を FULL JOIN — 結合条件「${c}」`,
-  'CROSS JOIN': (l, r) => `${l} と ${r} の直積（すべての組み合わせ）`,
-};
-
-const MULTI_SOURCE_JOIN_SCOPE: Record<string, (sources: string, target: string, condition: string) => string> = {
-  'INNER JOIN': (s, r, c) =>
-    `${s} と ${r} を INNER JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
-  JOIN: (s, r, c) =>
-    `${s} と ${r} を JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
-  'LEFT JOIN': (s, r, c) =>
-    `${s} を基準に ${r} を LEFT JOIN — 結合条件「${c}」（${r} が無い組み合わせも LEFT 側は残る）`,
-  'RIGHT JOIN': (s, r, c) =>
-    `${r} を基準に ${s} を RIGHT JOIN — 結合条件「${c}」`,
-  'FULL JOIN': (s, r, c) => `${s} と ${r} を FULL JOIN — 結合条件「${c}」`,
-  'CROSS JOIN': (s, r) => `${s} と ${r} の直積（すべての組み合わせ）`,
 };
 
 function derivedTableLabelAlreadyPresent(name: string): boolean {
@@ -411,49 +401,27 @@ function buildTablePresenceGroups(
 ): TablePresenceGroup[] {
   return [
     {
-      label: 'レコード必須',
+      label: PRESENCE_REQUIRED_LABEL,
       kind: 'required',
-      tables: classification.required.map((t) =>
-        formatTableNameForPresence(t, classification, true),
-      ),
+      entries: classification.required.map((t) => ({
+        tableLabel: formatTableNameForPresence(t, classification, true),
+      })),
     },
     {
-      label: 'レコード任意（外部結合）',
+      label: PRESENCE_OPTIONAL_LABEL,
       kind: 'optional',
-      tables: classification.optional.map((t) =>
-        formatTableNameForPresence(t, classification, false),
-      ),
+      entries: classification.optional.map((t) => ({
+        tableLabel: formatTableNameForPresence(t, classification, false),
+      })),
     },
   ];
 }
 
-function describeJoin(
-  join: JoinEdge,
-  tables: TableRef[],
-  effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
-): string {
+function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
   const sourceLabels = joinSourceLabels(join, tables);
-  const sourcesText = sourceLabels.join('、');
   const right = tableName(join, tables, join.targetId);
-  const left = sourceLabels.length === 1 ? sourceLabels[0]! : sourcesText;
-
-  if (effectiveInner) {
-    const preservedLabel = join.type === 'LEFT JOIN' ? left : right;
-    return formatEffectiveInnerJoinScopeLine(
-      join,
-      preservedLabel,
-      effectiveInner.nullableTable,
-      effectiveInner.reasons,
-    );
-  }
-
-  if (sourceLabels.length > 1) {
-    const fn = MULTI_SOURCE_JOIN_SCOPE[join.type] ?? MULTI_SOURCE_JOIN_SCOPE.JOIN;
-    return fn(sourcesText, right, join.condition);
-  }
-
-  const fn = JOIN_SCOPE[join.type] ?? JOIN_SCOPE.JOIN;
-  return fn(left, right, join.condition);
+  const left = sourceLabels.length === 1 ? sourceLabels[0]! : sourceLabels.join('、');
+  return `CROSS JOIN — ${left} と ${right} のすべての組み合わせ`;
 }
 
 function conditionPhrase(node: ConditionNode): string {
@@ -519,8 +487,198 @@ export function buildConditionEffectTree(node: ConditionNode): ConditionEffectNo
 }
 
 export function collectLeafTexts(node: ConditionEffectNode): string[] {
+  if (node.type === 'join') {
+    const header = node.label ? [node.label] : [];
+    return [...header, ...(node.children ?? []).flatMap(collectLeafTexts)];
+  }
   if (node.type === 'leaf') return node.text ? [node.text] : [];
   return (node.children ?? []).flatMap(collectLeafTexts);
+}
+
+/** 結合条件ブロック（JOIN 種別 + ON 句）を抽出 */
+export function collectJoinFilterNodes(root: ConditionEffectNode): ConditionEffectNode[] {
+  if (root.type === 'join') return [root];
+  if (root.type === 'and' || root.type === 'or' || root.type === 'not') {
+    return (root.children ?? []).flatMap(collectJoinFilterNodes);
+  }
+  return [];
+}
+
+function effectiveInnerForJoin(
+  join: JoinEdge,
+  query: ParsedQuery,
+  effectiveInnerByJoin: Map<string, { reasons: EffectiveInnerReason[] }>,
+): { nullableTable: TableRef; reasons: EffectiveInnerReason[] } | undefined {
+  const analysis = effectiveInnerByJoin.get(join.id);
+  if (!analysis || analysis.reasons.length === 0) return undefined;
+
+  const nullableId = join.type === 'LEFT JOIN' ? join.targetId : join.sourceId;
+  const nullableTable = query.tables.find((t) => t.id === nullableId);
+  if (!nullableTable) return undefined;
+
+  return { nullableTable, reasons: analysis.reasons };
+}
+
+const SCOPE_SECTION_TITLE = '結合するテーブル';
+const PRESENCE_REQUIRED_LABEL = '必須';
+const PRESENCE_OPTIONAL_LABEL = '任意（外部結合）';
+const ROW_FILTER_TITLE = '行の絞り込み';
+
+function effectiveInnerCauseLabel(reasons: EffectiveInnerReason[]): string {
+  if (reasons.some((r) => r.kind === 'inner_join')) {
+    return '後続の結合で必須';
+  }
+  const parts: string[] = [];
+  if (reasons.some((r) => r.kind === 'where')) parts.push('WHERE');
+  if (reasons.some((r) => r.kind === 'having')) parts.push('HAVING');
+  if (parts.length === 0) return '後続条件で必須';
+  return `${parts.join(' / ')} で必須`;
+}
+
+function effectiveInnerFilterTag(join: JoinEdge, reasons: EffectiveInnerReason[]): string {
+  return `${join.type}（実質 INNER JOIN — ${effectiveInnerCauseLabel(reasons)}）`;
+}
+
+function joinFilterHeader(
+  join: JoinEdge,
+  effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
+): string {
+  if (effectiveInner) {
+    return effectiveInnerFilterTag(join, effectiveInner.reasons);
+  }
+  return isInnerJoinType(join.type) ? 'INNER JOIN' : join.type;
+}
+
+function buildJoinConditionEffectNode(join: JoinEdge): ConditionEffectNode {
+  if (join.conditionRoot) {
+    return buildConditionEffectTree(join.conditionRoot);
+  }
+  return {
+    id: `join-cond-${join.id}`,
+    type: 'leaf',
+    text: join.condition,
+  };
+}
+
+function findOptionalJoinForTable(
+  table: TableRef,
+  optionalJoins: JoinEdge[],
+  query: ParsedQuery,
+): JoinEdge | undefined {
+  return optionalJoins.find((join) => {
+    if (join.type === 'LEFT JOIN') return join.targetId === table.id;
+    if (join.type === 'RIGHT JOIN') return join.sourceId === table.id;
+    if (join.type === 'FULL JOIN') {
+      return (
+        join.targetId === table.id ||
+        resolveJoinLayoutSources(join, query.tables).includes(table.id)
+      );
+    }
+    return false;
+  });
+}
+
+function attachOptionalJoinsToPresenceGroups(
+  groups: TablePresenceGroup[],
+  query: ParsedQuery,
+  classification: TablePresenceClassification,
+  optionalJoins: JoinEdge[],
+): TablePresenceGroup[] {
+  return groups.map((group) => {
+    if (group.kind !== 'optional') return group;
+    return {
+      ...group,
+      entries: group.entries.map((entry) => {
+        const table = classification.optional.find(
+          (t) => formatTableNameForPresence(t, classification, false) === entry.tableLabel,
+        );
+        if (!table) return entry;
+        const join = findOptionalJoinForTable(table, optionalJoins, query);
+        if (!join) return entry;
+        return {
+          ...entry,
+          join: {
+            type: join.type,
+            condition: buildJoinConditionEffectNode(join),
+          },
+        };
+      }),
+    };
+  });
+}
+
+function buildJoinFilterNode(
+  join: JoinEdge,
+  effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
+): ConditionEffectNode {
+  return {
+    id: `join-filter-${join.id}`,
+    type: 'join',
+    label: joinFilterHeader(join, effectiveInner),
+    children: [buildJoinConditionEffectNode(join)],
+  };
+}
+
+/** INNER / 実質 INNER JOIN の ON だけが行の絞り込みに相当する */
+function isJoinRowFilter(
+  join: JoinEdge,
+  effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
+): boolean {
+  if (isInnerJoinType(join.type)) return true;
+  return Boolean(effectiveInner);
+}
+
+function buildJoinFilterLeaves(
+  query: ParsedQuery,
+  effectiveInnerByJoin: Map<string, { reasons: EffectiveInnerReason[] }>,
+): ConditionEffectNode[] {
+  return query.joins.flatMap((join) => {
+    const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
+    if (!isJoinRowFilter(join, effectiveInner)) return [];
+    return [
+      buildJoinFilterNode(join, effectiveInner),
+    ];
+  });
+}
+
+function joinFilterPart(joinLeaves: ConditionEffectNode[]): QueryEffectFilterPart | null {
+  if (joinLeaves.length === 0) return null;
+  if (joinLeaves.length === 1) {
+    return { label: '結合条件', root: joinLeaves[0]! };
+  }
+  return {
+    label: '結合条件',
+    root: {
+      id: 'join-filter-root',
+      type: 'and',
+      label: 'すべて満たす（AND）',
+      children: joinLeaves,
+    },
+  };
+}
+
+function describeRowFilterSection(query: ParsedQuery): QueryEffectSection | null {
+  const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
+  const joinLeaves = buildJoinFilterLeaves(query, effectiveInnerByJoin);
+  const filterParts: QueryEffectFilterPart[] = [];
+
+  const joinPart = joinFilterPart(joinLeaves);
+  if (joinPart) filterParts.push(joinPart);
+
+  if (query.where) {
+    filterParts.push({
+      label: 'WHERE',
+      root: buildConditionEffectTree(query.where),
+    });
+  }
+
+  if (filterParts.length === 0) return null;
+
+  return {
+    kind: 'filter',
+    title: ROW_FILTER_TITLE,
+    filterParts,
+  };
 }
 
 function describeScope(query: ParsedQuery): QueryEffectSection | null {
@@ -533,26 +691,28 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
   } else if (query.joins.length === 0) {
     lines.push(`${tableLabel(query.tables[0]!)} の行`);
   } else {
-    presenceGroups = buildTablePresenceGroups(classifyTablePresenceRequirement(query));
-
-    lines.push(`${tableLabel(query.tables[0]!)} を起点に行の組み合わせを構成`);
+    const classification = classifyTablePresenceRequirement(query);
+    const optionalJoins = query.joins.filter((join) => {
+      if (join.type === 'CROSS JOIN') return false;
+      const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
+      return !isJoinRowFilter(join, effectiveInner);
+    });
+    presenceGroups = attachOptionalJoinsToPresenceGroups(
+      buildTablePresenceGroups(classification),
+      query,
+      classification,
+      optionalJoins,
+    );
     for (const join of query.joins) {
-      const analysis = effectiveInnerByJoin.get(join.id);
-      let effectiveInner: { nullableTable: TableRef; reasons: EffectiveInnerReason[] } | undefined;
-      if (analysis && analysis.reasons.length > 0) {
-        const nullableId = join.type === 'LEFT JOIN' ? join.targetId : join.sourceId;
-        const nullableTable = query.tables.find((t) => t.id === nullableId);
-        if (nullableTable) {
-          effectiveInner = { nullableTable, reasons: analysis.reasons };
-        }
+      if (join.type === 'CROSS JOIN') {
+        lines.push(crossJoinPhrase(join, query.tables));
       }
-      lines.push(describeJoin(join, query.tables, effectiveInner));
     }
   }
 
   if (lines.length === 0 && !presenceGroups) return null;
 
-  return { kind: 'scope', title: '検索範囲', lines, presenceGroups };
+  return { kind: 'scope', title: SCOPE_SECTION_TITLE, lines, presenceGroups };
 }
 
 function describeFilterSection(
@@ -659,7 +819,7 @@ export function buildQueryEffect(query: ParsedQuery): QueryEffect {
   const scope = describeScope(query);
   if (scope) sections.push(scope);
 
-  const where = describeFilterSection(query.where, '行の絞り込み（WHERE）');
+  const where = describeRowFilterSection(query);
   if (where) sections.push(where);
 
   sections.push(...describeAggregation(query));

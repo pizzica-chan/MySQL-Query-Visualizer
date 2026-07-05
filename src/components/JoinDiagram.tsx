@@ -363,7 +363,7 @@ function JoinDiagramFlow({
                     {effectiveInner ? `${j.type} ≈INNER` : j.type}
                   </span>
                   {effectiveInner && (
-                    <span className="join-effective-inner-tag">実質 INNER</span>
+                    <span className="join-effective-inner-tag">実質 INNER JOIN</span>
                   )}
                   <span className="join-tables">{formatJoinTableLink(j, tables)}</span>
                   <code {...conditionProps}>{j.condition}</code>

@@ -34,7 +34,7 @@ const SQL_KEYWORDS = [
   'IN',
 ] as const;
 
-const EMPHASIS_PHRASES = ['≈INNER'] as const;
+const EMPHASIS_PHRASES: readonly string[] = [];
 
 const COLUMN_PATTERN = /^([a-zA-Z_][\w$]*)\.([a-zA-Z_*][\w$]*)/;
 

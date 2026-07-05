@@ -10,7 +10,7 @@ import {
 } from './join-graph-layout';
 import { formatJoinConditionLabel } from './join-condition';
 import { parseMySqlQuery } from './parser';
-import { buildQueryEffect } from './query-effect';
+import { buildQueryEffect, collectJoinFilterNodes, collectLeafTexts } from './query-effect';
 
 describe('JOIN ON サブクエリ', () => {
   const SUBQUERY_ON_SQL = [
@@ -102,11 +102,15 @@ describe('JOIN ON サブクエリ', () => {
     if (!result.success) return;
 
     const effect = buildQueryEffect(result.query);
-    const scope = effect.sections.find((s) => s.kind === 'scope');
-    const joinLine = scope?.lines?.find((l) => l.includes('IN (SELECT'));
-    expect(joinLine).toBeDefined();
-    expect(joinLine).toContain('u.id');
-    expect(joinLine).toContain('o.user_id');
+    const filter = effect.sections.find((s) => s.kind === 'filter' && s.title === '行の絞り込み');
+    const joinPart = filter?.filterParts?.find((p) => p.label === '結合条件');
+    const joinNode = joinPart ? collectJoinFilterNodes(joinPart.root)[0] : undefined;
+    expect(joinNode?.type).toBe('join');
+    expect(joinNode?.label).toBe('INNER JOIN');
+    const onText = collectLeafTexts(joinNode!.children![0]!).join(' ');
+    expect(onText).toContain('IN (SELECT');
+    expect(onText).toContain('o.user_id');
+    expect(result.query.joins[0]!.condition).toContain('u.id');
   });
 
   it('作用説明タブの JOIN 説明にも JSON が露出しない', () => {
@@ -115,9 +119,20 @@ describe('JOIN ON サブクエリ', () => {
       expect(result.success).toBe(true);
       if (!result.success) return;
 
-      const scopeLines =
-        buildQueryEffect(result.query).sections.find((s) => s.kind === 'scope')?.lines ?? [];
-      const joinLines = scopeLines.filter((l) => l.includes('JOIN') || l.includes('EXISTS') || l.includes(' IN '));
+      const effect = buildQueryEffect(result.query);
+      const filterLeaves = effect.sections.flatMap((s) => {
+        if (s.kind !== 'filter' || s.title !== '行の絞り込み') return [];
+        if (s.filterParts) return s.filterParts.flatMap((p) => collectLeafTexts(p.root));
+        return s.conditionRoot ? collectLeafTexts(s.conditionRoot) : [];
+      });
+      const scopeOptionalJoins = effect.sections
+        .find((s) => s.kind === 'scope')
+        ?.presenceGroups?.find((g) => g.kind === 'optional')
+        ?.entries.flatMap((e) => (e.join ? collectLeafTexts(e.join.condition) : [])) ?? [];
+      const scopeLines = effect.sections.find((s) => s.kind === 'scope')?.lines ?? [];
+      const joinLines = [...filterLeaves, ...scopeOptionalJoins, ...scopeLines].filter(
+        (l) => l.includes('JOIN') || l.includes('EXISTS') || l.includes(' IN ') || l.includes('結合条件'),
+      );
       expect(joinLines.length).toBeGreaterThan(0);
       for (const line of joinLines) {
         expect(line).not.toMatch(/^\s*\{/);

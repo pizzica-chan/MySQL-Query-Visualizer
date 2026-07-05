@@ -1482,6 +1482,46 @@ body {
   color: var(--text-muted);
 }
 
+.query-effect-presence-entries {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.query-effect-presence-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.query-effect-presence-entry--empty {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  font-style: italic;
+  padding-left: 14px;
+}
+
+.query-effect-presence-join {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-visible);
+}
+
+.query-effect-presence-join-type {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.query-effect-presence-join-on .effect-condition-leaf,
+.query-effect-presence-join-on .effect-condition-group {
+  font-size: 0.82rem;
+}
+
 .query-effect-presence-tables {
   list-style: none;
   display: flex;
@@ -1513,6 +1553,19 @@ body {
 .query-effect-presence-group--optional .query-effect-presence-table {
   color: var(--text-muted);
   font-weight: 500;
+}
+
+.query-effect-filter-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.query-effect-filter-part-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 6px;
 }
 
 .query-effect-presence-table--empty {
@@ -1594,6 +1647,33 @@ body {
 
 .query-effect-summary .effect-highlighted-text {
   font-weight: inherit;
+}
+
+.effect-join-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-visible);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.effect-join-filter-header {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.effect-join-filter-body {
+  padding-left: 10px;
+  border-left: 2px solid var(--border-visible);
+}
+
+.effect-join-filter-body .effect-condition-group,
+.effect-join-filter-body .effect-condition-leaf {
+  margin-top: 0;
 }
 
 .effect-condition-group {

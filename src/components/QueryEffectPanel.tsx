@@ -10,6 +10,21 @@ function ConditionEffectTree({
   node: ConditionEffectNode;
   query: ParsedQuery;
 }) {
+  if (node.type === 'join') {
+    return (
+      <div className="effect-join-filter">
+        <div className="effect-join-filter-header">
+          <EffectHighlightedText text={node.label ?? ''} query={query} />
+        </div>
+        <div className="effect-join-filter-body">
+          {node.children?.map((child) => (
+            <ConditionEffectTree key={child.id} node={child} query={query} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (node.type === 'leaf') {
     return (
       <div className="effect-condition-leaf">
@@ -43,21 +58,33 @@ function EffectSection({ section, query }: { section: QueryEffectSection; query:
       {section.title && <h4 className="query-effect-section-title">{section.title}</h4>}
       {section.presenceGroups && section.presenceGroups.length > 0 && (
         <div className="query-effect-presence">
-          {section.presenceGroups.map((group) => (
+          {section.presenceGroups.map((group, index) => (
             <div
-              key={group.kind}
+              key={`${group.kind}-${index}`}
               className={`query-effect-presence-group query-effect-presence-group--${group.kind}`}
             >
               <div className="query-effect-presence-label">{group.label}</div>
-              <ul className="query-effect-presence-tables">
-                {group.tables.length === 0 ? (
-                  <li className="query-effect-presence-table query-effect-presence-table--empty">
+              <ul className="query-effect-presence-entries">
+                {group.entries.length === 0 ? (
+                  <li className="query-effect-presence-entry query-effect-presence-entry--empty">
                     なし
                   </li>
                 ) : (
-                  group.tables.map((table, index) => (
-                    <li key={index} className="query-effect-presence-table">
-                      <EffectHighlightedText text={table} query={query} />
+                  group.entries.map((entry, entryIndex) => (
+                    <li key={entryIndex} className="query-effect-presence-entry">
+                      <div className="query-effect-presence-table">
+                        <EffectHighlightedText text={entry.tableLabel} query={query} />
+                      </div>
+                      {entry.join && (
+                        <div className="query-effect-presence-join">
+                          <div className="query-effect-presence-join-type">
+                            <EffectHighlightedText text={entry.join.type} query={query} />
+                          </div>
+                          <div className="query-effect-presence-join-on">
+                            <ConditionEffectTree node={entry.join.condition} query={query} />
+                          </div>
+                        </div>
+                      )}
                     </li>
                   ))
                 )}
@@ -74,6 +101,16 @@ function EffectSection({ section, query }: { section: QueryEffectSection; query:
             </li>
           ))}
         </ul>
+      )}
+      {section.filterParts && section.filterParts.length > 0 && (
+        <div className="query-effect-filter-parts">
+          {section.filterParts.map((part, index) => (
+            <div key={`${part.label}-${index}`} className="query-effect-filter-part">
+              <div className="query-effect-filter-part-label">{part.label}</div>
+              <ConditionEffectTree node={part.root} query={query} />
+            </div>
+          ))}
+        </div>
       )}
       {section.conditionRoot && <ConditionEffectTree node={section.conditionRoot} query={query} />}
     </div>

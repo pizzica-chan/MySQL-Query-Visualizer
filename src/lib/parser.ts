@@ -881,7 +881,7 @@ export const SAMPLE_SQL = `SELECT
 FROM users u
 INNER JOIN orders o ON o.user_id = u.id
 LEFT JOIN order_items oi ON oi.order_id = o.id
-INNER JOIN products p ON p.id = oi.product_id
+INNER JOIN products p ON p.id = oi.product_id AND (p.status = 'active' OR p.clearance = 1)
 LEFT JOIN line_metrics lm ON lm.user_id = u.id AND lm.order_id = o.id AND lm.product_id = p.id
 LEFT JOIN categories c ON c.id = p.category_id
 INNER JOIN (
