@@ -1,4 +1,4 @@
-import type { ConditionNode, JoinEdge, ParsedQuery, SelectColumn, TableRef } from './types';
+import type { ConditionNode, JoinEdge, ParsedQuery, SelectColumn, SetClause, TableRef } from './types';
 import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerJoinScopeLine,
@@ -9,7 +9,7 @@ import { hasUnion } from './query-utils';
 
 export type EffectAction = 'select' | 'update' | 'delete';
 
-export type EffectLineKind = 'scope' | 'filter' | 'aggregate' | 'change' | 'info';
+export type EffectLineKind = 'target' | 'scope' | 'filter' | 'aggregate' | 'change' | 'info';
 
 export type ConditionEffectType = 'and' | 'or' | 'not' | 'leaf';
 
@@ -179,6 +179,127 @@ function tablePrimaryName(table: TableRef): string {
     return `${table.table}（${table.alias}）`;
   }
   return table.table;
+}
+
+function tableRefByName(tables: TableRef[], name: string): TableRef | undefined {
+  return tables.find((t) => t.alias === name || t.table === name || t.displayName === name);
+}
+
+function formatSummaryTableList(tables: TableRef[], multiSuffix = ''): string {
+  if (tables.length === 0) return 'テーブル';
+  const names = tables.map((t) => tablePrimaryName(t));
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]} と ${names[1]}`;
+  return `${names[0]} など ${names.length} テーブル${multiSuffix}`;
+}
+
+function deleteTargetTables(query: ParsedQuery): TableRef[] {
+  if (!query.deleteTargets?.length) return [];
+  const tables: TableRef[] = [];
+  const seen = new Set<string>();
+  for (const target of query.deleteTargets) {
+    const table = tableRefByName(query.tables, target.name);
+    if (table && !seen.has(table.id)) {
+      seen.add(table.id);
+      tables.push(table);
+    }
+  }
+  return tables;
+}
+
+function updatedTargetTables(query: ParsedQuery): TableRef[] {
+  const tables: TableRef[] = [];
+  const seen = new Set<string>();
+  for (const set of query.setClauses ?? []) {
+    if (!set.table) continue;
+    const table = tableRefByName(query.tables, set.table);
+    if (table && !seen.has(table.id)) {
+      seen.add(table.id);
+      tables.push(table);
+    }
+  }
+  if (tables.length > 0) return tables;
+  return query.tables[0] ? [query.tables[0]] : [];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function tableQualifierPrefixes(table: TableRef): string[] {
+  const prefixes = new Set<string>();
+  if (table.alias) prefixes.add(table.alias);
+  if (!table.isDerived) {
+    if (table.schema) prefixes.add(`${table.schema}.${table.table}`);
+    prefixes.add(table.table);
+  }
+  return [...prefixes];
+}
+
+function replaceTableQualifiersInExpression(expression: string, tables: TableRef[]): string {
+  let result = expression;
+  const replacements = tables
+    .flatMap((table) =>
+      tableQualifierPrefixes(table).map((prefix) => ({
+        prefix,
+        label: tablePrimaryName(table),
+      })),
+    )
+    .sort((a, b) => b.prefix.length - a.prefix.length);
+
+  for (const { prefix, label } of replacements) {
+    const qualified = new RegExp(`(?<![\\w.])${escapeRegExp(prefix)}\\.`, 'g');
+    result = result.replace(qualified, `${label}.`);
+  }
+  return result;
+}
+
+function formatSelectColumnLine(col: SelectColumn, tables: TableRef[]): string {
+  const expression = replaceTableQualifiersInExpression(col.expression, tables);
+  if (col.expression === '*') return '*（すべての列）';
+  return col.alias ? `${expression} AS ${col.alias}` : expression;
+}
+
+function formatSetClauseLine(set: SetClause, tables: TableRef[]): string {
+  if (set.table) {
+    const table = tableRefByName(tables, set.table);
+    const tableName = table ? tablePrimaryName(table) : set.table;
+    return `${tableName}.${set.column} = ${set.value}`;
+  }
+  return set.label;
+}
+
+function describeOperationTarget(query: ParsedQuery): QueryEffectSection | null {
+  if (query.statementType === 'SELECT') {
+    if (query.columns.length === 0) return null;
+    return {
+      kind: 'target',
+      title: '表示対象',
+      lines: query.columns.map((col) => formatSelectColumnLine(col, query.tables)),
+    };
+  }
+
+  if (query.statementType === 'UPDATE') {
+    if (!query.setClauses?.length) return null;
+    return {
+      kind: 'target',
+      title: '更新対象',
+      lines: query.setClauses.map((set) => formatSetClauseLine(set, query.tables)),
+    };
+  }
+
+  if (query.statementType === 'DELETE') {
+    const targets = deleteTargetTables(query);
+    const tables = targets.length > 0 ? targets : query.tables.filter((t) => !t.isDerived);
+    if (tables.length === 0) return null;
+    return {
+      kind: 'target',
+      title: '削除対象',
+      lines: tables.map((t) => tablePrimaryName(t)),
+    };
+  }
+
+  return null;
 }
 
 function tableLabel(table: TableRef): string {
@@ -438,7 +559,7 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
 
   if (lines.length === 0 && !presenceGroups) return null;
 
-  return { kind: 'scope', title: '対象の範囲', lines, presenceGroups };
+  return { kind: 'scope', title: '検索範囲', lines, presenceGroups };
 }
 
 function describeFilterSection(
@@ -484,13 +605,6 @@ function describeChanges(query: ParsedQuery): QueryEffectSection | null {
       lines: query.setClauses.map((s) => s.label),
     };
   }
-  if (query.statementType === 'DELETE' && query.deleteTargets?.length) {
-    return {
-      kind: 'change',
-      title: '削除対象',
-      lines: [`${query.deleteTargets.map((t) => t.label).join('、')} の行`],
-    };
-  }
   return null;
 }
 
@@ -507,16 +621,16 @@ function describePostProcess(query: ParsedQuery): QueryEffectSection | null {
 
 function primaryTarget(query: ParsedQuery): string {
   if (query.statementType === 'DELETE' && query.deleteTargets?.length) {
-    return query.deleteTargets.map((t) => t.label).join(' と ');
+    return formatSummaryTableList(deleteTargetTables(query));
   }
   if (query.statementType === 'UPDATE') {
-    const main = query.tables[0];
-    return main ? tablePrimaryName(main) : 'テーブル';
+    return formatSummaryTableList(updatedTargetTables(query));
   }
   if (query.joins.length > 0) {
-    const names = query.tables.filter((t) => !t.isDerived).map((t) => tablePrimaryName(t));
-    if (names.length <= 2) return names.join(' と ');
-    return `${names[0]} など ${names.length} テーブルの組み合わせ`;
+    return formatSummaryTableList(
+      query.tables.filter((t) => !t.isDerived),
+      'の組み合わせ',
+    );
   }
   const main = query.tables[0];
   return main ? tablePrimaryName(main) : 'テーブル';
@@ -548,6 +662,9 @@ function buildSummary(query: ParsedQuery, meta: (typeof ACTION_LABELS)[ParsedQue
 export function buildQueryEffect(query: ParsedQuery): QueryEffect {
   const meta = ACTION_LABELS[query.statementType];
   const sections: QueryEffectSection[] = [];
+
+  const target = describeOperationTarget(query);
+  if (target) sections.push(target);
 
   const scope = describeScope(query);
   if (scope) sections.push(scope);

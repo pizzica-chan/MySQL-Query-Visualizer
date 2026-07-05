@@ -49,15 +49,40 @@ describe('query-effect', () => {
     expect(effect.action).toBe('select');
     expect(effect.summary).toContain('表示');
     expect(effect.summary).toContain('100');
+    expect(effect.summary).toContain('users（u）');
+    expect(effect.summary).not.toContain(' AS ');
 
     const scope = effect.sections.find((s) => s.kind === 'scope');
+    expect(scope?.title).toBe('検索範囲');
     expect(scope?.lines?.some((l) => l.includes('INNER JOIN'))).toBe(true);
+
+    const target = effect.sections.find((s) => s.kind === 'target');
+    expect(target?.title).toBe('表示対象');
+    expect(target?.lines?.some((l) => l.includes('users（u）.id'))).toBe(true);
+    expect(effect.sections.findIndex((s) => s.kind === 'target')).toBeLessThan(
+      effect.sections.findIndex((s) => s.kind === 'scope'),
+    );
 
     const where = effect.sections.find((s) => s.kind === 'filter' && s.title?.includes('WHERE'));
     expect(where?.conditionRoot?.type).toBe('and');
     expect(collectLeafTexts(where!.conditionRoot!).some((t) => t.includes('active'))).toBe(true);
 
     expect(effect.sections.some((s) => s.kind === 'aggregate')).toBe(true);
+  });
+
+  it('SELECT の表示対象はエイリアス解決の有無に関わらず実テーブル名とエイリアスを併記する', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const unresolved = buildQueryEffect(result.query).sections.find((s) => s.kind === 'target');
+    const resolved = buildQueryEffect(applyAliasResolution(result.query, true)).sections.find(
+      (s) => s.kind === 'target',
+    );
+
+    expect(unresolved?.lines?.some((l) => l.includes('users（u）.id'))).toBe(true);
+    expect(resolved?.lines?.some((l) => l.includes('users（u）.id'))).toBe(true);
+    expect(resolved?.lines?.some((l) => l.match(/(?<![（）\w])users\.id/))).toBe(false);
   });
 
   describe('実質 INNER JOIN の scope 説明', () => {
@@ -261,6 +286,12 @@ describe('query-effect', () => {
     const effect = buildQueryEffect(result.query);
     expect(effect.action).toBe('update');
     expect(effect.summary).toContain('更新');
+    expect(effect.summary).toContain('users（u） など 3 テーブル');
+    expect(effect.summary).not.toContain(' AS ');
+    const target = effect.sections.find((s) => s.kind === 'target');
+    expect(target?.title).toBe('更新対象');
+    expect(target?.lines?.some((l) => l.includes('users（u）.status'))).toBe(true);
+    expect(target?.lines?.some((l) => l.includes('order_items（oi）.shipped'))).toBe(true);
     expect(effect.sections.some((s) => s.kind === 'change' && s.lines?.some((l) => l.includes('inactive')))).toBe(
       true,
     );
@@ -274,9 +305,13 @@ describe('query-effect', () => {
 
     const effect = buildQueryEffect(result.query);
     expect(effect.summary).toContain('削除');
-    expect(
-      effect.sections.some((s) => s.lines?.some((l) => l.includes('users') && l.includes('order_items'))),
-    ).toBe(true);
+    expect(effect.summary).toContain('users（u） と order_items（oi）');
+    expect(effect.summary).not.toContain(' AS ');
+    const target = effect.sections.find((s) => s.kind === 'target');
+    expect(target?.title).toBe('削除対象');
+    expect(target?.lines).toContain('users（u）');
+    expect(target?.lines).toContain('order_items（oi）');
+    expect(effect.sections.some((s) => s.kind === 'change')).toBe(false);
   });
 
   it('UNION サンプルでブランチごとの効果を生成する', () => {

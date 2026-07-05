@@ -1446,6 +1446,13 @@ body {
   line-height: 1.65;
 }
 
+.query-effect-section--target .query-effect-line {
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  font-family: var(--font-mono);
+}
+
 .effect-highlighted-text {
   font-family: var(--font-sans);
   font-size: inherit;
