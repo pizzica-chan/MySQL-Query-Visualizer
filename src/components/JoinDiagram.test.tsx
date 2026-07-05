@@ -41,6 +41,23 @@ describe('JoinDiagram', () => {
     expect(container.querySelector('.react-flow__minimap')).toBeTruthy();
   });
 
+  it('SAMPLE_SQL で実質 INNER JOIN の凡例と JOIN 条件バッジを表示する', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    mount({
+      tables: result.query.tables,
+      joins: result.query.joins,
+      resolveAliases: false,
+      query: result.query,
+    });
+
+    expect(container.querySelector('.join-diagram-legend')).toBeTruthy();
+    expect(container.textContent).toContain('≈INNER');
+    expect(container.textContent).toContain('実質 INNER');
+  });
+
   it('同一 props の再描画で無限ループしない', () => {
     const result = parseMySqlQuery(SAMPLE_SQL);
     expect(result.success).toBe(true);

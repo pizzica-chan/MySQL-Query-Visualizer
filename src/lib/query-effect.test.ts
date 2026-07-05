@@ -40,6 +40,27 @@ describe('query-effect', () => {
     expect(effect.sections.some((s) => s.kind === 'aggregate')).toBe(true);
   });
 
+  it('SELECT サンプルで order_items LEFT JOIN に実質 INNER JOIN 注釈を付ける', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const effect = buildQueryEffect(result.query);
+    const scope = effect.sections.find((s) => s.kind === 'scope');
+
+    const oiLine = scope?.lines?.find((l) => l.includes('oi.order_id = o.id'));
+    expect(oiLine).toBeDefined();
+    expect(oiLine!.startsWith('o と order_items（oi）は実質 INNER JOIN')).toBe(true);
+    expect(oiLine).toContain('後続の INNER JOIN により');
+    expect(oiLine).not.toContain('WHERE / HAVING');
+
+    const categoriesLine = scope?.lines?.find(
+      (l) => l.includes('LEFT JOIN') && l.includes('p.category_id'),
+    );
+    expect(categoriesLine).toBeDefined();
+    expect(categoriesLine).not.toContain('は実質 INNER JOIN');
+  });
+
   it('UPDATE サンプルで更新対象と SET を含む', () => {
     const result = parseMySqlQuery(UPDATE_SAMPLE_SQL);
     expect(result.success).toBe(true);

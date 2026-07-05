@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useEdgesState, useNodesState, type Edge, type Node } from '@xyflow/react';
 import { buildJoinFlowLayout, computeJoinLayoutKey } from '../lib/join-flow-layout';
+import type { ParsedQuery } from '../lib/types';
 
 export interface UseJoinFlowStateResult {
   layoutKey: string;
@@ -23,15 +24,16 @@ export function useJoinFlowState(
   tables: Parameters<typeof buildJoinFlowLayout>[0],
   joins: Parameters<typeof buildJoinFlowLayout>[1],
   resolveAliases: boolean,
+  query?: ParsedQuery,
 ): UseJoinFlowStateResult {
   const layoutKey = useMemo(
-    () => computeJoinLayoutKey(tables, joins, resolveAliases),
-    [tables, joins, resolveAliases],
+    () => computeJoinLayoutKey(tables, joins, resolveAliases, query),
+    [tables, joins, resolveAliases, query],
   );
 
   const { nodes, edges } = useMemo(
-    () => buildJoinFlowLayout(tables, joins, resolveAliases),
-    [layoutKey, tables, joins, resolveAliases],
+    () => buildJoinFlowLayout(tables, joins, resolveAliases, query),
+    [layoutKey, tables, joins, resolveAliases, query],
   );
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(nodes);

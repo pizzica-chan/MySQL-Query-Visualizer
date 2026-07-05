@@ -161,6 +161,7 @@ export default function App() {
                       tables={displayQuery.tables}
                       joins={displayQuery.joins}
                       resolveAliases={resolveAliases}
+                      query={displayQuery}
                     />
                   ))}
                 {activeTab === 'where' &&

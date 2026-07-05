@@ -444,6 +444,46 @@ body {
   word-break: break-all;
 }
 
+.join-diagram-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.join-legend-line {
+  display: inline-block;
+  width: 36px;
+  height: 0;
+  border-top: 2.5px dashed #6b9fd4;
+  flex-shrink: 0;
+}
+
+.join-legend-line--effective-inner {
+  border-top-style: dashed;
+  border-top-color: #6b9fd4;
+}
+
+.join-type-badge--effective-inner {
+  border-style: dashed;
+}
+
+.join-effective-inner-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(107, 159, 212, 0.15);
+  color: #6b9fd4;
+  white-space: nowrap;
+}
+
 .where-tree {
   display: flex;
   flex-direction: column;

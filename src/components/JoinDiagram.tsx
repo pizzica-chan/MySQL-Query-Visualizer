@@ -9,14 +9,22 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
-import { MINIMAP_NODE_COLORS, JOIN_EDGE_COLORS, minimapNodeColor, type JoinFlowNodeData } from '../lib/join-flow-layout';
-import type { JoinEdge, TableRef } from '../lib/types';
+import { effectiveInnerAnalysisByJoinId } from '../lib/join-effective-inner';
+import {
+  JOIN_EDGE_COLORS,
+  MINIMAP_NODE_COLORS,
+  minimapNodeColor,
+  type JoinFlowNodeData,
+} from '../lib/join-flow-layout';
+import type { JoinEdge, ParsedQuery, TableRef } from '../lib/types';
 
 interface JoinDiagramProps {
   tables: TableRef[];
   joins: JoinEdge[];
   resolveAliases: boolean;
   compact?: boolean;
+  /** WHERE / HAVING を含む解析用。指定時のみ「実質 INNER JOIN」を図示 */
+  query?: ParsedQuery;
 }
 
 const JOIN_COLORS = JOIN_EDGE_COLORS;
@@ -51,14 +59,19 @@ interface JoinDiagramFlowProps {
   joins: JoinEdge[];
   resolveAliases: boolean;
   compact: boolean;
+  query?: ParsedQuery;
 }
 
 /** フックを使う内部コンポーネント — 条件分岐の後に置き、Rules of Hooks を守る */
-function JoinDiagramFlow({ tables, joins, resolveAliases, compact }: JoinDiagramFlowProps) {
+function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: JoinDiagramFlowProps) {
+  const effectiveInnerByJoin = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
+  const hasEffectiveInner = effectiveInnerByJoin.size > 0;
+
   const { flowNodes, flowEdges, onNodesChange, onEdgesChange } = useJoinFlowState(
     tables,
     joins,
     resolveAliases,
+    query,
   );
 
   return (
@@ -103,26 +116,44 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact }: JoinDiagram
         )}
       </ReactFlow>
 
+      {hasEffectiveInner && !compact && (
+        <div className="join-diagram-legend" aria-label="JOIN 図の凡例">
+          <span className="join-legend-line join-legend-line--effective-inner" aria-hidden />
+          <span className="join-legend-text">
+            破線の青 = 実質 INNER JOIN 相当（LEFT/RIGHT JOIN が後続条件で無効化）
+          </span>
+        </div>
+      )}
+
       {joins.length > 0 && !compact && (
         <div className="join-conditions-panel">
           <h3>JOIN 条件</h3>
           <ul>
-            {joins.map((j) => (
-              <li key={j.id}>
-                <span
-                  className="join-type-badge"
-                  style={{ borderColor: JOIN_COLORS[j.type], color: JOIN_COLORS[j.type] }}
-                >
-                  {j.type}
-                </span>
-                <span className="join-tables">
-                  {tables.find((t) => t.id === j.sourceId)?.displayName}
-                  {' → '}
-                  {tables.find((t) => t.id === j.targetId)?.displayName}
-                </span>
-                <code className="join-condition">{j.condition}</code>
-              </li>
-            ))}
+            {joins.map((j) => {
+              const effectiveInner = effectiveInnerByJoin.has(j.id);
+              const edgeColor = effectiveInner
+                ? JOIN_COLORS['INNER JOIN']
+                : JOIN_COLORS[j.type];
+              return (
+                <li key={j.id}>
+                  <span
+                    className={`join-type-badge${effectiveInner ? ' join-type-badge--effective-inner' : ''}`}
+                    style={{ borderColor: edgeColor, color: edgeColor }}
+                  >
+                    {effectiveInner ? `${j.type} ≈INNER` : j.type}
+                  </span>
+                  {effectiveInner && (
+                    <span className="join-effective-inner-tag">実質 INNER</span>
+                  )}
+                  <span className="join-tables">
+                    {tables.find((t) => t.id === j.sourceId)?.displayName}
+                    {' → '}
+                    {tables.find((t) => t.id === j.targetId)?.displayName}
+                  </span>
+                  <code className="join-condition">{j.condition}</code>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -130,7 +161,7 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact }: JoinDiagram
   );
 }
 
-export function JoinDiagram({ tables, joins, resolveAliases, compact = false }: JoinDiagramProps) {
+export function JoinDiagram({ tables, joins, resolveAliases, compact = false, query }: JoinDiagramProps) {
   if (tables.length === 0) {
     return (
       <div className="empty-state">
@@ -145,6 +176,7 @@ export function JoinDiagram({ tables, joins, resolveAliases, compact = false }: 
       joins={joins}
       resolveAliases={resolveAliases}
       compact={compact}
+      query={query}
     />
   );
 }

@@ -33,6 +33,7 @@ export function SubqueryDetail({
             joins={query.joins}
             resolveAliases={resolveAliases}
             compact
+            query={query}
           />
         </div>
       )}

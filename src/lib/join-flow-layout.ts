@@ -1,6 +1,7 @@
 import type { Edge, Node } from '@xyflow/react';
 import { MarkerType } from '@xyflow/react';
-import type { JoinEdge, TableRef } from './types';
+import { effectiveInnerAnalysisByJoinId } from './join-effective-inner';
+import type { JoinEdge, ParsedQuery, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
 
 /** React Flow ミニマップ用 — 背景と区別できる控えめな色 */
@@ -21,6 +22,23 @@ export const JOIN_EDGE_COLORS: Record<string, string> = {
 
 const JOIN_COLORS = JOIN_EDGE_COLORS;
 
+export interface JoinFlowEdgeData extends Record<string, unknown> {
+  condition: string;
+  joinType: string;
+  effectiveInner?: boolean;
+}
+
+export const EFFECTIVE_INNER_EDGE_STYLE = {
+  strokeDasharray: '7 4',
+} as const;
+
+export function isEffectiveInnerJoin(
+  joinId: string,
+  effectiveInnerByJoinId: Map<string, { joinId: string }>,
+): boolean {
+  return effectiveInnerByJoinId.has(joinId);
+}
+
 export interface JoinFlowNodeData extends Record<string, unknown> {
   label: string;
   table: string;
@@ -35,8 +53,12 @@ export function computeJoinLayoutKey(
   tables: TableRef[],
   joins: JoinEdge[],
   resolveAliases: boolean,
+  query?: ParsedQuery,
 ): string {
-  return `${tables.map((t) => t.id).join('|')}:${joins.map((j) => j.id).join('|')}:${resolveAliases}`;
+  const effectiveInnerKey = query
+    ? [...effectiveInnerAnalysisByJoinId(query).keys()].sort().join(',')
+    : '';
+  return `${tables.map((t) => t.id).join('|')}:${joins.map((j) => j.id).join('|')}:${resolveAliases}:${effectiveInnerKey}`;
 }
 
 export function minimapNodeColor(node: Node): string {
@@ -49,7 +71,10 @@ export function buildJoinFlowLayout(
   tables: TableRef[],
   joins: JoinEdge[],
   resolveAliases: boolean,
+  query?: ParsedQuery,
 ): { nodes: Node[]; edges: Edge[] } {
+  const effectiveInnerByJoinId = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
+
   const nodes: Node[] = tables.map((t, i) => {
     const label = formatTableLabel(t, resolveAliases);
     const hasExtraLine = Boolean(t.schema || t.alias || label.aliasNote);
@@ -72,20 +97,32 @@ export function buildJoinFlowLayout(
   });
 
   const edges: Edge[] = joins.map((j) => {
-    const color = JOIN_COLORS[j.type] ?? '#64748b';
+    const effectiveInner = isEffectiveInnerJoin(j.id, effectiveInnerByJoinId);
+    const baseColor = JOIN_COLORS[j.type] ?? '#64748b';
+    const color = effectiveInner ? (JOIN_COLORS['INNER JOIN'] ?? baseColor) : baseColor;
+    const label = effectiveInner ? `${j.type}\n≈INNER` : j.type;
+
     return {
       id: j.id,
       source: j.sourceId,
       target: j.targetId,
-      label: j.type,
-      animated: j.type === 'INNER JOIN' || j.type === 'JOIN',
-      style: { stroke: color, strokeWidth: 2 },
-      labelStyle: { fill: color, fontWeight: 600, fontSize: 11 },
+      label,
+      animated: effectiveInner || j.type === 'INNER JOIN' || j.type === 'JOIN',
+      style: {
+        stroke: color,
+        strokeWidth: effectiveInner ? 2.5 : 2,
+        ...(effectiveInner ? EFFECTIVE_INNER_EDGE_STYLE : {}),
+      },
+      labelStyle: { fill: color, fontWeight: 600, fontSize: 10 },
       labelBgStyle: { fill: '#0f172a', fillOpacity: 0.85 },
       labelBgPadding: [6, 4] as [number, number],
       labelBgBorderRadius: 4,
       markerEnd: { type: MarkerType.ArrowClosed, color },
-      data: { condition: j.condition },
+      data: {
+        condition: j.condition,
+        joinType: j.type,
+        effectiveInner,
+      } satisfies JoinFlowEdgeData,
     };
   });
 

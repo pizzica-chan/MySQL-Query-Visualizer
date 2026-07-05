@@ -65,10 +65,46 @@ describe('join-flow-layout', () => {
       result.query.tables,
       result.query.joins,
       false,
+      result.query,
     );
     expect(nodes.length).toBe(6);
     expect(edges.length).toBe(5);
     expect(() => assertJoinFlowLayoutReady(nodes)).not.toThrow();
+  });
+
+  it('SAMPLE_SQL で実質 INNER JOIN の LEFT JOIN エッジを破線・≈INNER ラベルで示す', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const { edges } = buildJoinFlowLayout(
+      result.query.tables,
+      result.query.joins,
+      false,
+      result.query,
+    );
+
+    const oiJoin = result.query.joins.find((j) => j.condition.includes('oi.order_id'));
+    expect(oiJoin).toBeDefined();
+
+    const oiEdge = edges.find((e) => e.id === oiJoin!.id);
+    expect(oiEdge?.data?.effectiveInner).toBe(true);
+    expect(oiEdge?.label).toContain('≈INNER');
+    expect(oiEdge?.style?.strokeDasharray).toBe('7 4');
+    expect(oiEdge?.animated).toBe(true);
+
+    const cJoin = result.query.joins.find((j) => j.condition.includes('p.category_id'));
+    const cEdge = edges.find((e) => e.id === cJoin!.id);
+    expect(cEdge?.data?.effectiveInner).toBeFalsy();
+  });
+
+  it('query 未指定時は実質 INNER JOIN 表示を付けない', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const { edges } = buildJoinFlowLayout(result.query.tables, result.query.joins, false);
+    expect(edges.every((e) => !e.data?.effectiveInner)).toBe(true);
   });
 
   it('layoutKey が変わらない限り buildJoinFlowLayout の node id 列は安定', () => {

@@ -90,6 +90,7 @@ export function UnionJoinPanel({ branches, resolveAliases }: UnionPanelProps) {
           tables={branch.query.tables}
           joins={branch.query.joins}
           resolveAliases={resolveAliases}
+          query={branch.query}
         />
       )}
       renderBranch={(branch, index) => (
@@ -99,6 +100,7 @@ export function UnionJoinPanel({ branches, resolveAliases }: UnionPanelProps) {
             tables={branch.query.tables}
             joins={branch.query.joins}
             resolveAliases={resolveAliases}
+            query={branch.query}
           />
         </div>
       )}

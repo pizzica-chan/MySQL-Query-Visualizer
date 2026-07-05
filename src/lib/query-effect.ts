@@ -1,4 +1,9 @@
 import type { ConditionNode, JoinEdge, ParsedQuery, TableRef } from './types';
+import {
+  effectiveInnerAnalysisByJoinId,
+  formatEffectiveInnerJoinScopeLine,
+  type EffectiveInnerReason,
+} from './join-effective-inner';
 import { hasUnion } from './query-utils';
 
 export type EffectAction = 'select' | 'update' | 'delete';
@@ -79,9 +84,24 @@ function tableName(join: JoinEdge, tables: TableRef[], id: string): string {
   return t ? tableLabel(t) : id;
 }
 
-function describeJoin(join: JoinEdge, tables: TableRef[]): string {
+function describeJoin(
+  join: JoinEdge,
+  tables: TableRef[],
+  effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
+): string {
   const left = tableName(join, tables, join.sourceId);
   const right = tableName(join, tables, join.targetId);
+
+  if (effectiveInner) {
+    const preservedLabel = join.type === 'LEFT JOIN' ? left : right;
+    return formatEffectiveInnerJoinScopeLine(
+      join,
+      preservedLabel,
+      effectiveInner.nullableTable,
+      effectiveInner.reasons,
+    );
+  }
+
   const fn = JOIN_SCOPE[join.type] ?? JOIN_SCOPE.JOIN;
   return fn(left, right, join.condition);
 }
@@ -152,6 +172,7 @@ export function collectLeafTexts(node: ConditionEffectNode): string[] {
 
 function describeScope(query: ParsedQuery): QueryEffectSection | null {
   const lines: string[] = [];
+  const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
 
   if (query.tables.length === 0) {
     lines.push('対象テーブルが指定されていません');
@@ -160,7 +181,16 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
   } else {
     lines.push(`${tableLabel(query.tables[0]!)} を起点に行の組み合わせを構成`);
     for (const join of query.joins) {
-      lines.push(describeJoin(join, query.tables));
+      const analysis = effectiveInnerByJoin.get(join.id);
+      let effectiveInner: { nullableTable: TableRef; reasons: EffectiveInnerReason[] } | undefined;
+      if (analysis && analysis.reasons.length > 0) {
+        const nullableId = join.type === 'LEFT JOIN' ? join.targetId : join.sourceId;
+        const nullableTable = query.tables.find((t) => t.id === nullableId);
+        if (nullableTable) {
+          effectiveInner = { nullableTable, reasons: analysis.reasons };
+        }
+      }
+      lines.push(describeJoin(join, query.tables, effectiveInner));
     }
   }
 
