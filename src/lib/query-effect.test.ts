@@ -323,7 +323,32 @@ describe('query-effect', () => {
     expect(unionEffect?.branches).toHaveLength(3);
     expect(unionEffect?.unionNotes.some((n) => n.includes('UNION'))).toBe(true);
     expect(unionEffect?.branches[2]?.effect.summary).toContain('guest_users');
-    expect(allLeafTexts(unionEffect!.branches[2]!.effect).some((t) => t.includes('関連行'))).toBe(true);
+    expect(allLeafTexts(unionEffect!.branches[2]!.effect).some((t) => t.includes('関連行が存在しない'))).toBe(
+      true,
+    );
+    expect(allLeafTexts(unionEffect!.branches[2]!.effect).some((t) => t.includes('関連行が存在するものだけ'))).toBe(
+      false,
+    );
+  });
+
+  it('EXISTS と NOT EXISTS で説明文を使い分ける', () => {
+    const existsResult = parseMySqlQuery(
+      "SELECT id FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)",
+    );
+    expect(existsResult.success).toBe(true);
+    if (!existsResult.success) return;
+
+    const notExistsResult = parseMySqlQuery(
+      "SELECT id FROM users u WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)",
+    );
+    expect(notExistsResult.success).toBe(true);
+    if (!notExistsResult.success) return;
+
+    const existsTexts = collectLeafTexts(buildConditionEffectTree(existsResult.query.where!));
+    const notExistsTexts = collectLeafTexts(buildConditionEffectTree(notExistsResult.query.where!));
+
+    expect(existsTexts.some((t) => t.startsWith('関連行が存在するものだけ'))).toBe(true);
+    expect(notExistsTexts.some((t) => t.startsWith('関連行が存在しないものだけ'))).toBe(true);
   });
 
   describe('SELECT 修飾子・集約', () => {

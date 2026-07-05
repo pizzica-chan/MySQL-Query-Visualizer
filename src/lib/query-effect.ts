@@ -468,8 +468,11 @@ function describeJoin(
 
 function conditionPhrase(node: ConditionNode): string {
   switch (node.type) {
-    case 'exists':
-      return `関連行が存在するものだけ — ${node.label}`;
+    case 'exists': {
+      const isNotExists = /\bNOT\s+EXISTS\b/i.test(node.label);
+      const prefix = isNotExists ? '関連行が存在しないものだけ' : '関連行が存在するものだけ';
+      return `${prefix} — ${node.label}`;
+    }
     case 'in':
       return node.nestedQuery ? `リスト / サブクエリの結果に含まれる — ${node.label}` : node.label;
     case 'like':
