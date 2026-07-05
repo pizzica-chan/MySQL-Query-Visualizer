@@ -1,0 +1,38 @@
+---
+description: git push 前に dist/ を最新ビルドに同期する（このプロジェクト専用）
+alwaysApply: true
+---
+
+# dist 同梱ルール（push 前）
+
+このリポジトリは **`dist/` を Git 管理** し、ビルド環境のない利用者がオフラインで `dist/index.html` を開けるようにしている。  
+**リモートへ push するときは、必ず `dist/` が最新ソースのビルド結果と一致していること。**
+
+## エージェントが push を依頼されたとき
+
+1. `npm run build` を実行する（または `npm run ensure-dist`）
+2. `git status dist/` で `dist/` に差分があれば、**ソースと一緒に `dist/` もコミット**する
+3. コミット後に push する
+
+push だけ依頼され、ソースに未コミット変更がある場合も同様にビルド → `dist/` 確認 → 必要ならコミット → push。
+
+## 利用者向け（手動 push）
+
+初回のみフックを有効化:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+以降、`git push` 時に `pre-push` が `npm run ensure-dist` を実行し、`dist/` が古ければ push を中止する。
+
+## チェック内容
+
+- `npm run build` で `dist/` を再生成
+- 生成結果が **HEAD の `dist/`** と一致しない場合はエラー  
+  → `dist/` をコミットしてから再度 push
+
+## 禁止
+
+- ソースだけコミットして **`dist/` を古いまま push しない**
+- push 前のビルド確認を省略しない

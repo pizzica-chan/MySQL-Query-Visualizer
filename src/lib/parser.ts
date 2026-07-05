@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Parser } from 'node-sql-parser';
+import { normalizeConditionTree } from './condition-tree-normalize';
 import type {
   ConditionNode,
   JoinEdge,
@@ -407,13 +408,14 @@ function parseConditionTree(node: any): ConditionNode | undefined {
 }
 
 function enrichConditionTree(node: ConditionNode): ConditionNode {
+  let enriched: ConditionNode = node;
   if (node.type === 'comparison' && node.operator?.toUpperCase() === 'LIKE') {
-    return { ...node, type: 'like' };
+    enriched = { ...node, type: 'like' };
   }
-  if (node.children) {
-    return { ...node, children: node.children.map(enrichConditionTree) };
+  if (enriched.children?.length) {
+    enriched = { ...enriched, children: enriched.children.map(enrichConditionTree) };
   }
-  return node;
+  return normalizeConditionTree(enriched);
 }
 
 function parseColumns(columns: any[]): SelectColumn[] {

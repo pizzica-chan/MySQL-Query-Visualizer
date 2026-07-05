@@ -50,7 +50,7 @@ export function truncateJoinCondition(condition: string, maxLength = JOIN_EDGE_C
 
 /** 図上の JOIN 種別ラベル（ON 条件は別ボックス — JoinFlowEdge） */
 export function formatJoinEdgeLabel(join: JoinEdge, effectiveInner: boolean): string {
-  const lines = [join.type];
+  const lines: string[] = [join.type];
   if (effectiveInner) lines.push('≈INNER');
   return lines.join('\n');
 }
