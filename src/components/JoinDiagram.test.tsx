@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JoinDiagram } from './JoinDiagram';
+import { JOIN_MINIMAP_COMPACT_SIZE } from '../lib/join-flow-layout';
 import { parseMySqlQuery, SAMPLE_SQL } from '../lib/parser';
 
 describe('JoinDiagram', () => {
@@ -39,6 +40,25 @@ describe('JoinDiagram', () => {
     expect(container.querySelector('.join-diagram')).toBeTruthy();
     expect(container.querySelector('.react-flow')).toBeTruthy();
     expect(container.querySelector('.react-flow__minimap')).toBeTruthy();
+  });
+
+  it('JOIN 条件欄は ON 条件の参照元テーブルを表示する', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    mount({
+      tables: result.query.tables,
+      joins: result.query.joins,
+      resolveAliases: false,
+      query: result.query,
+    });
+
+    expect(container.textContent).toContain('u, o, p → lm');
+    expect(container.textContent).toContain('p → c');
+    expect(container.textContent).toContain('u → hot');
+    expect(container.textContent).not.toContain('lm → c');
+    expect(container.textContent).not.toContain('c → hot');
   });
 
   it('SAMPLE_SQL で実質 INNER JOIN の凡例と JOIN 条件バッジを表示する', () => {
@@ -94,8 +114,8 @@ describe('JoinDiagram', () => {
 
     const minimap = container.querySelector('.join-minimap--compact') as HTMLElement | null;
     expect(minimap).toBeTruthy();
-    expect(minimap?.style.width).toBe('72px');
-    expect(minimap?.style.height).toBe('48px');
+    expect(minimap?.style.width).toBe(`${JOIN_MINIMAP_COMPACT_SIZE.width}px`);
+    expect(minimap?.style.height).toBe(`${JOIN_MINIMAP_COMPACT_SIZE.height}px`);
   });
 
   it('テーブル 0 件では empty-state を表示し React Flow をマウントしない', () => {

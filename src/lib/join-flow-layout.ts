@@ -15,6 +15,10 @@ export const MINIMAP_NODE_COLORS = {
   stroke: '#626c7e',
 } as const;
 
+/** JOIN 図ミニマップの表示サイズ（React Flow 既定 200×150 より小さめ） */
+export const JOIN_MINIMAP_SIZE = { width: 120, height: 72 } as const;
+export const JOIN_MINIMAP_COMPACT_SIZE = { width: 56, height: 36 } as const;
+
 export const JOIN_EDGE_COLORS: Record<string, string> = {
   'INNER JOIN': '#6b9fd4',
   'LEFT JOIN': '#7db88a',

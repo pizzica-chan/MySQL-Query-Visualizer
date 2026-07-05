@@ -14,8 +14,11 @@ import { JoinFlowEdge } from './JoinFlowEdge';
 import { SourceLinkContext, useSourceLink } from '../contexts/source-link-context';
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
 import { effectiveInnerAnalysisByJoinId } from '../lib/join-effective-inner';
+import { formatJoinTableLink } from '../lib/join-graph-layout';
 import {
   JOIN_EDGE_COLORS,
+  JOIN_MINIMAP_COMPACT_SIZE,
+  JOIN_MINIMAP_SIZE,
   MINIMAP_NODE_COLORS,
   minimapNodeColor,
   type JoinFlowNodeData,
@@ -136,7 +139,11 @@ function JoinDiagramFlow({
               nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
               nodeBorderRadius={2}
               maskColor="rgba(26, 29, 35, 0.65)"
-              style={{ background: '#282c34', width: 72, height: 48 }}
+              style={{
+                background: '#282c34',
+                width: JOIN_MINIMAP_COMPACT_SIZE.width,
+                height: JOIN_MINIMAP_COMPACT_SIZE.height,
+              }}
               className="join-minimap join-minimap--compact"
               zoomable={false}
               pannable={false}
@@ -147,7 +154,11 @@ function JoinDiagramFlow({
               nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
               nodeBorderRadius={2}
               maskColor="rgba(26, 29, 35, 0.65)"
-              style={{ background: '#282c34' }}
+              style={{
+                background: '#282c34',
+                width: JOIN_MINIMAP_SIZE.width,
+                height: JOIN_MINIMAP_SIZE.height,
+              }}
               className="join-minimap"
             />
           )}
@@ -191,11 +202,7 @@ function JoinDiagramFlow({
                   {effectiveInner && (
                     <span className="join-effective-inner-tag">実質 INNER</span>
                   )}
-                  <span className="join-tables">
-                    {tables.find((t) => t.id === j.sourceId)?.displayName}
-                    {' → '}
-                    {tables.find((t) => t.id === j.targetId)?.displayName}
-                  </span>
+                  <span className="join-tables">{formatJoinTableLink(j, tables)}</span>
                   <code {...conditionProps}>{j.condition}</code>
                 </li>
               );

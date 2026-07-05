@@ -84,6 +84,16 @@ export function resolveJoinLayoutSources(join: JoinEdge, tables: TableRef[]): st
   return [];
 }
 
+/** JOIN 条件欄・説明用 — ON 条件の参照元 → target */
+export function formatJoinTableLink(join: JoinEdge, tables: TableRef[]): string {
+  const targetName = tables.find((t) => t.id === join.targetId)?.displayName ?? join.targetId;
+  const sourceNames = resolveJoinLayoutSources(join, tables).map(
+    (id) => tables.find((t) => t.id === id)?.displayName ?? id,
+  );
+  if (sourceNames.length === 0) return targetName;
+  return `${sourceNames.join(', ')} → ${targetName}`;
+}
+
 /** レイアウト上の親テーブル（ON 条件で実際につながる側 — 主エッジ用） */
 export function resolveJoinLayoutAnchor(join: JoinEdge, tables: TableRef[]): string {
   const sources = resolveJoinLayoutSources(join, tables);

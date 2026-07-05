@@ -7,6 +7,7 @@ import {
   getTableIdsReferencedInJoin,
   resolveJoinLayoutAnchor,
   resolveJoinLayoutSources,
+  formatJoinTableLink,
 } from './join-graph-layout';
 import { buildJoinFlowLayout } from './join-flow-layout';
 
@@ -56,6 +57,7 @@ describe('join-graph-layout', () => {
     const lmEdges = edges.filter((e) => e.target === lm.id);
     expect(lmEdges).toHaveLength(3);
     expect(lmEdges.map((e) => e.source).sort()).toEqual([u.id, o.id, p.id].sort());
+    expect(formatJoinTableLink(lmJoin, result.query.tables)).toBe('u, o, p → lm');
   });
 
   it('SAMPLE_SQL の hot は users から分岐する', () => {
@@ -97,6 +99,7 @@ describe('join-graph-layout', () => {
     expect(getTableIdsReferencedInJoin(join, tables).sort()).toEqual(['t-o', 't-u']);
     expect(resolveJoinLayoutSources(join, tables)).toEqual(['t-o']);
     expect(resolveJoinLayoutAnchor(join, tables)).toBe('t-o');
+    expect(formatJoinTableLink(join, tables)).toBe('o → u');
   });
 
   it('複数テーブルから1テーブルへファンインする', () => {
