@@ -52,8 +52,8 @@ describe('join-flow-layout', () => {
   });
 
   it('ミニマップ色が背景と同色にならない', () => {
-    expect(MINIMAP_NODE_COLORS.table).not.toBe('#1e293b');
-    expect(MINIMAP_NODE_COLORS.derived).not.toBe('#0f172a');
+    expect(MINIMAP_NODE_COLORS.table).not.toBe('#282c34');
+    expect(MINIMAP_NODE_COLORS.derived).not.toBe('#1a1d23');
   });
 
   it('SAMPLE_SQL 解析結果で JOIN 図レイアウトが生成できる', () => {

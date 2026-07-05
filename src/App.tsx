@@ -18,10 +18,10 @@ import type { ParsedQuery } from './lib/types';
 
 type TabId = 'joins' | 'where' | 'summary' | 'nested';
 
-const BASE_TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: 'joins', label: 'JOIN 図', icon: '🔗' },
-  { id: 'where', label: 'WHERE / HAVING', icon: '🌳' },
-  { id: 'summary', label: '概要', icon: '📋' },
+const BASE_TABS: { id: TabId; label: string }[] = [
+  { id: 'joins', label: 'JOIN 図' },
+  { id: 'where', label: 'WHERE / HAVING' },
+  { id: 'summary', label: '概要' },
 ];
 
 export default function App() {
@@ -53,7 +53,7 @@ export default function App() {
     if (!nestedInfo.showTab) return BASE_TABS;
     return [
       ...BASE_TABS,
-      { id: 'nested' as const, label: 'UNION / サブクエリ', icon: '📦' },
+      { id: 'nested' as const, label: 'UNION / サブクエリ' },
     ];
   }, [nestedInfo.showTab]);
 
@@ -83,13 +83,10 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="app-header-inner">
-          <div className="app-brand">
-            <div className="app-logo">SQL</div>
-            <div>
-              <h1>MySQL Query Visualizer</h1>
-              <p>複雑な JOIN・WHERE・UNION・サブクエリを視覚的に理解する</p>
-            </div>
-          </div>
+          <h1 className="app-title">
+            <span className="app-badge">SQL</span>
+            MySQL Query Visualizer
+          </h1>
         </div>
       </header>
 
@@ -109,12 +106,7 @@ export default function App() {
         <section className="panel panel--output">
           {!parsed && !error && (
             <div className="welcome-state">
-              <div className="welcome-icon">⚡</div>
-              <h2>SQLを貼り付けて解析</h2>
-              <p>
-                MySQL の SELECT / UPDATE / DELETE を解析します。JOIN 図・WHERE ツリーに加え、
-                UNION の各ブランチと IN / EXISTS / 派生テーブルのサブクエリも展開表示します。
-              </p>
+              <p className="welcome-hint">左のエディタに SQL を入力するか、サンプルを読み込んでください。</p>
               <div className="welcome-actions">
                 <button type="button" className="btn btn--primary" onClick={() => setSql(SAMPLE_SQL)} title="SELECTサンプルを読み込む">
                   SELECT
@@ -152,7 +144,6 @@ export default function App() {
                     className={`tab${activeTab === tab.id ? ' tab--active' : ''}`}
                     onClick={() => setActiveTab(tab.id)}
                   >
-                    <span className="tab-icon">{tab.icon}</span>
                     {tab.label}
                   </button>
                 ))}
@@ -211,9 +202,8 @@ export default function App() {
 
           {error && !parsed && (
             <div className="error-state">
-              <div className="error-icon">!</div>
-              <h2>解析できませんでした</h2>
-              <p>{error}</p>
+              <h2>解析エラー</h2>
+              <p className="error-message">{error}</p>
               <p className="error-hint">
                 MySQL 形式の SELECT / UPDATE / DELETE 文を入力してください。
                 INSERT 文や構文エラーには対応していません。

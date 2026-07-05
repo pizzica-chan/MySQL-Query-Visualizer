@@ -9,7 +9,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
-import { MINIMAP_NODE_COLORS, minimapNodeColor, type JoinFlowNodeData } from '../lib/join-flow-layout';
+import { MINIMAP_NODE_COLORS, JOIN_EDGE_COLORS, minimapNodeColor, type JoinFlowNodeData } from '../lib/join-flow-layout';
 import type { JoinEdge, TableRef } from '../lib/types';
 
 interface JoinDiagramProps {
@@ -19,14 +19,7 @@ interface JoinDiagramProps {
   compact?: boolean;
 }
 
-const JOIN_COLORS: Record<string, string> = {
-  'INNER JOIN': '#3b82f6',
-  'LEFT JOIN': '#10b981',
-  'RIGHT JOIN': '#f59e0b',
-  'FULL JOIN': '#8b5cf6',
-  'CROSS JOIN': '#ef4444',
-  JOIN: '#3b82f6',
-};
+const JOIN_COLORS = JOIN_EDGE_COLORS;
 
 function TableNode({ data: raw }: NodeProps) {
   const data = raw as JoinFlowNodeData;
@@ -85,14 +78,14 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact }: JoinDiagram
         nodesConnectable={false}
         elementsSelectable={false}
       >
-        <Background color="#334155" gap={20} />
+        <Background color="#3a4049" gap={20} />
         <Controls showInteractive={false} />
         <MiniMap
           nodeColor={minimapNodeColor}
           nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
-          nodeBorderRadius={4}
-          maskColor="rgba(15, 23, 42, 0.55)"
-          style={{ background: '#1e293b' }}
+          nodeBorderRadius={2}
+          maskColor="rgba(26, 29, 35, 0.65)"
+          style={{ background: '#282c34' }}
         />
       </ReactFlow>
 

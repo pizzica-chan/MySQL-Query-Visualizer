@@ -3,21 +3,23 @@ import { MarkerType } from '@xyflow/react';
 import type { JoinEdge, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
 
-/** React Flow ミニマップ用 — 背景 (#1e293b) と区別できる色 */
+/** React Flow ミニマップ用 — 背景と区別できる控えめな色 */
 export const MINIMAP_NODE_COLORS = {
-  table: '#3b82f6',
-  derived: '#8b5cf6',
-  stroke: '#94a3b8',
+  table: '#6b9fd4',
+  derived: '#d4b06a',
+  stroke: '#626c7e',
 } as const;
 
-const JOIN_COLORS: Record<string, string> = {
-  'INNER JOIN': '#3b82f6',
-  'LEFT JOIN': '#10b981',
-  'RIGHT JOIN': '#f59e0b',
-  'FULL JOIN': '#8b5cf6',
-  'CROSS JOIN': '#ef4444',
-  JOIN: '#3b82f6',
+export const JOIN_EDGE_COLORS: Record<string, string> = {
+  'INNER JOIN': '#6b9fd4',
+  'LEFT JOIN': '#7db88a',
+  'RIGHT JOIN': '#d4b06a',
+  'FULL JOIN': '#a89fd4',
+  'CROSS JOIN': '#d47a7a',
+  JOIN: '#6b9fd4',
 };
+
+const JOIN_COLORS = JOIN_EDGE_COLORS;
 
 export interface JoinFlowNodeData extends Record<string, unknown> {
   label: string;
