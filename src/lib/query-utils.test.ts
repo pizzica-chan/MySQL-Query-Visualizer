@@ -4,9 +4,11 @@ import {
   collectSubqueriesFromCondition,
   countNestedItems,
   formatUnionBranches,
+  getUpdateTargetTables,
   hasUnion,
+  isUpdateTargetTable,
 } from './query-utils';
-import { parseMySqlQuery, UNION_SAMPLE_SQL } from './parser';
+import { parseMySqlQuery, UNION_SAMPLE_SQL, UPDATE_SAMPLE_SQL } from './parser';
 import type { ConditionNode, ParsedQuery } from './types';
 
 function makeMinimalQuery(overrides: Partial<ParsedQuery> = {}): ParsedQuery {
@@ -141,6 +143,30 @@ describe('query-utils', () => {
       expect(result.success).toBe(true);
       if (!result.success) return;
       expect(countNestedItems(result.query)).toEqual({ unions: 0, subqueries: 0 });
+    });
+  });
+
+  describe('getUpdateTargetTables', () => {
+    it('UPDATE サンプルで SET 句に登場する JOIN 先テーブルをすべて更新対象とする', () => {
+      const result = parseMySqlQuery(UPDATE_SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const targets = getUpdateTargetTables(result.query);
+      expect(targets.map((t) => t.alias).sort()).toEqual(['o', 'oi', 'u']);
+
+      for (const table of result.query.tables) {
+        expect(isUpdateTargetTable(table, result.query)).toBe(true);
+      }
+    });
+
+    it('SET 句にテーブル修飾が無い場合は FROM の先頭テーブルのみ', () => {
+      const query = makeMinimalQuery({
+        statementType: 'UPDATE',
+        setClauses: [{ column: 'status', value: "'x'", label: "status = 'x'" }],
+      });
+      expect(getUpdateTargetTables(query).map((t) => t.id)).toEqual(['t1']);
+      expect(isUpdateTargetTable(query.tables[0]!, query)).toBe(true);
     });
   });
 });

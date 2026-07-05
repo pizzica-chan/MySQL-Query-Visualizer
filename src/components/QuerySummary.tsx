@@ -1,6 +1,6 @@
 import type { DeleteTarget, ParsedQuery, SourceSpan, TableRef } from '../lib/types';
+import { countNestedItems, formatUnionBranches, hasUnion, isUpdateTargetTable } from '../lib/query-utils';
 import { sourceSelectableProps, type OnSourceSpanSelect } from '../lib/source-link';
-import { countNestedItems, formatUnionBranches, hasUnion } from '../lib/query-utils';
 
 interface QuerySummaryProps {
   query: ParsedQuery;
@@ -148,7 +148,7 @@ export function QuerySummary({
                     {resolveAliases ? '（実名表示中）' : ''}
                   </div>
                 )}
-                {isUpdate && query.tables[0]?.id === t.id && (
+                {isUpdate && isUpdateTargetTable(t, query) && (
                   <div className="table-card-meta table-card-meta--target">更新対象</div>
                 )}
                 {isDelete && isDeleteTargetTable(t, query.deleteTargets) && (

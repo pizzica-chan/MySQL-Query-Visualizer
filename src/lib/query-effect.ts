@@ -1,4 +1,5 @@
 import type { ConditionNode, JoinEdge, ParsedQuery, SelectColumn, SetClause, TableRef } from './types';
+import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerJoinScopeLine,
@@ -208,18 +209,7 @@ function deleteTargetTables(query: ParsedQuery): TableRef[] {
 }
 
 function updatedTargetTables(query: ParsedQuery): TableRef[] {
-  const tables: TableRef[] = [];
-  const seen = new Set<string>();
-  for (const set of query.setClauses ?? []) {
-    if (!set.table) continue;
-    const table = tableRefByName(query.tables, set.table);
-    if (table && !seen.has(table.id)) {
-      seen.add(table.id);
-      tables.push(table);
-    }
-  }
-  if (tables.length > 0) return tables;
-  return query.tables[0] ? [query.tables[0]] : [];
+  return getUpdateTargetTables(query);
 }
 
 function escapeRegExp(value: string): string {

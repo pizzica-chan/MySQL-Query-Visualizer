@@ -1,4 +1,34 @@
-import type { ConditionNode, ParsedQuery, UnionBranch } from './types';
+import type { ConditionNode, ParsedQuery, TableRef, UnionBranch } from './types';
+
+export function tableRefMatchesName(table: TableRef, name: string): boolean {
+  return name === table.alias || name === table.table || name === table.displayName;
+}
+
+/** SET 句から更新対象テーブルを解決（テーブル修飾が無い場合は FROM の先頭テーブル） */
+export function getUpdateTargetTables(query: ParsedQuery): TableRef[] {
+  if (query.statementType !== 'UPDATE') return [];
+  const setClauses = query.setClauses;
+  if (!setClauses?.length) return [];
+
+  const tables: TableRef[] = [];
+  const seen = new Set<string>();
+
+  for (const set of setClauses) {
+    if (!set.table) continue;
+    const table = query.tables.find((t) => tableRefMatchesName(t, set.table!));
+    if (table && !seen.has(table.id)) {
+      seen.add(table.id);
+      tables.push(table);
+    }
+  }
+
+  if (tables.length > 0) return tables;
+  return query.tables[0] ? [query.tables[0]] : [];
+}
+
+export function isUpdateTargetTable(table: TableRef, query: ParsedQuery): boolean {
+  return getUpdateTargetTables(query).some((t) => t.id === table.id);
+}
 
 /** 条件ツリー内のサブクエリを再帰的に収集 */
 export function collectSubqueriesFromCondition(node: ConditionNode | undefined): ParsedQuery[] {
