@@ -69,6 +69,8 @@ describe('オフライン実行（外部通信なし）', () => {
 
       const html = readFileSync(htmlPath, 'utf8');
       expect(html).not.toMatch(/<script[^>]+type="module"/i);
+      expect(html).not.toMatch(/<link[^>]+href=["']\.\/assets\/[^"']+\.css["']/i);
+      expect(html).toMatch(/<style>[\s\S]*\.app\s*\{/);
       expect(html).toMatch(/<script defer src="\.\/assets\/app\.js"><\/script>/);
 
       const rootIdx = html.indexOf('id="root"');
