@@ -4,7 +4,7 @@ import { QuerySummary } from './components/QuerySummary';
 import { SqlEditor } from './components/SqlEditor';
 import { SubqueryDetail } from './components/SubqueryDetail';
 import { WhereTree } from './components/WhereTree';
-import { UnionPanel } from './components/UnionPanel';
+import { UnionJoinPanel, UnionPanel, UnionSummaryPanel, UnionWherePanel } from './components/UnionPanel';
 import { applyAliasResolution } from './lib/alias-resolver';
 import {
   SAMPLE_SQL,
@@ -150,26 +150,44 @@ export default function App() {
               </nav>
 
               <div className="tab-content">
-                {activeTab === 'joins' && (
-                  <JoinDiagram
-                    tables={displayQuery.tables}
-                    joins={displayQuery.joins}
-                    resolveAliases={resolveAliases}
-                  />
-                )}
-                {activeTab === 'where' && (
-                  <div className="where-panel">
-                    <WhereTree root={displayQuery.where} title="WHERE" resolveAliases={resolveAliases} />
-                    {displayQuery.having && (
-                      <div className="having-section">
-                        <WhereTree root={displayQuery.having} title="HAVING" resolveAliases={resolveAliases} />
-                      </div>
-                    )}
-                  </div>
-                )}
-                {activeTab === 'summary' && (
-                  <QuerySummary query={displayQuery} resolveAliases={resolveAliases} />
-                )}
+                {activeTab === 'joins' &&
+                  (hasUnion(displayQuery) && displayQuery.unionBranches ? (
+                    <UnionJoinPanel
+                      branches={displayQuery.unionBranches}
+                      resolveAliases={resolveAliases}
+                    />
+                  ) : (
+                    <JoinDiagram
+                      tables={displayQuery.tables}
+                      joins={displayQuery.joins}
+                      resolveAliases={resolveAliases}
+                    />
+                  ))}
+                {activeTab === 'where' &&
+                  (hasUnion(displayQuery) && displayQuery.unionBranches ? (
+                    <UnionWherePanel
+                      branches={displayQuery.unionBranches}
+                      resolveAliases={resolveAliases}
+                    />
+                  ) : (
+                    <div className="where-panel">
+                      <WhereTree root={displayQuery.where} title="WHERE" resolveAliases={resolveAliases} />
+                      {displayQuery.having && (
+                        <div className="having-section">
+                          <WhereTree root={displayQuery.having} title="HAVING" resolveAliases={resolveAliases} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                {activeTab === 'summary' &&
+                  (hasUnion(displayQuery) && displayQuery.unionBranches ? (
+                    <UnionSummaryPanel
+                      branches={displayQuery.unionBranches}
+                      resolveAliases={resolveAliases}
+                    />
+                  ) : (
+                    <QuerySummary query={displayQuery} resolveAliases={resolveAliases} />
+                  ))}
                 {activeTab === 'nested' && (
                   <div className="nested-tab">
                     {hasUnion(displayQuery) && displayQuery.unionBranches && (

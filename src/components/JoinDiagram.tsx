@@ -80,13 +80,27 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact }: JoinDiagram
       >
         <Background color="#3a4049" gap={20} />
         <Controls showInteractive={false} />
-        <MiniMap
-          nodeColor={minimapNodeColor}
-          nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
-          nodeBorderRadius={2}
-          maskColor="rgba(26, 29, 35, 0.65)"
-          style={{ background: '#282c34' }}
-        />
+        {compact ? (
+          <MiniMap
+            nodeColor={minimapNodeColor}
+            nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
+            nodeBorderRadius={2}
+            maskColor="rgba(26, 29, 35, 0.65)"
+            style={{ background: '#282c34', width: 72, height: 48 }}
+            className="join-minimap join-minimap--compact"
+            zoomable={false}
+            pannable={false}
+          />
+        ) : (
+          <MiniMap
+            nodeColor={minimapNodeColor}
+            nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
+            nodeBorderRadius={2}
+            maskColor="rgba(26, 29, 35, 0.65)"
+            style={{ background: '#282c34' }}
+            className="join-minimap"
+          />
+        )}
       </ReactFlow>
 
       {joins.length > 0 && !compact && (

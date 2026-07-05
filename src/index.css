@@ -824,6 +824,21 @@ body {
   gap: 8px;
 }
 
+.union-branch-section-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.union-branch-section .where-panel {
+  gap: 16px;
+}
+
+.union-branch-section .query-summary {
+  gap: 16px;
+}
+
 .union-connector {
   text-align: center;
   font-family: var(--font-mono);
@@ -880,6 +895,16 @@ body {
 
 .join-diagram--compact .react-flow {
   min-height: 180px;
+}
+
+.join-diagram--compact .react-flow__controls {
+  transform: scale(0.82);
+  transform-origin: bottom left;
+}
+
+.join-minimap--compact {
+  border-radius: var(--radius-sm) !important;
+  opacity: 0.9;
 }
 
 .condition-nested {
