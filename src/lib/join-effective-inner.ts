@@ -53,7 +53,10 @@ function nullableTableId(join: JoinEdge): string | null {
 }
 
 function tableDisplayLabel(table: TableRef): string {
-  if (table.isDerived) return `${table.displayName}（派生テーブル）`;
+  if (table.isDerived) {
+    if (/派生テーブル/.test(table.displayName)) return table.displayName;
+    return `${table.displayName}（派生テーブル）`;
+  }
   if (table.alias && table.alias !== table.table) {
     return `${table.table}（${table.alias}）`;
   }

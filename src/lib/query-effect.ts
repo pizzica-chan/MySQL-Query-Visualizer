@@ -21,10 +21,17 @@ export interface ConditionEffectNode {
   children?: ConditionEffectNode[];
 }
 
+export interface TablePresenceGroup {
+  label: string;
+  kind: 'required' | 'optional';
+  tables: string[];
+}
+
 export interface QueryEffectSection {
   kind: EffectLineKind;
   title?: string;
   lines?: string[];
+  presenceGroups?: TablePresenceGroup[];
   conditionRoot?: ConditionEffectNode;
 }
 
@@ -159,8 +166,15 @@ const MULTI_SOURCE_JOIN_SCOPE: Record<string, (sources: string, target: string, 
   'CROSS JOIN': (s, r) => `${s} と ${r} の直積（すべての組み合わせ）`,
 };
 
+function derivedTableLabelAlreadyPresent(name: string): boolean {
+  return /派生テーブル/.test(name);
+}
+
 function tablePrimaryName(table: TableRef): string {
-  if (table.isDerived) return `${table.table}（派生テーブル）`;
+  if (table.isDerived) {
+    const base = table.alias || table.table;
+    return derivedTableLabelAlreadyPresent(base) ? base : `${base}（派生テーブル）`;
+  }
   if (table.alias && table.alias !== table.table) {
     return `${table.table}（${table.alias}）`;
   }
@@ -168,7 +182,11 @@ function tablePrimaryName(table: TableRef): string {
 }
 
 function tableLabel(table: TableRef): string {
-  if (table.isDerived) return `${table.displayName}（派生テーブル）`;
+  if (table.isDerived) {
+    return derivedTableLabelAlreadyPresent(table.displayName)
+      ? table.displayName
+      : `${table.displayName}（派生テーブル）`;
+  }
   return table.displayName;
 }
 
@@ -191,6 +209,111 @@ function tableName(_join: JoinEdge, tables: TableRef[], id: string): string {
 
 function joinSourceLabels(join: JoinEdge, tables: TableRef[]): string[] {
   return resolveJoinLayoutSources(join, tables).map((id) => tableName(join, tables, id));
+}
+
+function isInnerJoinType(type: JoinEdge['type']): boolean {
+  return type === 'INNER JOIN' || type === 'JOIN';
+}
+
+export interface TablePresenceClassification {
+  required: TableRef[];
+  optional: TableRef[];
+  /** 外部結合だが実質 INNER となり必須側に含まれるテーブル id */
+  effectiveInnerTableIds: Set<string>;
+}
+
+/** JOIN 種別と実質 INNER から、結果行にレコードが必須か任意かを分類 */
+export function classifyTablePresenceRequirement(query: ParsedQuery): TablePresenceClassification {
+  const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
+  const requiredIds = new Set<string>();
+  const optionalIds = new Set<string>();
+  const effectiveInnerTableIds = new Set<string>();
+
+  if (query.tables.length === 0) {
+    return { required: [], optional: [], effectiveInnerTableIds };
+  }
+
+  requiredIds.add(query.tables[0]!.id);
+
+  for (const join of query.joins) {
+    const analysis = effectiveInnerByJoin.get(join.id);
+    const effectiveInner = Boolean(analysis && analysis.reasons.length > 0);
+    const sourceIds = resolveJoinLayoutSources(join, query.tables);
+
+    if (isInnerJoinType(join.type)) {
+      requiredIds.add(join.targetId);
+      for (const id of sourceIds) requiredIds.add(id);
+      optionalIds.delete(join.targetId);
+    } else if (join.type === 'LEFT JOIN') {
+      if (effectiveInner) {
+        requiredIds.add(join.targetId);
+        optionalIds.delete(join.targetId);
+        effectiveInnerTableIds.add(join.targetId);
+      } else {
+        optionalIds.add(join.targetId);
+      }
+    } else if (join.type === 'RIGHT JOIN') {
+      requiredIds.add(join.targetId);
+      if (effectiveInner) {
+        requiredIds.add(join.sourceId);
+        optionalIds.delete(join.sourceId);
+        effectiveInnerTableIds.add(join.sourceId);
+      } else {
+        optionalIds.add(join.sourceId);
+      }
+    } else if (join.type === 'FULL JOIN') {
+      optionalIds.add(join.targetId);
+      for (const id of sourceIds) optionalIds.add(id);
+    } else if (join.type === 'CROSS JOIN') {
+      requiredIds.add(join.targetId);
+    }
+  }
+
+  for (const id of requiredIds) optionalIds.delete(id);
+
+  return {
+    required: query.tables.filter((t) => requiredIds.has(t.id)),
+    optional: query.tables.filter((t) => optionalIds.has(t.id)),
+    effectiveInnerTableIds,
+  };
+}
+
+function tablePresenceLabel(table: TableRef): string {
+  if (table.isDerived) return tableLabel(table);
+  return tablePrimaryName(table);
+}
+
+function formatTableNameForPresence(
+  table: TableRef,
+  classification: TablePresenceClassification,
+  markEffectiveInner: boolean,
+): string {
+  const name = tablePresenceLabel(table);
+  if (markEffectiveInner && classification.effectiveInnerTableIds.has(table.id)) {
+    return `${name}（実質 INNER JOIN）`;
+  }
+  return name;
+}
+
+function buildTablePresenceGroups(
+  classification: TablePresenceClassification,
+): TablePresenceGroup[] {
+  return [
+    {
+      label: 'レコード必須',
+      kind: 'required',
+      tables: classification.required.map((t) =>
+        formatTableNameForPresence(t, classification, true),
+      ),
+    },
+    {
+      label: 'レコード任意（外部結合）',
+      kind: 'optional',
+      tables: classification.optional.map((t) =>
+        formatTableNameForPresence(t, classification, false),
+      ),
+    },
+  ];
 }
 
 function describeJoin(
@@ -288,6 +411,7 @@ export function collectLeafTexts(node: ConditionEffectNode): string[] {
 
 function describeScope(query: ParsedQuery): QueryEffectSection | null {
   const lines: string[] = [];
+  let presenceGroups: TablePresenceGroup[] | undefined;
   const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
 
   if (query.tables.length === 0) {
@@ -295,6 +419,8 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
   } else if (query.joins.length === 0) {
     lines.push(`${tableLabel(query.tables[0]!)} の行`);
   } else {
+    presenceGroups = buildTablePresenceGroups(classifyTablePresenceRequirement(query));
+
     lines.push(`${tableLabel(query.tables[0]!)} を起点に行の組み合わせを構成`);
     for (const join of query.joins) {
       const analysis = effectiveInnerByJoin.get(join.id);
@@ -310,7 +436,9 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
     }
   }
 
-  return lines.length > 0 ? { kind: 'scope', title: '対象の範囲', lines } : null;
+  if (lines.length === 0 && !presenceGroups) return null;
+
+  return { kind: 'scope', title: '対象の範囲', lines, presenceGroups };
 }
 
 function describeFilterSection(

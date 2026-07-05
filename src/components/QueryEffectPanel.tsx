@@ -41,6 +41,31 @@ function EffectSection({ section, query }: { section: QueryEffectSection; query:
   return (
     <div className={`query-effect-section query-effect-section--${section.kind}`}>
       {section.title && <h4 className="query-effect-section-title">{section.title}</h4>}
+      {section.presenceGroups && section.presenceGroups.length > 0 && (
+        <div className="query-effect-presence">
+          {section.presenceGroups.map((group) => (
+            <div
+              key={group.kind}
+              className={`query-effect-presence-group query-effect-presence-group--${group.kind}`}
+            >
+              <div className="query-effect-presence-label">{group.label}</div>
+              <ul className="query-effect-presence-tables">
+                {group.tables.length === 0 ? (
+                  <li className="query-effect-presence-table query-effect-presence-table--empty">
+                    なし
+                  </li>
+                ) : (
+                  group.tables.map((table, index) => (
+                    <li key={index} className="query-effect-presence-table">
+                      <EffectHighlightedText text={table} query={query} />
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
       {section.lines && section.lines.length > 0 && (
         <ul className="query-effect-lines">
           {section.lines.map((line, index) => (

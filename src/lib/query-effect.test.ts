@@ -6,25 +6,37 @@ import {
   UPDATE_SAMPLE_SQL,
   parseMySqlQuery,
 } from './parser';
+import type { QueryEffectSection } from './query-effect';
 import {
   buildConditionEffectTree,
   buildQueryEffect,
   buildUnionQueryEffect,
+  classifyTablePresenceRequirement,
   collectLeafTexts,
 } from './query-effect';
+import { applyAliasResolution } from './alias-resolver';
+import type { ParsedQuery } from './types';
+
+function scopeSectionForQuery(query: ParsedQuery): QueryEffectSection | undefined {
+  const effect = buildQueryEffect(query);
+  return effect.sections.find((s) => s.kind === 'scope');
+}
+
+function scopeSection(sql: string): QueryEffectSection | undefined {
+  const result = parseMySqlQuery(sql);
+  expect(result.success).toBe(true);
+  if (!result.success) return undefined;
+  return scopeSectionForQuery(result.query);
+}
+
+function scopeLines(sql: string): string[] {
+  return scopeSection(sql)?.lines ?? [];
+}
 
 function allLeafTexts(effect: ReturnType<typeof buildQueryEffect>): string[] {
   return effect.sections.flatMap((s) =>
     s.conditionRoot ? collectLeafTexts(s.conditionRoot) : (s.lines ?? []),
   );
-}
-
-function scopeLines(sql: string): string[] {
-  const result = parseMySqlQuery(sql);
-  expect(result.success).toBe(true);
-  if (!result.success) return [];
-  const effect = buildQueryEffect(result.query);
-  return effect.sections.find((s) => s.kind === 'scope')?.lines ?? [];
 }
 
 describe('query-effect', () => {
@@ -137,6 +149,107 @@ describe('query-effect', () => {
       const line = lines.find((l) => l.includes('b.a_id = a.id'));
       expect(line).toContain('の行をすべて残し');
       expect(line).not.toContain('は実質 INNER JOIN');
+    });
+  });
+
+  describe('テーブル必須・任意の分類', () => {
+    it('SELECT サンプルでレコード必須・任意テーブルを羅列する', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional, effectiveInnerTableIds } =
+        classifyTablePresenceRequirement(result.query);
+      const requiredAliases = required.map((t) => t.alias ?? t.table);
+      const optionalAliases = optional.map((t) => t.alias ?? t.table);
+
+      expect(requiredAliases).toContain('u');
+      expect(requiredAliases).toContain('o');
+      expect(requiredAliases).toContain('oi');
+      expect(requiredAliases).toContain('p');
+      expect(requiredAliases).toContain('hot');
+      expect(optionalAliases).toContain('lm');
+      expect(optionalAliases).toContain('c');
+      expect(effectiveInnerTableIds.has(result.query.tables.find((t) => t.alias === 'oi')!.id)).toBe(
+        true,
+      );
+
+      const lines = scopeLines(SAMPLE_SQL);
+      expect(lines.some((l) => l.includes('INNER JOIN'))).toBe(true);
+      expect(lines.some((l) => l.startsWith('レコード必須'))).toBe(false);
+
+      const scope = scopeSection(SAMPLE_SQL);
+      const requiredGroup = scope?.presenceGroups?.find((g) => g.kind === 'required');
+      const optionalGroup = scope?.presenceGroups?.find((g) => g.kind === 'optional');
+      expect(requiredGroup).toBeDefined();
+      expect(optionalGroup).toBeDefined();
+      expect(requiredGroup!.tables.some((t) => t.includes('order_items（oi）（実質 INNER JOIN）'))).toBe(
+        true,
+      );
+      expect(optionalGroup!.tables.some((t) => t.includes('line_metrics（lm）'))).toBe(true);
+      expect(optionalGroup!.tables.some((t) => t.includes('categories（c）'))).toBe(true);
+    });
+
+    it('レコード必須・任意はエイリアス解決の有無に関わらず実テーブル名とエイリアスを併記する', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const unresolved = scopeSectionForQuery(result.query)?.presenceGroups?.find(
+        (g) => g.kind === 'required',
+      );
+      const resolved = scopeSectionForQuery(applyAliasResolution(result.query, true))?.presenceGroups?.find(
+        (g) => g.kind === 'required',
+      );
+
+      expect(unresolved?.tables).toContain('users（u）');
+      expect(resolved?.tables).toContain('users（u）');
+      expect(unresolved?.tables).not.toContain('u');
+      expect(resolved?.tables).not.toContain('users');
+    });
+
+    it('派生テーブル表記が二重にならない', () => {
+      const requiredGroup = scopeSection(SAMPLE_SQL)?.presenceGroups?.find(
+        (g) => g.kind === 'required',
+      );
+      expect(requiredGroup).toBeDefined();
+      const hotLine = requiredGroup!.tables.find((t) => t.includes('hot'));
+      expect(hotLine).toBeDefined();
+      expect(hotLine).toContain('hot (派生テーブル)');
+      expect(hotLine!.match(/派生テーブル/g)?.length).toBe(1);
+    });
+
+    it('レコード必須・任意は JOIN 説明より先に配置される', () => {
+      const scope = scopeSection(SAMPLE_SQL);
+      expect(scope?.presenceGroups?.length).toBeGreaterThan(0);
+      expect(scope?.lines?.[0]).toContain('を起点に行の組み合わせを構成');
+    });
+
+    it('実質 INNER JOIN でない LEFT JOIN は任意テーブルに含める', () => {
+      const result = parseMySqlQuery(`
+        SELECT * FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.alias)).toEqual(['a']);
+      expect(optional.map((t) => t.alias)).toEqual(['b']);
+    });
+
+    it('WHERE により実質 INNER になったテーブルは必須に含める', () => {
+      const result = parseMySqlQuery(`
+        SELECT * FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+        WHERE b.col = 1
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.alias).sort()).toEqual(['a', 'b']);
+      expect(optional).toHaveLength(0);
     });
   });
 
