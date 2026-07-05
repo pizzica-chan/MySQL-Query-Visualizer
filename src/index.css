@@ -1114,6 +1114,44 @@ body {
   color: var(--text);
 }
 
+.effect-highlighted-text {
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.effect-hl--keyword {
+  color: #d4b06a;
+  font-weight: 600;
+}
+
+.effect-hl--table {
+  color: #b8d4f0;
+  font-weight: 600;
+}
+
+.effect-hl--column {
+  color: #b8dcc0;
+}
+
+.effect-hl--string {
+  color: #c8b8e8;
+}
+
+.effect-hl--emphasis {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.query-effect-summary .effect-highlighted-text {
+  font-family: var(--font-sans);
+  font-weight: inherit;
+}
+
+.query-effect-summary .effect-hl--table {
+  font-family: var(--font-mono);
+}
+
 .effect-condition-group {
   border: 1px solid var(--border-visible);
   border-radius: var(--radius-sm);

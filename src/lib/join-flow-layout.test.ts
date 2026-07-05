@@ -114,4 +114,59 @@ describe('join-flow-layout', () => {
     expect(computeJoinLayoutKey(sampleTables, sampleJoins, false)).toBe(key);
     expect(a.nodes.map((n) => n.id)).toEqual(b.nodes.map((n) => n.id));
   });
+
+  describe('実質 INNER JOIN のエッジ表示', () => {
+    it('computeJoinLayoutKey は query 指定時に effectiveInner 状態を反映する', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const withoutQuery = computeJoinLayoutKey(result.query.tables, result.query.joins, false);
+      const withQuery = computeJoinLayoutKey(result.query.tables, result.query.joins, false, result.query);
+      expect(withoutQuery).not.toBe(withQuery);
+    });
+
+    it('WHERE のみでも query 指定時は effectiveInner エッジになる', () => {
+      const result = parseMySqlQuery(`
+        SELECT * FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+        WHERE b.col = 1
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { edges } = buildJoinFlowLayout(result.query.tables, result.query.joins, false, result.query);
+      const leftJoin = result.query.joins.find((j) => j.type === 'LEFT JOIN')!;
+      const edge = edges.find((e) => e.id === leftJoin.id);
+
+      expect(edge?.data?.effectiveInner).toBe(true);
+      expect(edge?.label).toContain('≈INNER');
+      expect(edge?.style?.stroke).toBe('#6b9fd4');
+    });
+
+    it('通常の INNER JOIN エッジは effectiveInner にならない', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { edges } = buildJoinFlowLayout(result.query.tables, result.query.joins, false, result.query);
+      const innerJoin = result.query.joins.find((j) => j.type === 'INNER JOIN' && j.condition.includes('o.user_id'))!;
+      const edge = edges.find((e) => e.id === innerJoin.id);
+
+      expect(edge?.data?.effectiveInner).toBe(false);
+      expect(edge?.label).toBe('INNER JOIN');
+      expect(edge?.style?.strokeDasharray).toBeUndefined();
+    });
+
+    it('SAMPLE_SQL では effectiveInner な LEFT JOIN は1本のみ', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { edges } = buildJoinFlowLayout(result.query.tables, result.query.joins, false, result.query);
+      const effectiveEdges = edges.filter((e) => e.data?.effectiveInner);
+      expect(effectiveEdges).toHaveLength(1);
+      expect(effectiveEdges[0]?.label).toContain('LEFT JOIN');
+    });
+  });
 });

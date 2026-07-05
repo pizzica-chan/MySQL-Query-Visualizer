@@ -201,19 +201,23 @@ export function installOfflineGuard(): () => string[] {
   }) as typeof fetch;
 
   if (xhrOpen) {
-    XMLHttpRequest.prototype.open = function (...args: Parameters<typeof xhrOpen>) {
-      errors.push(`XMLHttpRequest.open(${String(args[1])})`);
-      throw new Error(`offline guard: XMLHttpRequest.open(${String(args[1])})`);
+    XMLHttpRequest.prototype.open = function (
+      _method: string,
+      url: string | URL,
+      _async?: boolean,
+      _username?: string | null,
+      _password?: string | null,
+    ) {
+      errors.push(`XMLHttpRequest.open(${String(url)})`);
+      throw new Error(`offline guard: XMLHttpRequest.open(${String(url)})`);
     };
   }
 
   if (typeof wsConstructor === 'function') {
-    globalThis.WebSocket = class extends wsConstructor {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        errors.push(`WebSocket(${String(url)})`);
-        throw new Error(`offline guard: WebSocket(${String(url)})`);
-      }
-    } as typeof WebSocket;
+    globalThis.WebSocket = function (url: string | URL, _protocols?: string | string[]) {
+      errors.push(`WebSocket(${String(url)})`);
+      throw new Error(`offline guard: WebSocket(${String(url)})`);
+    } as unknown as typeof WebSocket;
   }
 
   return () => {

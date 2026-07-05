@@ -1,10 +1,21 @@
 import type { ConditionEffectNode, QueryEffectSection } from '../lib/query-effect';
 import { buildQueryEffect, buildUnionQueryEffect } from '../lib/query-effect';
 import type { ParsedQuery } from '../lib/types';
+import { EffectHighlightedText } from './EffectHighlightedText';
 
-function ConditionEffectTree({ node }: { node: ConditionEffectNode }) {
+function ConditionEffectTree({
+  node,
+  query,
+}: {
+  node: ConditionEffectNode;
+  query: ParsedQuery;
+}) {
   if (node.type === 'leaf') {
-    return <div className="effect-condition-leaf">{node.text}</div>;
+    return (
+      <div className="effect-condition-leaf">
+        <EffectHighlightedText text={node.text ?? ''} query={query} />
+      </div>
+    );
   }
 
   return (
@@ -18,7 +29,7 @@ function ConditionEffectTree({ node }: { node: ConditionEffectNode }) {
                 {node.type.toUpperCase()}
               </div>
             )}
-            <ConditionEffectTree node={child} />
+            <ConditionEffectTree node={child} query={query} />
           </div>
         ))}
       </div>
@@ -26,7 +37,7 @@ function ConditionEffectTree({ node }: { node: ConditionEffectNode }) {
   );
 }
 
-function EffectSection({ section }: { section: QueryEffectSection }) {
+function EffectSection({ section, query }: { section: QueryEffectSection; query: ParsedQuery }) {
   return (
     <div className={`query-effect-section query-effect-section--${section.kind}`}>
       {section.title && <h4 className="query-effect-section-title">{section.title}</h4>}
@@ -34,12 +45,12 @@ function EffectSection({ section }: { section: QueryEffectSection }) {
         <ul className="query-effect-lines">
           {section.lines.map((line, index) => (
             <li key={index} className="query-effect-line">
-              {line}
+              <EffectHighlightedText text={line} query={query} />
             </li>
           ))}
         </ul>
       )}
-      {section.conditionRoot && <ConditionEffectTree node={section.conditionRoot} />}
+      {section.conditionRoot && <ConditionEffectTree node={section.conditionRoot} query={query} />}
     </div>
   );
 }
@@ -61,12 +72,14 @@ export function QueryEffectPanel({ query, branchIndex }: QueryEffectPanelProps) 
         {branchIndex !== undefined && (
           <span className="query-effect-branch">ブランチ {branchIndex + 1}</span>
         )}
-        <p className="query-effect-summary">{effect.summary}</p>
+        <p className="query-effect-summary">
+          <EffectHighlightedText text={effect.summary} query={query} />
+        </p>
       </div>
       {effect.sections.length > 0 && (
         <div className="query-effect-sections">
           {effect.sections.map((section, index) => (
-            <EffectSection key={`${section.kind}-${index}`} section={section} />
+            <EffectSection key={`${section.kind}-${index}`} section={section} query={query} />
           ))}
         </div>
       )}

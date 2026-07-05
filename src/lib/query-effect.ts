@@ -79,7 +79,7 @@ function mergeSameTypeGroups(
   });
 }
 
-function tableName(join: JoinEdge, tables: TableRef[], id: string): string {
+function tableName(_join: JoinEdge, tables: TableRef[], id: string): string {
   const t = tables.find((x) => x.id === id);
   return t ? tableLabel(t) : id;
 }

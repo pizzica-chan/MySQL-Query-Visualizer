@@ -19,6 +19,14 @@ function allLeafTexts(effect: ReturnType<typeof buildQueryEffect>): string[] {
   );
 }
 
+function scopeLines(sql: string): string[] {
+  const result = parseMySqlQuery(sql);
+  expect(result.success).toBe(true);
+  if (!result.success) return [];
+  const effect = buildQueryEffect(result.query);
+  return effect.sections.find((s) => s.kind === 'scope')?.lines ?? [];
+}
+
 describe('query-effect', () => {
   it('SELECT サンプルで表示対象の要約を生成する', () => {
     const result = parseMySqlQuery(SAMPLE_SQL);
@@ -40,25 +48,85 @@ describe('query-effect', () => {
     expect(effect.sections.some((s) => s.kind === 'aggregate')).toBe(true);
   });
 
-  it('SELECT サンプルで order_items LEFT JOIN に実質 INNER JOIN 注釈を付ける', () => {
-    const result = parseMySqlQuery(SAMPLE_SQL);
-    expect(result.success).toBe(true);
-    if (!result.success) return;
+  describe('実質 INNER JOIN の scope 説明', () => {
+    it('SELECT サンプルで order_items LEFT JOIN を結論ファーストで説明する', () => {
+      const lines = scopeLines(SAMPLE_SQL);
+      const oiLine = lines.find((l) => l.includes('oi.order_id = o.id'));
+      expect(oiLine).toBeDefined();
+      expect(oiLine!.startsWith('o と order_items（oi）は実質 INNER JOIN')).toBe(true);
+      expect(oiLine).toContain('後続の INNER JOIN により');
+      expect(oiLine).toContain('SQL上は LEFT JOIN');
 
-    const effect = buildQueryEffect(result.query);
-    const scope = effect.sections.find((s) => s.kind === 'scope');
+      const categoriesLine = lines.find((l) => l.includes('p.category_id'));
+      expect(categoriesLine).toBeDefined();
+      expect(categoriesLine).not.toContain('は実質 INNER JOIN');
+      expect(categoriesLine).toContain('LEFT JOIN');
+    });
 
-    const oiLine = scope?.lines?.find((l) => l.includes('oi.order_id = o.id'));
-    expect(oiLine).toBeDefined();
-    expect(oiLine!.startsWith('o と order_items（oi）は実質 INNER JOIN')).toBe(true);
-    expect(oiLine).toContain('後続の INNER JOIN により');
-    expect(oiLine).not.toContain('WHERE / HAVING');
+    it('UPDATE サンプルでは WHERE によりと説明する', () => {
+      const lines = scopeLines(UPDATE_SAMPLE_SQL);
+      const oiLine = lines.find((l) => l.includes('oi.order_id = o.id'));
+      expect(oiLine).toBeDefined();
+      expect(oiLine).toContain('は実質 INNER JOIN');
+      expect(oiLine).toContain('WHERE により');
+      expect(oiLine).not.toContain('後続の INNER JOIN により');
+    });
 
-    const categoriesLine = scope?.lines?.find(
-      (l) => l.includes('LEFT JOIN') && l.includes('p.category_id'),
-    );
-    expect(categoriesLine).toBeDefined();
-    expect(categoriesLine).not.toContain('は実質 INNER JOIN');
+    it('WHERE のみの LEFT JOIN では WHERE によりと説明する', () => {
+      const lines = scopeLines(`
+        SELECT * FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+        WHERE b.col = 1
+      `);
+      const line = lines.find((l) => l.includes('b.a_id = a.id'));
+      expect(line).toContain('WHERE により');
+      expect(line).not.toContain('後続の INNER JOIN により');
+    });
+
+    it('HAVING のみの LEFT JOIN では HAVING によりと説明する', () => {
+      const lines = scopeLines(`
+        SELECT a.id FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+        GROUP BY a.id
+        HAVING SUM(b.q) > 1
+      `);
+      const line = lines.find((l) => l.includes('b.a_id = a.id'));
+      expect(line).toContain('HAVING により');
+      expect(line).not.toContain('WHERE により');
+    });
+
+    it('WHERE と HAVING のみでは WHERE / HAVING によりと説明する', () => {
+      const lines = scopeLines(`
+        SELECT a.id FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+        WHERE b.col = 1
+        GROUP BY a.id
+        HAVING COUNT(b.id) > 0
+      `);
+      const line = lines.find((l) => l.includes('b.a_id = a.id'));
+      expect(line).toContain('WHERE / HAVING により');
+    });
+
+    it('実質 INNER JOIN でない LEFT JOIN は従来の説明文のまま', () => {
+      const lines = scopeLines(`
+        SELECT * FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+      `);
+      const line = lines.find((l) => l.includes('b.a_id = a.id'));
+      expect(line).toContain('の行をすべて残し');
+      expect(line).not.toContain('は実質 INNER JOIN');
+    });
+
+    it('OR 配下のみ nullable 参照がある場合は従来の LEFT JOIN 説明のまま', () => {
+      const lines = scopeLines(`
+        SELECT * FROM table_a a
+        LEFT JOIN table_b b ON b.a_id = a.id
+        WHERE b.col = 1 OR b.id IS NULL
+      `);
+      const line = lines.find((l) => l.includes('b.a_id = a.id'));
+      expect(line).toContain('の行をすべて残し');
+      expect(line).not.toContain('は実質 INNER JOIN');
+    });
   });
 
   it('UPDATE サンプルで更新対象と SET を含む', () => {
