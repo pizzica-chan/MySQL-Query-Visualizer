@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyAliasResolution } from './alias-resolver';
@@ -11,6 +12,7 @@ import {
   installOfflineGuard,
   type OfflineViolation,
 } from './fixtures/offline-audit';
+import { validateDistOfflineInvariants } from './dist-offline-invariants';
 import { SQL_TEST_CASES } from './fixtures/sql-cases';
 import {
   parseMySqlQuery,
@@ -67,22 +69,27 @@ describe('オフライン実行（外部通信なし）', () => {
       expect(entries).toContain('index.html');
       expect(entries).toContain('assets');
 
-      const html = readFileSync(htmlPath, 'utf8');
-      expect(html).not.toMatch(/<script[^>]+type="module"/i);
-      expect(html).not.toMatch(/<link[^>]+href=["']\.\/assets\/[^"']+\.css["']/i);
-      expect(html).toMatch(/<style>[\s\S]*\.app\s*\{/);
-      expect(html).toMatch(/<script defer src="\.\/assets\/app\.js"><\/script>/);
-
-      const rootIdx = html.indexOf('id="root"');
-      const scriptIdx = html.indexOf('<script defer src="./assets/app.js">');
-      expect(rootIdx).toBeGreaterThan(-1);
-      expect(scriptIdx).toBeGreaterThan(rootIdx);
+      const violations = validateDistOfflineInvariants(distDir);
+      expect(violations, violations.join('\n')).toEqual([]);
 
       const jsPath = resolve(distDir, 'assets/app.js');
-      expect(existsSync(jsPath)).toBe(true);
       const js = readFileSync(jsPath, 'utf8');
       expect(() => new Function(js)).not.toThrow();
       expect(js).not.toMatch(/<\/style>\s*<\/head>/);
+    });
+
+    it('GitHub Pages 向け base パスを含む dist はオフライン配布向けとして拒否する', () => {
+      const distDir = mkdtempSync(join(tmpdir(), 'dist-pages-'));
+      writeFileSync(
+        resolve(distDir, 'index.html'),
+        `<!doctype html><html><head><style>.app{}</style></head><body>
+<div id="root"></div>
+<script defer src="/MySQL-Query-Visualizer/assets/app.js"></script>
+</body></html>`,
+      );
+
+      const violations = validateDistOfflineInvariants(distDir);
+      expect(violations.some((v) => v.includes('GitHub Pages'))).toBe(true);
     });
   });
 

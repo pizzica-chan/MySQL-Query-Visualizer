@@ -41,6 +41,30 @@ npm run build
 npm run preview   # ビルド成果物の確認（http://localhost:4173）
 ```
 
+## GitHub Pages で公開
+
+`master` / `main` への push で [GitHub Actions](.github/workflows/deploy-pages.yml) がテスト・ビルド・デプロイを行います。
+
+**公開 URL:** https://pizzica-chan.github.io/MySQL-Query-Visualizer/
+
+### 初回セットアップ（リポジトリ設定）
+
+1. GitHub リポジトリの **Settings → Pages**
+2. **Build and deployment → Source** を **GitHub Actions** に変更
+3. `master`（または `main`）へ push するとワークフローが実行される
+
+### ローカルで Pages 向けビルドを試す
+
+通常の `npm run build` はオフライン配布用（`base: './'`）。GitHub Pages 向けは環境変数 `GITHUB_PAGES=true` を付けてビルドします。
+
+```bash
+# Linux / macOS / Git Bash
+GITHUB_PAGES=true npm run build
+
+# PowerShell
+$env:GITHUB_PAGES='true'; npm run build
+```
+
 ## オフライン配布
 
 `npm run build` の成果物は **`dist/`** に出力されます。
@@ -61,9 +85,13 @@ dist/
 配布物を更新する場合:
 
 ```bash
-npm run build
-npm run ensure-dist   # push 前の dist 同期チェック
+npm run build              # オフライン配布向け（GITHUB_PAGES は付けない）
+npm run verify-dist-offline # file:// 直開き向けか検証
+npm run ensure-dist        # push 前: 再ビルド + 検証 + dist 同期チェック
 ```
+
+> **注意:** `GITHUB_PAGES=true npm run build` は GitHub Actions の Pages デプロイ専用です。  
+> 生成物を `dist/` にコミットしないでください（`ensure-dist` と CI が検出して失敗します）。
 
 ## テスト
 

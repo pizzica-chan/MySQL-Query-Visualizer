@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "verify-dist-offline": "vitest run src/lib/dist-offline-invariants.verify.test.ts",
     "ensure-dist": "node scripts/ensure-dist-for-push.mjs",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:dist": "npm run build && vitest run src/lib/offline.test.ts src/components/JoinDiagram.offline.test.tsx",
+    "test:dist": "npm run build && npm run verify-dist-offline && vitest run src/lib/offline.test.ts src/components/JoinDiagram.offline.test.tsx",
     "test:watch": "vitest"
   },
   "dependencies": {
