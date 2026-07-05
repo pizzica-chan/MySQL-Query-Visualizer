@@ -103,6 +103,15 @@ export function QueryEffectBanner({ query }: QueryEffectBannerProps) {
             UNION の各 SELECT が返す行の条件です（ブランチごとに独立）
           </p>
         </div>
+        {unionEffect.unionNotes.length > 0 && (
+          <ul className="query-effect-lines query-effect-union-notes">
+            {unionEffect.unionNotes.map((line, index) => (
+              <li key={index} className="query-effect-line">
+                <EffectHighlightedText text={line} query={query} />
+              </li>
+            ))}
+          </ul>
+        )}
         {unionEffect.branches.map((branch, index) => (
           <div key={`branch-${index}`} className="query-effect-banner-branch">
             {index > 0 && branch.operator && (

@@ -199,6 +199,8 @@ LIMIT 50 OFFSET 10`,
     expectSuccess: true,
     assert: (q) => {
       if (!q.distinct) throw new Error('distinct expected');
+      if (q.limit !== '50') throw new Error(`limit ${q.limit}`);
+      if (q.offset !== '10') throw new Error(`offset ${q.offset}`);
       if (!q.having) throw new Error('having expected');
       if (q.columns.some((c) => c.alias === 'cnt')) {
         /* ok */

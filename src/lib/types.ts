@@ -90,6 +90,7 @@ export interface ParsedQuery {
   groupBy: string[];
   orderBy: string[];
   limit?: string;
+  offset?: string;
   distinct: boolean;
   /** UNION / UNION ALL 等の各ブランチ（2本以上のとき） */
   unionBranches?: UnionBranch[];

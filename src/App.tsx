@@ -30,7 +30,7 @@ export default function App() {
   const [sql, setSql] = useState('');
   const [parsed, setParsed] = useState<ParsedQuery | null>(null);
   const [error, setError] = useState<string | undefined>();
-  const [activeTab, setActiveTab] = useState<TabId>('joins');
+  const [activeTab, setActiveTab] = useState<TabId>('effect');
   const [resolveAliases, setResolveAliases] = useState(false);
 
   const displayQuery = useMemo(
@@ -77,7 +77,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'nested' && !nestedInfo.showTab) {
-      setActiveTab('joins');
+      setActiveTab('effect');
     }
   }, [activeTab, nestedInfo.showTab]);
 

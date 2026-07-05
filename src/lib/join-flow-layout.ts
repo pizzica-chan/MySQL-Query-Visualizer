@@ -26,6 +26,7 @@ export interface JoinFlowEdgeData extends Record<string, unknown> {
   condition: string;
   joinType: string;
   effectiveInner?: boolean;
+  compact?: boolean;
 }
 
 export const EFFECTIVE_INNER_EDGE_STYLE = {
@@ -37,6 +38,21 @@ export function isEffectiveInnerJoin(
   effectiveInnerByJoinId: Map<string, { joinId: string }>,
 ): boolean {
   return effectiveInnerByJoinId.has(joinId);
+}
+
+const JOIN_EDGE_CONDITION_MAX_LEN = 56;
+
+export function truncateJoinCondition(condition: string, maxLength = JOIN_EDGE_CONDITION_MAX_LEN): string {
+  const trimmed = condition.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, maxLength - 1)}…`;
+}
+
+/** 図上の JOIN 種別ラベル（ON 条件は別ボックス — JoinFlowEdge） */
+export function formatJoinEdgeLabel(join: JoinEdge, effectiveInner: boolean): string {
+  const lines = [join.type];
+  if (effectiveInner) lines.push('≈INNER');
+  return lines.join('\n');
 }
 
 export interface JoinFlowNodeData extends Record<string, unknown> {
@@ -54,11 +70,12 @@ export function computeJoinLayoutKey(
   joins: JoinEdge[],
   resolveAliases: boolean,
   query?: ParsedQuery,
+  compact = false,
 ): string {
   const effectiveInnerKey = query
     ? [...effectiveInnerAnalysisByJoinId(query).keys()].sort().join(',')
     : '';
-  return `${tables.map((t) => t.id).join('|')}:${joins.map((j) => j.id).join('|')}:${resolveAliases}:${effectiveInnerKey}`;
+  return `${tables.map((t) => t.id).join('|')}:${joins.map((j) => j.id).join('|')}:${resolveAliases}:${effectiveInnerKey}:${compact}`;
 }
 
 export function minimapNodeColor(node: Node): string {
@@ -72,6 +89,7 @@ export function buildJoinFlowLayout(
   joins: JoinEdge[],
   resolveAliases: boolean,
   query?: ParsedQuery,
+  compact = false,
 ): { nodes: Node[]; edges: Edge[] } {
   const effectiveInnerByJoinId = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
 
@@ -100,28 +118,24 @@ export function buildJoinFlowLayout(
     const effectiveInner = isEffectiveInnerJoin(j.id, effectiveInnerByJoinId);
     const baseColor = JOIN_COLORS[j.type] ?? '#64748b';
     const color = effectiveInner ? (JOIN_COLORS['INNER JOIN'] ?? baseColor) : baseColor;
-    const label = effectiveInner ? `${j.type}\n≈INNER` : j.type;
-
     return {
       id: j.id,
+      type: 'joinEdge',
       source: j.sourceId,
       target: j.targetId,
-      label,
-      animated: effectiveInner || j.type === 'INNER JOIN' || j.type === 'JOIN',
+      // animated は React Flow が path に stroke-dasharray を付ける — 実質 INNER のみ
+      animated: effectiveInner,
       style: {
         stroke: color,
         strokeWidth: effectiveInner ? 2.5 : 2,
         ...(effectiveInner ? EFFECTIVE_INNER_EDGE_STYLE : {}),
       },
-      labelStyle: { fill: color, fontWeight: 600, fontSize: 10 },
-      labelBgStyle: { fill: '#0f172a', fillOpacity: 0.85 },
-      labelBgPadding: [6, 4] as [number, number],
-      labelBgBorderRadius: 4,
       markerEnd: { type: MarkerType.ArrowClosed, color },
       data: {
         condition: j.condition,
         joinType: j.type,
         effectiveInner,
+        compact,
       } satisfies JoinFlowEdgeData,
     };
   });

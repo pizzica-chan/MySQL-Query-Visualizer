@@ -176,6 +176,16 @@ describe('parseMySqlQuery', () => {
     });
   });
 
+  describe('LIMIT / OFFSET', () => {
+    it('LIMIT OFFSET を limit と offset に分解する', () => {
+      const result = parseMySqlQuery('SELECT id FROM t LIMIT 50 OFFSET 10');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.query.limit).toBe('50');
+      expect(result.query.offset).toBe('10');
+    });
+  });
+
   describe('WHERE条件ツリー', () => {
     it('LIKE条件は like タイプになる', () => {
       const result = parseMySqlQuery("SELECT id FROM t WHERE name LIKE '%foo%'");

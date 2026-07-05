@@ -1,4 +1,4 @@
-import type { ConditionNode, JoinEdge, ParsedQuery, TableRef } from './types';
+import type { ConditionNode, JoinEdge, ParsedQuery, SelectColumn, TableRef } from './types';
 import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerJoinScopeLine,
@@ -33,6 +33,97 @@ export interface QueryEffect {
   headline: string;
   summary: string;
   sections: QueryEffectSection[];
+}
+
+const AGGREGATE_FUNC_PATTERN =
+  /\b(COUNT|SUM|AVG|MIN|MAX|GROUP_CONCAT|BIT_AND|BIT_OR|STD|STDDEV|VARIANCE)\s*\(/i;
+const COUNT_DISTINCT_PATTERN = /\bCOUNT\s*\(\s*DISTINCT\b/i;
+
+function columnLabel(col: SelectColumn): string {
+  return col.alias ?? col.expression;
+}
+
+function hasStarProjection(columns: SelectColumn[]): boolean {
+  return columns.some((c) => c.expression === '*' || /\.\*$/.test(c.expression));
+}
+
+function describeDistinctLine(query: ParsedQuery): string {
+  if (!query.distinct) return '';
+
+  if (query.groupBy.length > 0) {
+    return 'DISTINCT — 集約後、SELECT 列の組み合わせが同じ行を1行にまとめる';
+  }
+
+  if (hasStarProjection(query.columns)) {
+    return 'DISTINCT — 行全体（すべての列）が同じものを1行にまとめる';
+  }
+
+  const cols = query.columns.map(columnLabel).join(', ');
+  return `DISTINCT — ${cols} の組み合わせが同じ行を1行にまとめる`;
+}
+
+function describeLimitOffsetLines(query: ParsedQuery): string[] {
+  const lines: string[] = [];
+  if (query.offset) {
+    lines.push(`先頭スキップ — ${query.offset} 行を飛ばしてから取得`);
+  }
+  if (query.limit) {
+    lines.push(
+      query.offset
+        ? `件数上限 — スキップ後最大 ${query.limit} 行`
+        : `件数上限 — 最大 ${query.limit} 行`,
+    );
+  }
+  return lines;
+}
+
+function formatLimitSummary(query: ParsedQuery): string {
+  if (query.limit && query.offset) {
+    return ` — ${query.offset} 行スキップ後最大 ${query.limit} 行`;
+  }
+  if (query.limit) return ` — 最大 ${query.limit} 行`;
+  if (query.offset) return ` — ${query.offset} 行スキップ後`;
+  return '';
+}
+
+function describeAggregateColumns(query: ParsedQuery): string[] {
+  if (query.statementType !== 'SELECT') return [];
+
+  const aggregateCols = query.columns.filter((c) => AGGREGATE_FUNC_PATTERN.test(c.expression));
+  const countDistinctCols = query.columns.filter((c) => COUNT_DISTINCT_PATTERN.test(c.expression));
+  const lines: string[] = [];
+
+  if (query.groupBy.length > 0) {
+    lines.push(`${query.groupBy.join(', ')} ごとに集約 — 1グループ = 結果の1行`);
+  } else if (aggregateCols.length > 0) {
+    lines.push('集約関数のみ — 全体を1グループとして計算（結果は最大1行）');
+  }
+
+  for (const col of countDistinctCols) {
+    lines.push(`${columnLabel(col)} — 重複値を除いて数える（COUNT DISTINCT）`);
+  }
+
+  return lines;
+}
+
+function describeUnionCombination(query: ParsedQuery): string[] {
+  if (!query.unionBranches || query.unionBranches.length < 2) return [];
+
+  const operators = query.unionBranches
+    .slice(1)
+    .map((b) => b.operator ?? 'UNION')
+    .filter((op, i, arr) => arr.indexOf(op) === i);
+
+  if (operators.length === 1 && operators[0] === 'UNION ALL') {
+    return ['UNION ALL — 各 SELECT の結果をそのまま縦に連結（重複も残る）'];
+  }
+  if (operators.length === 1 && operators[0] === 'UNION') {
+    return ['UNION — 各 SELECT の結果を縦に連結し、完全に同じ行は1行にまとめる'];
+  }
+
+  return [
+    'UNION / UNION ALL — 各 SELECT の結果を縦に連結（UNION は重複行を除外、UNION ALL は残す）',
+  ];
 }
 
 const ACTION_LABELS: Record<ParsedQuery['statementType'], { action: EffectAction; label: string; verb: string }> = {
@@ -210,13 +301,16 @@ function describeFilterSection(
 }
 
 function describeAggregation(query: ParsedQuery): QueryEffectSection[] {
-  if (query.statementType !== 'SELECT' || query.groupBy.length === 0) return [];
+  if (query.statementType !== 'SELECT') return [];
+
+  const aggregateLines = describeAggregateColumns(query);
+  if (aggregateLines.length === 0 && query.groupBy.length === 0) return [];
 
   const sections: QueryEffectSection[] = [
     {
       kind: 'aggregate',
       title: '集約',
-      lines: [`${query.groupBy.join(', ')} ごとに集約 — 1グループ = 結果の1行`],
+      lines: aggregateLines,
     },
   ];
 
@@ -249,15 +343,12 @@ function describeChanges(query: ParsedQuery): QueryEffectSection | null {
 
 function describePostProcess(query: ParsedQuery): QueryEffectSection | null {
   const lines: string[] = [];
-  if (query.distinct) {
-    lines.push('DISTINCT — 完全に同じ行は1行にまとめる');
-  }
+  const distinctLine = describeDistinctLine(query);
+  if (distinctLine) lines.push(distinctLine);
   if (query.orderBy.length > 0) {
     lines.push(`並び順 — ${query.orderBy.join(', ')}`);
   }
-  if (query.limit) {
-    lines.push(`件数上限 — 最大 ${query.limit} 行`);
-  }
+  lines.push(...describeLimitOffsetLines(query));
   return lines.length > 0 ? { kind: 'info', title: '後処理', lines } : null;
 }
 
@@ -281,12 +372,19 @@ function primaryTarget(query: ParsedQuery): string {
 function buildSummary(query: ParsedQuery, meta: (typeof ACTION_LABELS)[ParsedQuery['statementType']]): string {
   const target = primaryTarget(query);
   const filtered = query.where ? '、WHERE 条件を満たす' : '';
+  const distinct = query.statementType === 'SELECT' && query.distinct ? '（重複行除外）' : '';
   const grouped =
-    query.statementType === 'SELECT' && query.groupBy.length > 0 ? '（グループ集約後）' : '';
-  const limit = query.limit ? ` — 最大 ${query.limit} 行` : '';
+    query.statementType === 'SELECT' && query.groupBy.length > 0
+      ? '（グループ集約後）'
+      : query.statementType === 'SELECT' &&
+          query.groupBy.length === 0 &&
+          query.columns.some((c) => AGGREGATE_FUNC_PATTERN.test(c.expression))
+        ? '（全体集約）'
+        : '';
+  const limit = formatLimitSummary(query);
 
   if (query.statementType === 'SELECT') {
-    return `${target}${filtered}行${grouped}が結果として${meta.verb}${limit}`;
+    return `${target}${filtered}行${grouped}${distinct}が結果として${meta.verb}${limit}`;
   }
   if (query.statementType === 'UPDATE') {
     return `${target}${filtered}行が${meta.verb}${limit}`;
@@ -323,11 +421,13 @@ export function buildQueryEffect(query: ParsedQuery): QueryEffect {
 
 export interface UnionQueryEffect {
   branches: Array<{ operator?: string; effect: QueryEffect }>;
+  unionNotes: string[];
 }
 
 export function buildUnionQueryEffect(query: ParsedQuery): UnionQueryEffect | null {
   if (!hasUnion(query) || !query.unionBranches) return null;
   return {
+    unionNotes: describeUnionCombination(query),
     branches: query.unionBranches.map((branch) => ({
       operator: branch.operator,
       effect: buildQueryEffect(branch.query),

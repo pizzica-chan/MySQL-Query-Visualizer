@@ -4,8 +4,10 @@ import {
   assertJoinFlowLayoutReady,
   buildJoinFlowLayout,
   computeJoinLayoutKey,
+  formatJoinEdgeLabel,
   minimapNodeColor,
   MINIMAP_NODE_COLORS,
+  truncateJoinCondition,
 } from './join-flow-layout';
 
 describe('join-flow-layout', () => {
@@ -88,8 +90,11 @@ describe('join-flow-layout', () => {
     expect(oiJoin).toBeDefined();
 
     const oiEdge = edges.find((e) => e.id === oiJoin!.id);
+    expect(oiEdge?.type).toBe('joinEdge');
     expect(oiEdge?.data?.effectiveInner).toBe(true);
-    expect(oiEdge?.label).toContain('≈INNER');
+    expect(oiEdge?.data?.joinType).toBe('LEFT JOIN');
+    expect(oiEdge?.data?.condition).toContain('oi.order_id = o.id');
+    expect(formatJoinEdgeLabel(oiJoin!, true)).toContain('≈INNER');
     expect(oiEdge?.style?.strokeDasharray).toBe('7 4');
     expect(oiEdge?.animated).toBe(true);
 
@@ -140,7 +145,7 @@ describe('join-flow-layout', () => {
       const edge = edges.find((e) => e.id === leftJoin.id);
 
       expect(edge?.data?.effectiveInner).toBe(true);
-      expect(edge?.label).toContain('≈INNER');
+      expect(formatJoinEdgeLabel(leftJoin, true)).toContain('≈INNER');
       expect(edge?.style?.stroke).toBe('#6b9fd4');
     });
 
@@ -154,7 +159,9 @@ describe('join-flow-layout', () => {
       const edge = edges.find((e) => e.id === innerJoin.id);
 
       expect(edge?.data?.effectiveInner).toBe(false);
-      expect(edge?.label).toBe('INNER JOIN');
+      expect(edge?.data?.joinType).toBe('INNER JOIN');
+      expect(edge?.data?.condition).toBe('o.user_id = u.id');
+      expect(edge?.animated).toBe(false);
       expect(edge?.style?.strokeDasharray).toBeUndefined();
     });
 
@@ -166,7 +173,25 @@ describe('join-flow-layout', () => {
       const { edges } = buildJoinFlowLayout(result.query.tables, result.query.joins, false, result.query);
       const effectiveEdges = edges.filter((e) => e.data?.effectiveInner);
       expect(effectiveEdges).toHaveLength(1);
-      expect(effectiveEdges[0]?.label).toContain('LEFT JOIN');
+      expect(effectiveEdges[0]?.data?.joinType).toBe('LEFT JOIN');
+    });
+
+    it('formatJoinEdgeLabel は JOIN 種別のみ（ON 条件は別ボックス）', () => {
+      const join = sampleJoins[0]!;
+      expect(formatJoinEdgeLabel(join, false)).toBe('INNER JOIN');
+      expect(formatJoinEdgeLabel(join, true)).toBe('INNER JOIN\n≈INNER');
+    });
+
+    it('compact モードでは ON 条件ボックスを出さない', () => {
+      const { edges } = buildJoinFlowLayout(sampleTables, sampleJoins, false, undefined, true);
+      expect(edges[0]?.data?.compact).toBe(true);
+      expect(edges[0]?.data?.condition).toBe('o.user_id = u.id');
+    });
+
+    it('truncateJoinCondition が長い条件を省略する', () => {
+      const long = 'a.'.repeat(40);
+      expect(truncateJoinCondition(long, 20)).toMatch(/…$/);
+      expect(truncateJoinCondition('a.id = b.id', 20)).toBe('a.id = b.id');
     });
   });
 });

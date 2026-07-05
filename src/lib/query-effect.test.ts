@@ -162,8 +162,55 @@ describe('query-effect', () => {
 
     const unionEffect = buildUnionQueryEffect(result.query);
     expect(unionEffect?.branches).toHaveLength(3);
+    expect(unionEffect?.unionNotes.some((n) => n.includes('UNION'))).toBe(true);
     expect(unionEffect?.branches[2]?.effect.summary).toContain('guest_users');
     expect(allLeafTexts(unionEffect!.branches[2]!.effect).some((t) => t.includes('関連行'))).toBe(true);
+  });
+
+  describe('SELECT 修飾子・集約', () => {
+    it('DISTINCT で重複行除外と対象列を説明する', () => {
+      const result = parseMySqlQuery('SELECT DISTINCT u.dept, u.name FROM users u');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const effect = buildQueryEffect(result.query);
+      expect(effect.summary).toContain('重複行除外');
+      const post = effect.sections.find((s) => s.title === '後処理');
+      expect(post?.lines?.some((l) => l.includes('DISTINCT') && l.includes('u.dept'))).toBe(true);
+    });
+
+    it('LIMIT OFFSET を後処理と要約に反映する', () => {
+      const result = parseMySqlQuery('SELECT id FROM t ORDER BY id LIMIT 50 OFFSET 10');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      expect(result.query.offset).toBe('10');
+      const effect = buildQueryEffect(result.query);
+      expect(effect.summary).toContain('10 行スキップ後最大 50 行');
+      const post = effect.sections.find((s) => s.title === '後処理');
+      expect(post?.lines?.some((l) => l.includes('先頭スキップ'))).toBe(true);
+    });
+
+    it('GROUP BY なしの集約関数は全体集約として説明する', () => {
+      const result = parseMySqlQuery('SELECT COUNT(*) AS cnt FROM users');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const effect = buildQueryEffect(result.query);
+      expect(effect.summary).toContain('全体集約');
+      const agg = effect.sections.find((s) => s.kind === 'aggregate');
+      expect(agg?.lines?.some((l) => l.includes('最大1行'))).toBe(true);
+    });
+
+    it('COUNT(DISTINCT ...) を集約セクションで説明する', () => {
+      const result = parseMySqlQuery('SELECT dept, COUNT(DISTINCT user_id) AS uu FROM users GROUP BY dept');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const effect = buildQueryEffect(result.query);
+      const agg = effect.sections.find((s) => s.kind === 'aggregate');
+      expect(agg?.lines?.some((l) => l.includes('COUNT DISTINCT'))).toBe(true);
+    });
   });
 
   it('buildConditionEffectTree が AND 配下を入れ子にする', () => {

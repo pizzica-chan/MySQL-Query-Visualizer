@@ -64,6 +64,12 @@ export function QuerySummary({ query, resolveAliases, compact = false }: QuerySu
           <dd>{query.orderBy.length > 0 ? `${query.orderBy.length} 列` : 'なし'}</dd>
           <dt>LIMIT</dt>
           <dd>{query.limit ?? 'なし'}</dd>
+          {query.offset && (
+            <>
+              <dt>OFFSET</dt>
+              <dd>{query.offset}</dd>
+            </>
+          )}
           {isSelect && hasUnion(query) && (
             <>
               <dt>UNION</dt>

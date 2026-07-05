@@ -25,15 +25,16 @@ export function useJoinFlowState(
   joins: Parameters<typeof buildJoinFlowLayout>[1],
   resolveAliases: boolean,
   query?: ParsedQuery,
+  compact = false,
 ): UseJoinFlowStateResult {
   const layoutKey = useMemo(
-    () => computeJoinLayoutKey(tables, joins, resolveAliases, query),
-    [tables, joins, resolveAliases, query],
+    () => computeJoinLayoutKey(tables, joins, resolveAliases, query, compact),
+    [tables, joins, resolveAliases, query, compact],
   );
 
   const { nodes, edges } = useMemo(
-    () => buildJoinFlowLayout(tables, joins, resolveAliases, query),
-    [layoutKey, tables, joins, resolveAliases, query],
+    () => buildJoinFlowLayout(tables, joins, resolveAliases, query, compact),
+    [layoutKey, tables, joins, resolveAliases, query, compact],
   );
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(nodes);

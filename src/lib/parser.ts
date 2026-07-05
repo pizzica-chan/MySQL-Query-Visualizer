@@ -106,10 +106,11 @@ function exprToString(node: any): string {
     }
     case 'aggr_func': {
       const rawArgs = node.args?.expr ?? node.args?.value ?? node.args;
+      const distinctPrefix = node.args?.distinct ? 'DISTINCT ' : '';
       const args = toArray<any>(rawArgs)
         .map((a: any) => exprToString(a))
         .join(', ');
-      return `${node.name}(${args})`;
+      return `${node.name}(${distinctPrefix}${args})`;
     }
     case 'case': {
       const whens = (node.args ?? [])
@@ -522,12 +523,7 @@ function buildSelectParsed(ast: any): ParsedQuery {
     (o: any) => `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
   );
 
-  const limit =
-    ast.limit?.value?.[0]?.value !== undefined
-      ? String(ast.limit.value[0].value)
-      : ast.limit
-        ? exprToString(ast.limit)
-        : undefined;
+  const { limit, offset } = parseLimitOffset(ast);
 
   return {
     rawSql: '',
@@ -540,6 +536,7 @@ function buildSelectParsed(ast: any): ParsedQuery {
     groupBy,
     orderBy,
     limit,
+    offset,
     distinct: Boolean(ast.distinct),
   };
 }
@@ -587,12 +584,7 @@ function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
     (o: any) => `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
   );
 
-  const limit =
-    ast.limit?.value?.[0]?.value !== undefined
-      ? String(ast.limit.value[0].value)
-      : ast.limit
-        ? exprToString(ast.limit)
-        : undefined;
+  const { limit, offset } = parseLimitOffset(ast);
 
   return {
     rawSql,
@@ -605,6 +597,7 @@ function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
     groupBy: [],
     orderBy,
     limit,
+    offset,
     distinct: false,
   };
 }
@@ -626,19 +619,30 @@ function parseDeleteTargets(targets: any[], tables: TableRef[]): DeleteTarget[] 
   });
 }
 
-function parseLimitAndOrder(ast: any): { orderBy: string[]; limit?: string } {
+function limitOffsetValue(entry: any): string | undefined {
+  if (entry?.value !== undefined) return String(entry.value);
+  if (entry) return exprToString(entry);
+  return undefined;
+}
+
+function parseLimitOffset(ast: any): { limit?: string; offset?: string } {
+  if (!ast.limit) return {};
+
+  if (ast.limit.value?.length) {
+    const limit = limitOffsetValue(ast.limit.value[0]);
+    const offset = limitOffsetValue(ast.limit.value[1]);
+    return { limit, offset };
+  }
+
+  return { limit: exprToString(ast.limit) };
+}
+
+function parseLimitAndOrder(ast: any): { orderBy: string[]; limit?: string; offset?: string } {
   const orderBy = toArray<any>(ast.orderby).map(
     (o: any) => `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
   );
 
-  const limit =
-    ast.limit?.value?.[0]?.value !== undefined
-      ? String(ast.limit.value[0].value)
-      : ast.limit
-        ? exprToString(ast.limit)
-        : undefined;
-
-  return { orderBy, limit };
+  return { orderBy, ...parseLimitOffset(ast) };
 }
 
 function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
@@ -647,7 +651,7 @@ function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
   let where = parseConditionTree(ast.where);
   if (where) where = enrichConditionTree(where);
 
-  const { orderBy, limit } = parseLimitAndOrder(ast);
+  const { orderBy, limit, offset } = parseLimitAndOrder(ast);
 
   return {
     rawSql,
@@ -660,6 +664,7 @@ function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
     groupBy: [],
     orderBy,
     limit,
+    offset,
     distinct: false,
   };
 }

@@ -8,6 +8,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
+import { JoinFlowEdge } from './JoinFlowEdge';
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
 import { effectiveInnerAnalysisByJoinId } from '../lib/join-effective-inner';
 import {
@@ -53,6 +54,7 @@ function TableNode({ data: raw }: NodeProps) {
 }
 
 const nodeTypes = { tableNode: TableNode };
+const edgeTypes = { joinEdge: JoinFlowEdge };
 
 interface JoinDiagramFlowProps {
   tables: TableRef[];
@@ -72,6 +74,7 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: Join
     joins,
     resolveAliases,
     query,
+    compact,
   );
 
   return (
@@ -82,6 +85,7 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: Join
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         fitView
         fitViewOptions={{ padding: 0.3 }}
         minZoom={0.4}
