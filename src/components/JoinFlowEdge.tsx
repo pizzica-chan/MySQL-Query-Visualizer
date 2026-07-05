@@ -1,5 +1,5 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
-import { truncateJoinCondition, type JoinFlowEdgeData } from '../lib/join-flow-layout';
+import { truncateJoinCondition, computeJoinEdgeLabelOffset, type JoinFlowEdgeData } from '../lib/join-flow-layout';
 
 export function JoinFlowEdge({
   id,
@@ -28,6 +28,16 @@ export function JoinFlowEdge({
   if (edgeData.effectiveInner) typeLines.push('≈INNER');
   const condition = edgeData.condition?.trim() ?? '';
   const showCondition = !edgeData.compact && condition.length > 0;
+  const labelOffset = computeJoinEdgeLabelOffset(
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    44,
+    edgeData.labelOffsetFlip ?? 1,
+  );
+  const labelPosX = labelX + labelOffset.x;
+  const labelPosY = labelY + labelOffset.y;
 
   return (
     <>
@@ -37,8 +47,8 @@ export function JoinFlowEdge({
           className="join-edge-labels nodrag nopan"
           style={{
             position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-            pointerEvents: 'all',
+            transform: `translate(-50%, -50%) translate(${labelPosX}px,${labelPosY}px)`,
+            pointerEvents: 'none',
           }}
         >
           <div

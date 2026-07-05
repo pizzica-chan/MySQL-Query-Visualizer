@@ -27,6 +27,8 @@ export interface JoinFlowEdgeData extends Record<string, unknown> {
   joinType: string;
   effectiveInner?: boolean;
   compact?: boolean;
+  /** エッジラベルの垂直オフセット方向（1 または -1） */
+  labelOffsetFlip?: 1 | -1;
 }
 
 export const EFFECTIVE_INNER_EDGE_STYLE = {
@@ -46,6 +48,25 @@ export function truncateJoinCondition(condition: string, maxLength = JOIN_EDGE_C
   const trimmed = condition.trim();
   if (trimmed.length <= maxLength) return trimmed;
   return `${trimmed.slice(0, maxLength - 1)}…`;
+}
+
+/** エッジ中点ラベルをノードと重なりにくいよう、エッジに垂直方向へずらす */
+export function computeJoinEdgeLabelOffset(
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+  distance = 44,
+  flip: 1 | -1 = 1,
+): { x: number; y: number } {
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return { x: 0, y: -distance * flip };
+  return {
+    x: (dy / len) * distance * flip,
+    y: (-dx / len) * distance * flip,
+  };
 }
 
 /** 図上の JOIN 種別ラベル（ON 条件は別ボックス — JoinFlowEdge） */
@@ -99,7 +120,7 @@ export function buildJoinFlowLayout(
     return {
       id: t.id,
       type: 'tableNode',
-      position: { x: i * 280, y: 80 + (i % 2) * 60 },
+      position: { x: i * 300, y: 72 + (i % 2) * 88 },
       // ミニマップ表示に必須（onNodesChange による計測前のフォールバック）
       width: 176,
       height: hasExtraLine ? 108 : 88,
@@ -114,7 +135,7 @@ export function buildJoinFlowLayout(
     };
   });
 
-  const edges: Edge[] = joins.map((j) => {
+  const edges: Edge[] = joins.map((j, joinIndex) => {
     const effectiveInner = isEffectiveInnerJoin(j.id, effectiveInnerByJoinId);
     const baseColor = JOIN_COLORS[j.type] ?? '#64748b';
     const color = effectiveInner ? (JOIN_COLORS['INNER JOIN'] ?? baseColor) : baseColor;
@@ -136,6 +157,7 @@ export function buildJoinFlowLayout(
         joinType: j.type,
         effectiveInner,
         compact,
+        labelOffsetFlip: joinIndex % 2 === 0 ? 1 : -1,
       } satisfies JoinFlowEdgeData,
     };
   });

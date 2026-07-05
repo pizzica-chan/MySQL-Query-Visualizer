@@ -4,6 +4,7 @@ import {
   assertJoinFlowLayoutReady,
   buildJoinFlowLayout,
   computeJoinLayoutKey,
+  computeJoinEdgeLabelOffset,
   formatJoinEdgeLabel,
   minimapNodeColor,
   MINIMAP_NODE_COLORS,
@@ -30,6 +31,17 @@ describe('join-flow-layout', () => {
     const b = computeJoinLayoutKey(sampleTables, sampleJoins, false);
     expect(a).toBe(b);
     expect(a).not.toBe(computeJoinLayoutKey(sampleTables, sampleJoins, true));
+  });
+
+  it('computeJoinEdgeLabelOffset は水平エッジを上方向へずらす', () => {
+    expect(computeJoinEdgeLabelOffset(0, 100, 200, 100)).toEqual({ x: 0, y: -44 });
+    expect(computeJoinEdgeLabelOffset(200, 100, 0, 100)).toEqual({ x: 0, y: 44 });
+  });
+
+  it('computeJoinEdgeLabelOffset は垂直エッジを横方向へずらす', () => {
+    const offset = computeJoinEdgeLabelOffset(100, 0, 100, 200);
+    expect(offset.x).toBe(44);
+    expect(Math.abs(offset.y)).toBe(0);
   });
 
   it('全ノードに width/height がある（ミニマップ前提）', () => {
