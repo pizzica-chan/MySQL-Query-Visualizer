@@ -128,17 +128,20 @@ describe('UNION / サブクエリ', () => {
 
   it('全サンプル SQL が UNION/サブクエリ検出可能', () => {
     const samples = [
-      { sql: SAMPLE_SQL, expectUnion: false },
-      { sql: UPDATE_SAMPLE_SQL, expectUnion: false },
-      { sql: DELETE_SAMPLE_SQL, expectUnion: false },
-      { sql: UNION_SAMPLE_SQL, expectUnion: true },
+      { sql: SAMPLE_SQL, expectUnion: false, expectSubqueries: true },
+      { sql: UPDATE_SAMPLE_SQL, expectUnion: false, expectSubqueries: false },
+      { sql: DELETE_SAMPLE_SQL, expectUnion: false, expectSubqueries: false },
+      { sql: UNION_SAMPLE_SQL, expectUnion: true, expectSubqueries: true },
     ];
 
-    for (const { sql, expectUnion } of samples) {
+    for (const { sql, expectUnion, expectSubqueries } of samples) {
       const result = parseMySqlQuery(sql);
       expect(result.success).toBe(true);
       if (!result.success) continue;
       expect(hasUnion(result.query)).toBe(expectUnion);
+      if (expectSubqueries) {
+        expect(collectAllNestedQueries(result.query).length).toBeGreaterThan(0);
+      }
       expect(() => assertParseInvariants(result.query)).not.toThrow();
     }
   });

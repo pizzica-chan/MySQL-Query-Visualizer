@@ -1,7 +1,6 @@
 interface SqlEditorProps {
   value: string;
   onChange: (value: string) => void;
-  onParse: () => void;
   onLoadSample: () => void;
   onLoadUpdateSample: () => void;
   onLoadDeleteSample: () => void;
@@ -12,7 +11,6 @@ interface SqlEditorProps {
 export function SqlEditor({
   value,
   onChange,
-  onParse,
   onLoadSample,
   onLoadUpdateSample,
   onLoadDeleteSample,
@@ -24,20 +22,17 @@ export function SqlEditor({
       <div className="sql-editor-toolbar">
         <span className="sql-editor-label">MySQL SQL</span>
         <div className="sql-editor-actions">
-          <button type="button" className="btn btn--ghost" onClick={onLoadSample}>
-            SELECTサンプル
+          <button type="button" className="btn btn--ghost" onClick={onLoadSample} title="SELECTサンプルを読み込む">
+            SELECT
           </button>
-          <button type="button" className="btn btn--ghost" onClick={onLoadUpdateSample}>
-            UPDATEサンプル
+          <button type="button" className="btn btn--ghost" onClick={onLoadUpdateSample} title="UPDATEサンプルを読み込む">
+            UPDATE
           </button>
-          <button type="button" className="btn btn--ghost" onClick={onLoadUnionSample}>
-            UNIONサンプル
+          <button type="button" className="btn btn--ghost" onClick={onLoadUnionSample} title="UNIONサンプルを読み込む">
+            UNION
           </button>
-          <button type="button" className="btn btn--ghost" onClick={onLoadDeleteSample}>
-            DELETEサンプル
-          </button>
-          <button type="button" className="btn btn--primary" onClick={onParse}>
-            解析する
+          <button type="button" className="btn btn--ghost" onClick={onLoadDeleteSample} title="DELETEサンプルを読み込む">
+            DELETE
           </button>
         </div>
       </div>

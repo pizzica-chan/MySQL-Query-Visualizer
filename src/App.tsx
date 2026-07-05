@@ -98,7 +98,6 @@ export default function App() {
           <SqlEditor
             value={sql}
             onChange={setSql}
-            onParse={runParse}
             onLoadSample={() => setSql(SAMPLE_SQL)}
             onLoadUpdateSample={() => setSql(UPDATE_SAMPLE_SQL)}
             onLoadDeleteSample={() => setSql(DELETE_SAMPLE_SQL)}
@@ -117,17 +116,17 @@ export default function App() {
                 UNION の各ブランチと IN / EXISTS / 派生テーブルのサブクエリも展開表示します。
               </p>
               <div className="welcome-actions">
-                <button type="button" className="btn btn--primary" onClick={() => setSql(SAMPLE_SQL)}>
-                  SELECTサンプル
+                <button type="button" className="btn btn--primary" onClick={() => setSql(SAMPLE_SQL)} title="SELECTサンプルを読み込む">
+                  SELECT
                 </button>
-                <button type="button" className="btn btn--ghost" onClick={() => setSql(UNION_SAMPLE_SQL)}>
-                  UNIONサンプル
+                <button type="button" className="btn btn--ghost" onClick={() => setSql(UNION_SAMPLE_SQL)} title="UNIONサンプルを読み込む">
+                  UNION
                 </button>
-                <button type="button" className="btn btn--ghost" onClick={() => setSql(UPDATE_SAMPLE_SQL)}>
-                  UPDATEサンプル
+                <button type="button" className="btn btn--ghost" onClick={() => setSql(UPDATE_SAMPLE_SQL)} title="UPDATEサンプルを読み込む">
+                  UPDATE
                 </button>
-                <button type="button" className="btn btn--ghost" onClick={() => setSql(DELETE_SAMPLE_SQL)}>
-                  DELETEサンプル
+                <button type="button" className="btn btn--ghost" onClick={() => setSql(DELETE_SAMPLE_SQL)} title="DELETEサンプルを読み込む">
+                  DELETE
                 </button>
               </div>
             </div>

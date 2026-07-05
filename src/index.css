@@ -142,6 +142,8 @@ body {
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .sql-editor-label {
@@ -150,11 +152,16 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .sql-editor-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .btn {
@@ -165,6 +172,8 @@ body {
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
@@ -272,6 +281,8 @@ body {
   font-family: var(--font-sans);
   font-size: 0.85rem;
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
   margin-bottom: -1px;
   transition: color 0.15s, border-color 0.15s;

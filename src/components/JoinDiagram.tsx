@@ -2,17 +2,15 @@ import {
   Background,
   Controls,
   Handle,
-  MarkerType,
   MiniMap,
   Position,
   ReactFlow,
-  type Edge,
-  type Node,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
+import { useJoinFlowState } from '../hooks/useJoinFlowState';
+import { MINIMAP_NODE_COLORS, minimapNodeColor, type JoinFlowNodeData } from '../lib/join-flow-layout';
 import type { JoinEdge, TableRef } from '../lib/types';
-import { formatTableLabel } from '../lib/alias-resolver';
 
 interface JoinDiagramProps {
   tables: TableRef[];
@@ -30,17 +28,8 @@ const JOIN_COLORS: Record<string, string> = {
   JOIN: '#3b82f6',
 };
 
-interface TableNodeData extends Record<string, unknown> {
-  label: string;
-  table: string;
-  schema?: string;
-  alias?: string;
-  aliasNote?: string;
-  isDerived?: boolean;
-}
-
 function TableNode({ data: raw }: NodeProps) {
-  const data = raw as TableNodeData;
+  const data = raw as JoinFlowNodeData;
   return (
     <div className="table-node">
       <Handle type="target" position={Position.Left} className="table-handle" />
@@ -64,78 +53,46 @@ function TableNode({ data: raw }: NodeProps) {
 
 const nodeTypes = { tableNode: TableNode };
 
-function buildLayout(
-  tables: TableRef[],
-  joins: JoinEdge[],
-  resolveAliases: boolean,
-): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = tables.map((t, i) => {
-    const label = formatTableLabel(t, resolveAliases);
-    return {
-      id: t.id,
-      type: 'tableNode',
-      position: { x: i * 280, y: 80 + (i % 2) * 60 },
-      data: {
-        label: label.primary,
-        table: t.table,
-        schema: t.schema,
-        alias: t.alias,
-        aliasNote: label.aliasNote,
-        isDerived: t.isDerived,
-      },
-    };
-  });
-
-  const edges: Edge[] = joins.map((j) => {
-    const color = JOIN_COLORS[j.type] ?? '#64748b';
-    return {
-      id: j.id,
-      source: j.sourceId,
-      target: j.targetId,
-      label: j.type,
-      animated: j.type === 'INNER JOIN' || j.type === 'JOIN',
-      style: { stroke: color, strokeWidth: 2 },
-      labelStyle: { fill: color, fontWeight: 600, fontSize: 11 },
-      labelBgStyle: { fill: '#0f172a', fillOpacity: 0.85 },
-      labelBgPadding: [6, 4] as [number, number],
-      labelBgBorderRadius: 4,
-      markerEnd: { type: MarkerType.ArrowClosed, color },
-      data: { condition: j.condition },
-    };
-  });
-
-  return { nodes, edges };
+interface JoinDiagramFlowProps {
+  tables: TableRef[];
+  joins: JoinEdge[];
+  resolveAliases: boolean;
+  compact: boolean;
 }
 
-export function JoinDiagram({ tables, joins, resolveAliases, compact = false }: JoinDiagramProps) {
-  if (tables.length === 0) {
-    return (
-      <div className="empty-state">
-        <p>FROM句にテーブルが見つかりません</p>
-      </div>
-    );
-  }
-
-  const { nodes, edges } = buildLayout(tables, joins, resolveAliases);
+/** フックを使う内部コンポーネント — 条件分岐の後に置き、Rules of Hooks を守る */
+function JoinDiagramFlow({ tables, joins, resolveAliases, compact }: JoinDiagramFlowProps) {
+  const { flowNodes, flowEdges, onNodesChange, onEdgesChange } = useJoinFlowState(
+    tables,
+    joins,
+    resolveAliases,
+  );
 
   return (
     <div className={`join-diagram${compact ? ' join-diagram--compact' : ''}`}>
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={flowNodes}
+        edges={flowEdges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.3 }}
         minZoom={0.4}
         maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
       >
         <Background color="#334155" gap={20} />
         <Controls showInteractive={false} />
         <MiniMap
-          nodeColor="#1e293b"
-          maskColor="rgba(15, 23, 42, 0.75)"
-          style={{ background: '#0f172a' }}
+          nodeColor={minimapNodeColor}
+          nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
+          nodeBorderRadius={4}
+          maskColor="rgba(15, 23, 42, 0.55)"
+          style={{ background: '#1e293b' }}
         />
       </ReactFlow>
 
@@ -163,5 +120,24 @@ export function JoinDiagram({ tables, joins, resolveAliases, compact = false }: 
         </div>
       )}
     </div>
+  );
+}
+
+export function JoinDiagram({ tables, joins, resolveAliases, compact = false }: JoinDiagramProps) {
+  if (tables.length === 0) {
+    return (
+      <div className="empty-state">
+        <p>FROM句にテーブルが見つかりません</p>
+      </div>
+    );
+  }
+
+  return (
+    <JoinDiagramFlow
+      tables={tables}
+      joins={joins}
+      resolveAliases={resolveAliases}
+      compact={compact}
+    />
   );
 }

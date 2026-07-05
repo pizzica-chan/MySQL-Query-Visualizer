@@ -9,6 +9,7 @@ import {
 import { assertParseInvariants } from './fixtures/parse-invariants';
 import { SQL_TEST_CASES, collectConditionTypes, tableNames } from './fixtures/sql-cases';
 import type { ConditionNode } from './types';
+import { collectAllNestedQueries } from './query-utils';
 
 function flattenConditionLabels(node: ConditionNode | undefined): string[] {
   if (!node) return [];
@@ -36,12 +37,13 @@ describe('parseMySqlQuery', () => {
       if (!result.success) return;
 
       expect(result.query.statementType).toBe('SELECT');
-      expect(result.query.tables).toHaveLength(5);
-      expect(result.query.joins).toHaveLength(4);
+      expect(result.query.tables).toHaveLength(6);
+      expect(result.query.joins).toHaveLength(5);
+      expect(result.query.tables.some((t) => t.isDerived)).toBe(true);
       expect(result.query.where?.type).toBe('and');
       expect(result.query.having).toBeDefined();
       expect(result.query.limit).toBe('100');
-      expect(result.query.groupBy).toHaveLength(7);
+      expect(result.query.groupBy).toHaveLength(8);
       expect(result.query.orderBy).toHaveLength(2);
 
       const wTypes = collectConditionTypes(result.query.where);
@@ -49,7 +51,13 @@ describe('parseMySqlQuery', () => {
       expect(wTypes).toContain('like');
       expect(wTypes).toContain('in');
       expect(wTypes).toContain('between');
+      expect(wTypes).toContain('exists');
       expect(result.query.having?.label).toContain('SUM(oi.quantity)');
+
+      const nested = collectAllNestedQueries(result.query);
+      expect(nested.length).toBeGreaterThanOrEqual(4);
+      expect(nested.some((q) => q.tables.some((t) => t.table === 'payments'))).toBe(true);
+      expect(nested.some((q) => q.tables.some((t) => t.table === 'banned_users'))).toBe(true);
 
       expect(() => assertParseInvariants(result.query, 'SAMPLE_SQL')).not.toThrow();
     });

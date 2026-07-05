@@ -712,22 +712,37 @@ export const SAMPLE_SQL = `SELECT
   o.order_no,
   o.total_amount,
   p.product_name,
-  c.category_name
+  c.category_name,
+  hot.order_cnt
 FROM users u
 INNER JOIN orders o ON o.user_id = u.id
 LEFT JOIN order_items oi ON oi.order_id = o.id
 INNER JOIN products p ON p.id = oi.product_id
 LEFT JOIN categories c ON c.id = p.category_id
+INNER JOIN (
+  SELECT user_id, COUNT(*) AS order_cnt
+  FROM orders
+  GROUP BY user_id
+  HAVING COUNT(*) >= 2
+) hot ON hot.user_id = u.id
 WHERE u.status = 'active'
   AND o.created_at >= '2024-01-01'
   AND (
     o.total_amount > 1000
     OR u.email LIKE '%@example.com'
   )
-  AND p.category_id IN (1, 2, 3)
+  AND p.category_id IN (SELECT id FROM categories WHERE active = 1)
   AND oi.quantity BETWEEN 1 AND 10
-GROUP BY u.id, u.name, u.email, o.order_no, o.total_amount, p.product_name, c.category_name
-HAVING SUM(oi.quantity) > 5
+  AND EXISTS (
+    SELECT 1 FROM payments pay WHERE pay.order_id = o.id AND pay.status = 'paid'
+  )
+  AND u.id NOT IN (SELECT user_id FROM banned_users)
+GROUP BY u.id, u.name, u.email, o.order_no, o.total_amount, p.product_name, c.category_name, hot.order_cnt
+HAVING SUM(oi.quantity) > (
+  SELECT AVG(item_cnt) FROM (
+    SELECT COUNT(*) AS item_cnt FROM order_items GROUP BY order_id
+  ) avg_items
+)
 ORDER BY o.created_at DESC, o.total_amount DESC
 LIMIT 100;`;
 
