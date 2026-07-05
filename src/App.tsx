@@ -85,10 +85,7 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="app-header-inner">
-          <h1 className="app-title">
-            <span className="app-badge">SQL</span>
-            MySQL Query Visualizer
-          </h1>
+          <h1 className="app-title">MySQL Query Visualizer</h1>
         </div>
       </header>
 
