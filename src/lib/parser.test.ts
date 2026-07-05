@@ -192,6 +192,14 @@ describe('parseMySqlQuery', () => {
       expect(result.query.limit).toBe('50');
       expect(result.query.offset).toBe('10');
     });
+
+    it('LIMIT offset, count 形式は MySQL 順（先が offset）で分解する', () => {
+      const result = parseMySqlQuery('SELECT id FROM t LIMIT 100, 120');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.query.offset).toBe('100');
+      expect(result.query.limit).toBe('120');
+    });
   });
 
   describe('WHERE条件ツリー', () => {

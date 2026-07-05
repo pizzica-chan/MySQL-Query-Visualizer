@@ -191,6 +191,15 @@ describe('query-effect', () => {
       expect(post?.lines?.some((l) => l.includes('先頭スキップ'))).toBe(true);
     });
 
+    it('LIMIT offset, count 形式を MySQL 順で要約する', () => {
+      const result = parseMySqlQuery('SELECT id FROM t LIMIT 100, 120');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const effect = buildQueryEffect(result.query);
+      expect(effect.summary).toContain('100 行スキップ後最大 120 行');
+    });
+
     it('GROUP BY なしの集約関数は全体集約として説明する', () => {
       const result = parseMySqlQuery('SELECT COUNT(*) AS cnt FROM users');
       expect(result.success).toBe(true);

@@ -3,7 +3,6 @@ import { Parser } from 'node-sql-parser';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import {
   columnEntrySourceSpan,
-  limitOffsetSourceSpans,
   orderByEntrySourceSpan,
   toSourceSpan,
 } from './source-span';
@@ -726,6 +725,47 @@ function limitOffsetValue(entry: any): string | undefined {
   return undefined;
 }
 
+/** MySQL の LIMIT 句を limit / offset に分解（カンマ形式は offset, count） */
+function parseLimitClause(limitAst: any): {
+  limit?: string;
+  offset?: string;
+  limitSpan?: SourceSpan;
+  offsetSpan?: SourceSpan;
+} {
+  if (!limitAst) return {};
+
+  if (!limitAst.value?.length) {
+    const limitSpan = toSourceSpan(limitAst.loc);
+    return { limit: exprToString(limitAst), limitSpan };
+  }
+
+  const first = limitOffsetValue(limitAst.value[0]);
+  const second = limitAst.value[1] ? limitOffsetValue(limitAst.value[1]) : undefined;
+  const firstSpan = toSourceSpan(limitAst.value[0]?.loc);
+  const secondSpan = limitAst.value[1] ? toSourceSpan(limitAst.value[1]?.loc) : undefined;
+  const separator = String(limitAst.seperator ?? limitAst.separator ?? '').toLowerCase();
+
+  if (second === undefined) {
+    return { limit: first, limitSpan: firstSpan ?? toSourceSpan(limitAst.loc) };
+  }
+
+  if (separator === ',') {
+    return {
+      limit: second,
+      offset: first,
+      limitSpan: secondSpan,
+      offsetSpan: firstSpan,
+    };
+  }
+
+  return {
+    limit: first,
+    offset: second,
+    limitSpan: firstSpan,
+    offsetSpan: secondSpan,
+  };
+}
+
 function parseLimitOffset(ast: any): {
   limit?: string;
   offset?: string;
@@ -733,16 +773,7 @@ function parseLimitOffset(ast: any): {
   offsetSpan?: SourceSpan;
 } {
   if (!ast.limit) return {};
-
-  const spanInfo = limitOffsetSourceSpans(ast);
-
-  if (ast.limit.value?.length) {
-    const limit = limitOffsetValue(ast.limit.value[0]);
-    const offset = limitOffsetValue(ast.limit.value[1]);
-    return { limit, offset, ...spanInfo };
-  }
-
-  return { limit: exprToString(ast.limit), ...spanInfo };
+  return parseLimitClause(ast.limit);
 }
 
 function parseLimitAndOrder(ast: any): {
