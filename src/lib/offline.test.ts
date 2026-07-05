@@ -58,22 +58,29 @@ describe('オフライン実行（外部通信なし）', () => {
       expect(violations, formatViolations(violations ?? [])).toEqual([]);
     });
 
-    it('dist/index.html は file:// 直開き向けの単一 HTML になっている', () => {
+    it('dist/index.html は file:// 直開き向けに classic script で assets を参照する', () => {
       const distDir = resolve(PROJECT_ROOT, 'dist');
       const htmlPath = resolve(distDir, 'index.html');
       if (!existsSync(htmlPath)) return;
 
-      expect(readdirSync(distDir)).toEqual(['index.html']);
+      const entries = readdirSync(distDir).sort();
+      expect(entries).toContain('index.html');
+      expect(entries).toContain('assets');
 
       const html = readFileSync(htmlPath, 'utf8');
-      expect(html).not.toMatch(/<script[^>]+type="module"[^>]+src=/i);
-      expect(html).not.toMatch(/<script[^>]+src=["']\.\/assets\//i);
-      expect(html).toMatch(/<script>var /);
+      expect(html).not.toMatch(/<script[^>]+type="module"/i);
+      expect(html).toMatch(/<script defer src="\.\/assets\/app\.js"><\/script>/);
 
       const rootIdx = html.indexOf('id="root"');
-      const scriptIdx = html.indexOf('<script');
+      const scriptIdx = html.indexOf('<script defer src="./assets/app.js">');
       expect(rootIdx).toBeGreaterThan(-1);
       expect(scriptIdx).toBeGreaterThan(rootIdx);
+
+      const jsPath = resolve(distDir, 'assets/app.js');
+      expect(existsSync(jsPath)).toBe(true);
+      const js = readFileSync(jsPath, 'utf8');
+      expect(() => new Function(js)).not.toThrow();
+      expect(js).not.toMatch(/<\/style>\s*<\/head>/);
     });
   });
 

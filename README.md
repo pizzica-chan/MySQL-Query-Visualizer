@@ -27,10 +27,10 @@ npm run preview
 
 ## オフライン配布
 
-`npm run build` の成果物は **`dist/index.html` 1 ファイル** にまとまります（JS/CSS インライン）。  
-リポジトリにも同梱しているため、ビルド環境がなくても **`dist/index.html` をブラウザで直接開けば** オフラインで利用できます。
+`npm run build` の成果物は **`dist/`** に出力されます（`index.html` + `assets/app.js` + `assets/app.css`）。  
+**classic script（非 module）** のため、`dist/index.html` をブラウザで直接開いてもオフラインで利用できます。
 
-> 以前の分割バンドル（`dist/assets/*.js`）は ES module の制約により `file://` では動作しませんでした。現在は IIFE 単一 HTML ビルドに変更しています。
+> ES module の外部読み込みは `file://` ではブラウザにブロックされます。本プロジェクトは IIFE + `defer` で回避しています。
 
 開発時の確認は `npm run preview` でも可能です。
 
