@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import type { ParsedQuery, UnionBranch } from '../lib/types';
+import type { ParsedQuery, SourceSpan, UnionBranch } from '../lib/types';
+import type { OnSourceSpanSelect } from '../lib/source-link';
 import { JoinDiagram } from './JoinDiagram';
 import { QuerySummary } from './QuerySummary';
 import { SubqueryDetail } from './SubqueryDetail';
@@ -8,6 +9,8 @@ import { WhereTree } from './WhereTree';
 interface UnionPanelProps {
   branches: UnionBranch[];
   resolveAliases: boolean;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
 }
 
 interface NestedPanelProps {
@@ -63,23 +66,46 @@ function BranchSectionTitle({ index }: { index: number }) {
 function BranchWherePanel({
   query,
   resolveAliases,
+  activeSourceSpan,
+  onSourceSpanSelect,
 }: {
   query: ParsedQuery;
   resolveAliases: boolean;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
 }) {
   return (
     <div className="where-panel">
-      <WhereTree root={query.where} title="WHERE" nested resolveAliases={resolveAliases} />
+      <WhereTree
+        root={query.where}
+        title="WHERE"
+        nested
+        resolveAliases={resolveAliases}
+        activeSourceSpan={activeSourceSpan}
+        onSourceSpanSelect={onSourceSpanSelect}
+      />
       {query.having && (
         <div className="having-section">
-          <WhereTree root={query.having} title="HAVING" nested resolveAliases={resolveAliases} />
+          <WhereTree
+            root={query.having}
+            title="HAVING"
+            nested
+            resolveAliases={resolveAliases}
+            activeSourceSpan={activeSourceSpan}
+            onSourceSpanSelect={onSourceSpanSelect}
+          />
         </div>
       )}
     </div>
   );
 }
 
-export function UnionJoinPanel({ branches, resolveAliases }: UnionPanelProps) {
+export function UnionJoinPanel({
+  branches,
+  resolveAliases,
+  activeSourceSpan,
+  onSourceSpanSelect,
+}: UnionPanelProps) {
   return (
     <UnionBranchShell
       branches={branches}
@@ -91,6 +117,8 @@ export function UnionJoinPanel({ branches, resolveAliases }: UnionPanelProps) {
           joins={branch.query.joins}
           resolveAliases={resolveAliases}
           query={branch.query}
+          activeSourceSpan={activeSourceSpan}
+          onSourceSpanSelect={onSourceSpanSelect}
         />
       )}
       renderBranch={(branch, index) => (
@@ -101,6 +129,8 @@ export function UnionJoinPanel({ branches, resolveAliases }: UnionPanelProps) {
             joins={branch.query.joins}
             resolveAliases={resolveAliases}
             query={branch.query}
+            activeSourceSpan={activeSourceSpan}
+            onSourceSpanSelect={onSourceSpanSelect}
           />
         </div>
       )}
@@ -108,38 +138,68 @@ export function UnionJoinPanel({ branches, resolveAliases }: UnionPanelProps) {
   );
 }
 
-export function UnionWherePanel({ branches, resolveAliases }: UnionPanelProps) {
+export function UnionWherePanel({
+  branches,
+  resolveAliases,
+  activeSourceSpan,
+  onSourceSpanSelect,
+}: UnionPanelProps) {
   return (
     <UnionBranchShell
       branches={branches}
       title="UNION 全ブランチ"
       description="各 SELECT の WHERE / HAVING を個別に表示しています"
       singleBranch={(branch) => (
-        <BranchWherePanel query={branch.query} resolveAliases={resolveAliases} />
+        <BranchWherePanel
+          query={branch.query}
+          resolveAliases={resolveAliases}
+          activeSourceSpan={activeSourceSpan}
+          onSourceSpanSelect={onSourceSpanSelect}
+        />
       )}
       renderBranch={(branch, index) => (
         <div className="union-branch-section">
           <BranchSectionTitle index={index} />
-          <BranchWherePanel query={branch.query} resolveAliases={resolveAliases} />
+          <BranchWherePanel
+            query={branch.query}
+            resolveAliases={resolveAliases}
+            activeSourceSpan={activeSourceSpan}
+            onSourceSpanSelect={onSourceSpanSelect}
+          />
         </div>
       )}
     />
   );
 }
 
-export function UnionSummaryPanel({ branches, resolveAliases }: UnionPanelProps) {
+export function UnionSummaryPanel({
+  branches,
+  resolveAliases,
+  activeSourceSpan,
+  onSourceSpanSelect,
+}: UnionPanelProps) {
   return (
     <UnionBranchShell
       branches={branches}
       title="UNION 全ブランチ"
       description="各 SELECT の概要を個別に表示しています"
       singleBranch={(branch) => (
-        <QuerySummary query={branch.query} resolveAliases={resolveAliases} />
+        <QuerySummary
+          query={branch.query}
+          resolveAliases={resolveAliases}
+          activeSourceSpan={activeSourceSpan}
+          onSourceSpanSelect={onSourceSpanSelect}
+        />
       )}
       renderBranch={(branch, index) => (
         <div className="union-branch-section">
           <BranchSectionTitle index={index} />
-          <QuerySummary query={branch.query} resolveAliases={resolveAliases} />
+          <QuerySummary
+            query={branch.query}
+            resolveAliases={resolveAliases}
+            activeSourceSpan={activeSourceSpan}
+            onSourceSpanSelect={onSourceSpanSelect}
+          />
         </div>
       )}
     />

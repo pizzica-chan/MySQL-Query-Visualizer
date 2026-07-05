@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   Background,
   Controls,
@@ -9,6 +10,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
 import { JoinFlowEdge } from './JoinFlowEdge';
+import { SourceLinkContext, useSourceLink } from '../contexts/source-link-context';
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
 import { effectiveInnerAnalysisByJoinId } from '../lib/join-effective-inner';
 import {
@@ -17,23 +19,30 @@ import {
   minimapNodeColor,
   type JoinFlowNodeData,
 } from '../lib/join-flow-layout';
-import type { JoinEdge, ParsedQuery, TableRef } from '../lib/types';
+import { sourceSelectableProps, type OnSourceSpanSelect } from '../lib/source-link';
+import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from '../lib/types';
 
 interface JoinDiagramProps {
   tables: TableRef[];
   joins: JoinEdge[];
   resolveAliases: boolean;
   compact?: boolean;
-  /** WHERE / HAVING を含む解析用。指定時のみ「実質 INNER JOIN」を図示 */
   query?: ParsedQuery;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
 }
 
 const JOIN_COLORS = JOIN_EDGE_COLORS;
 
 function TableNode({ data: raw }: NodeProps) {
   const data = raw as JoinFlowNodeData;
+  const { activeSourceSpan, onSourceSpanSelect } = useSourceLink();
+  const selectable = onSourceSpanSelect
+    ? sourceSelectableProps(data.sourceSpan, activeSourceSpan, onSourceSpanSelect, 'table-node')
+    : { className: 'table-node' };
+
   return (
-    <div className="table-node">
+    <div {...selectable}>
       <Handle type="target" position={Position.Left} className="table-handle" />
       <div className="table-node-header">{data.isDerived ? 'DERIVED' : 'TABLE'}</div>
       <div className="table-node-name">{data.table}</div>
@@ -62,10 +71,19 @@ interface JoinDiagramFlowProps {
   resolveAliases: boolean;
   compact: boolean;
   query?: ParsedQuery;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
 }
 
-/** フックを使う内部コンポーネント — 条件分岐の後に置き、Rules of Hooks を守る */
-function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: JoinDiagramFlowProps) {
+function JoinDiagramFlow({
+  tables,
+  joins,
+  resolveAliases,
+  compact,
+  query,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
+}: JoinDiagramFlowProps) {
   const effectiveInnerByJoin = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
   const hasEffectiveInner = effectiveInnerByJoin.size > 0;
 
@@ -79,46 +97,51 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: Join
 
   return (
     <div className={`join-diagram${compact ? ' join-diagram--compact' : ''}`}>
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.3 }}
-        minZoom={0.4}
-        maxZoom={1.5}
-        proOptions={{ hideAttribution: true }}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
+      <SourceLinkContextProvider
+        activeSourceSpan={activeSourceSpan}
+        onSourceSpanSelect={onSourceSpanSelect}
       >
-        <Background color="#3a4049" gap={20} />
-        <Controls showInteractive={false} />
-        {compact ? (
-          <MiniMap
-            nodeColor={minimapNodeColor}
-            nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
-            nodeBorderRadius={2}
-            maskColor="rgba(26, 29, 35, 0.65)"
-            style={{ background: '#282c34', width: 72, height: 48 }}
-            className="join-minimap join-minimap--compact"
-            zoomable={false}
-            pannable={false}
-          />
-        ) : (
-          <MiniMap
-            nodeColor={minimapNodeColor}
-            nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
-            nodeBorderRadius={2}
-            maskColor="rgba(26, 29, 35, 0.65)"
-            style={{ background: '#282c34' }}
-            className="join-minimap"
-          />
-        )}
-      </ReactFlow>
+        <ReactFlow
+          nodes={flowNodes}
+          edges={flowEdges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.3 }}
+          minZoom={0.4}
+          maxZoom={1.5}
+          proOptions={{ hideAttribution: true }}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+        >
+          <Background color="#3a4049" gap={20} />
+          <Controls showInteractive={false} />
+          {compact ? (
+            <MiniMap
+              nodeColor={minimapNodeColor}
+              nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
+              nodeBorderRadius={2}
+              maskColor="rgba(26, 29, 35, 0.65)"
+              style={{ background: '#282c34', width: 72, height: 48 }}
+              className="join-minimap join-minimap--compact"
+              zoomable={false}
+              pannable={false}
+            />
+          ) : (
+            <MiniMap
+              nodeColor={minimapNodeColor}
+              nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
+              nodeBorderRadius={2}
+              maskColor="rgba(26, 29, 35, 0.65)"
+              style={{ background: '#282c34' }}
+              className="join-minimap"
+            />
+          )}
+        </ReactFlow>
+      </SourceLinkContextProvider>
 
       {hasEffectiveInner && !compact && (
         <div className="join-diagram-legend" aria-label="JOIN 図の凡例">
@@ -138,6 +161,14 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: Join
               const edgeColor = effectiveInner
                 ? JOIN_COLORS['INNER JOIN']
                 : JOIN_COLORS[j.type];
+              const conditionProps = onSourceSpanSelect
+                ? sourceSelectableProps(
+                    j.sourceSpan,
+                    activeSourceSpan,
+                    onSourceSpanSelect,
+                    'join-condition',
+                  )
+                : { className: 'join-condition' };
               return (
                 <li key={j.id}>
                   <span
@@ -154,7 +185,7 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: Join
                     {' → '}
                     {tables.find((t) => t.id === j.targetId)?.displayName}
                   </span>
-                  <code className="join-condition">{j.condition}</code>
+                  <code {...conditionProps}>{j.condition}</code>
                 </li>
               );
             })}
@@ -165,7 +196,31 @@ function JoinDiagramFlow({ tables, joins, resolveAliases, compact, query }: Join
   );
 }
 
-export function JoinDiagram({ tables, joins, resolveAliases, compact = false, query }: JoinDiagramProps) {
+function SourceLinkContextProvider({
+  activeSourceSpan,
+  onSourceSpanSelect,
+  children,
+}: {
+  activeSourceSpan: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
+  children: ReactNode;
+}) {
+  return (
+    <SourceLinkContext.Provider value={{ activeSourceSpan, onSourceSpanSelect }}>
+      {children}
+    </SourceLinkContext.Provider>
+  );
+}
+
+export function JoinDiagram({
+  tables,
+  joins,
+  resolveAliases,
+  compact = false,
+  query,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
+}: JoinDiagramProps) {
   if (tables.length === 0) {
     return (
       <div className="empty-state">
@@ -181,6 +236,8 @@ export function JoinDiagram({ tables, joins, resolveAliases, compact = false, qu
       resolveAliases={resolveAliases}
       compact={compact}
       query={query}
+      activeSourceSpan={activeSourceSpan}
+      onSourceSpanSelect={onSourceSpanSelect}
     />
   );
 }

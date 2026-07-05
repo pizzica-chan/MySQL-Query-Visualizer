@@ -248,6 +248,58 @@ body {
   color: #e8b4b4;
 }
 
+.sql-hl--focus {
+  background: rgba(107, 159, 212, 0.32);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(107, 159, 212, 0.55);
+}
+
+.source-selectable {
+  cursor: pointer;
+  transition: outline-color 0.15s ease, background-color 0.15s ease;
+}
+
+.source-selectable:hover {
+  outline: 1px dashed rgba(107, 159, 212, 0.75);
+  outline-offset: 2px;
+}
+
+.source-selectable--active {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.summary-dd-link.source-selectable {
+  display: inline-block;
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+}
+
+.column-list-item.source-selectable,
+.table-card.source-selectable {
+  border-radius: var(--radius-sm);
+}
+
+.table-node.source-selectable {
+  cursor: pointer;
+}
+
+.table-node.source-selectable:hover {
+  border-color: var(--accent);
+}
+
+.join-condition.source-selectable {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+}
+
+.condition-leaf.source-selectable:hover,
+.condition-group.source-selectable:hover {
+  background: rgba(107, 159, 212, 0.08);
+  border-radius: var(--radius-sm);
+}
+
 .sql-textarea {
   flex: 1;
   width: 100%;

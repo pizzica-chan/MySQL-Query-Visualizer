@@ -1,3 +1,13 @@
+export interface SourceSpan {
+  start: number;
+  end: number;
+}
+
+export interface SqlFragment {
+  text: string;
+  sourceSpan?: SourceSpan;
+}
+
 export type JoinType =
   | 'INNER JOIN'
   | 'LEFT JOIN'
@@ -15,6 +25,8 @@ export interface TableRef {
   /** FROM句の派生テーブル `(SELECT ...) AS t` */
   isDerived?: boolean;
   derivedQuery?: ParsedQuery;
+  /** 元 SQL 内のテーブル参照位置 */
+  sourceSpan?: SourceSpan;
 }
 
 export interface UnionBranch {
@@ -31,6 +43,8 @@ export interface JoinEdge {
   targetId: string;
   condition: string;
   conditionParts?: { left: string; operator: string; right: string };
+  /** ON 条件の位置 */
+  sourceSpan?: SourceSpan;
 }
 
 export type ConditionNodeType =
@@ -56,6 +70,8 @@ export interface ConditionNode {
   right?: string;
   children?: ConditionNode[];
   highlight?: boolean;
+  /** 元 SQL 内の条件式位置 */
+  sourceSpan?: SourceSpan;
   /** IN / EXISTS / 比較式内のサブクエリ */
   nestedQuery?: ParsedQuery;
 }
@@ -63,6 +79,7 @@ export interface ConditionNode {
 export interface SelectColumn {
   expression: string;
   alias?: string;
+  sourceSpan?: SourceSpan;
 }
 
 export interface SetClause {
@@ -87,10 +104,12 @@ export interface ParsedQuery {
   columns: SelectColumn[];
   setClauses?: SetClause[];
   deleteTargets?: DeleteTarget[];
-  groupBy: string[];
-  orderBy: string[];
+  groupBy: SqlFragment[];
+  orderBy: SqlFragment[];
   limit?: string;
+  limitSpan?: SourceSpan;
   offset?: string;
+  offsetSpan?: SourceSpan;
   distinct: boolean;
   /** UNION / UNION ALL 等の各ブランチ（2本以上のとき） */
   unionBranches?: UnionBranch[];

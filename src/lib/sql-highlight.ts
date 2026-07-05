@@ -1,3 +1,5 @@
+import type { SourceSpan } from './types';
+
 export type SqlHighlightKind =
   | 'keyword'
   | 'string'
@@ -238,12 +240,51 @@ export function tokenizeSql(sql: string): SqlHighlightToken[] {
   return tokens;
 }
 
-export function highlightSqlToHtml(sql: string): string {
+function wrapHighlightSegment(kind: SqlHighlightKind, text: string, focused: boolean): string {
+  const escaped = escapeHtml(text);
+  if (!focused && kind === 'plain') return escaped;
+  const classes: string[] = [];
+  if (kind !== 'plain') classes.push(`sql-hl--${kind}`);
+  if (focused) classes.push('sql-hl--focus');
+  return `<span class="${classes.join(' ')}">${escaped}</span>`;
+}
+
+function renderTokenHighlight(
+  kind: SqlHighlightKind,
+  text: string,
+  tokenStart: number,
+  focusSpan?: SourceSpan,
+): string {
+  if (!focusSpan) {
+    return wrapHighlightSegment(kind, text, false);
+  }
+
+  const tokenEnd = tokenStart + text.length;
+  if (tokenEnd <= focusSpan.start || tokenStart >= focusSpan.end) {
+    return wrapHighlightSegment(kind, text, false);
+  }
+
+  const focusStart = Math.max(focusSpan.start, tokenStart) - tokenStart;
+  const focusEnd = Math.min(focusSpan.end, tokenEnd) - tokenStart;
+
+  const before = text.slice(0, focusStart);
+  const focused = text.slice(focusStart, focusEnd);
+  const after = text.slice(focusEnd);
+
+  return [
+    wrapHighlightSegment(kind, before, false),
+    wrapHighlightSegment(kind, focused, true),
+    wrapHighlightSegment(kind, after, false),
+  ].join('');
+}
+
+export function highlightSqlToHtml(sql: string, focusSpan?: SourceSpan): string {
+  let pos = 0;
   return tokenizeSql(sql)
     .map(({ kind, text }) => {
-      const escaped = escapeHtml(text);
-      if (kind === 'plain') return escaped;
-      return `<span class="sql-hl--${kind}">${escaped}</span>`;
+      const start = pos;
+      pos += text.length;
+      return renderTokenHighlight(kind, text, start, focusSpan);
     })
     .join('');
 }

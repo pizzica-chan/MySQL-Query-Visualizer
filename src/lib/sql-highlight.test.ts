@@ -34,6 +34,27 @@ describe('sql-highlight', () => {
     expect(html).not.toContain('<script>');
   });
 
+  it('focusSpan で該当範囲に focus クラスを付ける', () => {
+    const sql = 'SELECT id FROM users';
+    const html = highlightSqlToHtml(sql, { start: 7, end: 9 });
+    expect(html).toContain('sql-hl--focus">id</span>');
+    expect(html).not.toContain('sql-hl--focus">SELECT');
+  });
+
+  it('focusSpan は plain トークン結合時も列単位で部分ハイライトする', () => {
+    const sql = 'SELECT\n  u.id,\n  u.name,\n  u.email\nFROM users u';
+    const nameStart = sql.indexOf('u.name');
+    const nameEnd = nameStart + 'u.name'.length;
+    const idHtml = highlightSqlToHtml(sql, { start: sql.indexOf('u.id'), end: sql.indexOf('u.id') + 'u.id'.length });
+    const nameHtml = highlightSqlToHtml(sql, { start: nameStart, end: nameEnd });
+
+    expect(idHtml.match(/sql-hl--focus/g)).toHaveLength(1);
+    expect(idHtml).toContain('sql-hl--focus">u.id</span>');
+    expect(idHtml).not.toMatch(/sql-hl--focus">[^<]*u\.name/);
+    expect(nameHtml).toMatch(/sql-hl--focus">u\.name</);
+    expect(nameHtml).not.toMatch(/sql-hl--focus">[^<]*u\.email/);
+  });
+
   it('原文を欠落なく復元できる', () => {
     const sql = "SELECT * FROM t WHERE x >= 1 AND name = 'a''b' -- end";
     const restored = tokenizeSql(sql).map((t) => t.text).join('');

@@ -1,4 +1,5 @@
-import type { ConditionNode } from '../lib/types';
+import type { ConditionNode, SourceSpan } from '../lib/types';
+import { sourceSelectableProps, type OnSourceSpanSelect } from '../lib/source-link';
 import { SubqueryDetail } from './SubqueryDetail';
 
 interface WhereTreeProps {
@@ -6,6 +7,8 @@ interface WhereTreeProps {
   title?: string;
   nested?: boolean;
   resolveAliases?: boolean;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -42,17 +45,29 @@ function ConditionCard({
   node,
   depth = 0,
   resolveAliases = false,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
 }: {
   node: ConditionNode;
   depth?: number;
   resolveAliases?: boolean;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
 }) {
   const isGroup = node.type === 'and' || node.type === 'or' || node.type === 'not';
   const hasChildren = node.children && node.children.length > 0;
 
   if (isGroup && hasChildren) {
+    const groupClass = `condition-group condition-group--${node.type}`;
+    const groupProps = onSourceSpanSelect
+      ? sourceSelectableProps(node.sourceSpan, activeSourceSpan, onSourceSpanSelect, groupClass)
+      : { className: groupClass };
+
     return (
-      <div className={`condition-group condition-group--${node.type}`} style={{ marginLeft: depth * 12 }}>
+      <div
+        {...groupProps}
+        style={{ marginLeft: depth * 12 }}
+      >
         <div className="condition-group-header">
           <span className="condition-icon">{TYPE_ICONS[node.type]}</span>
           <span className="condition-type-label">{TYPE_LABELS[node.type]}</span>
@@ -65,7 +80,13 @@ function ConditionCard({
                   {node.type.toUpperCase()}
                 </div>
               )}
-              <ConditionCard node={child} depth={depth + 1} resolveAliases={resolveAliases} />
+              <ConditionCard
+                node={child}
+                depth={depth + 1}
+                resolveAliases={resolveAliases}
+                activeSourceSpan={activeSourceSpan}
+                onSourceSpanSelect={onSourceSpanSelect}
+              />
             </div>
           ))}
         </div>
@@ -73,9 +94,14 @@ function ConditionCard({
     );
   }
 
+  const leafClass = `condition-leaf condition-leaf--${node.type}`;
+  const leafProps = onSourceSpanSelect
+    ? sourceSelectableProps(node.sourceSpan, activeSourceSpan, onSourceSpanSelect, leafClass)
+    : { className: leafClass };
+
   return (
     <div
-      className={`condition-leaf condition-leaf--${node.type}`}
+      {...leafProps}
       style={{ marginLeft: depth * 12 }}
     >
       <span className="condition-icon">{TYPE_ICONS[node.type] ?? '•'}</span>
@@ -109,6 +135,8 @@ export function WhereTree({
   title = 'WHERE',
   nested = false,
   resolveAliases = false,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
 }: WhereTreeProps) {
   if (!root) {
     return (
@@ -133,7 +161,12 @@ export function WhereTree({
           <h4>{title}</h4>
         </div>
       )}
-      <ConditionCard node={root} resolveAliases={resolveAliases} />
+      <ConditionCard
+        node={root}
+        resolveAliases={resolveAliases}
+        activeSourceSpan={activeSourceSpan}
+        onSourceSpanSelect={onSourceSpanSelect}
+      />
     </div>
   );
 }

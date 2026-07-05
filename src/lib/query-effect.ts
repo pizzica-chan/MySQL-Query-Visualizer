@@ -94,7 +94,7 @@ function describeAggregateColumns(query: ParsedQuery): string[] {
   const lines: string[] = [];
 
   if (query.groupBy.length > 0) {
-    lines.push(`${query.groupBy.join(', ')} ごとに集約 — 1グループ = 結果の1行`);
+    lines.push(`${query.groupBy.map((g) => g.text).join(', ')} ごとに集約 — 1グループ = 結果の1行`);
   } else if (aggregateCols.length > 0) {
     lines.push('集約関数のみ — 全体を1グループとして計算（結果は最大1行）');
   }
@@ -346,7 +346,7 @@ function describePostProcess(query: ParsedQuery): QueryEffectSection | null {
   const distinctLine = describeDistinctLine(query);
   if (distinctLine) lines.push(distinctLine);
   if (query.orderBy.length > 0) {
-    lines.push(`並び順 — ${query.orderBy.join(', ')}`);
+    lines.push(`並び順 — ${query.orderBy.map((o) => o.text).join(', ')}`);
   }
   lines.push(...describeLimitOffsetLines(query));
   return lines.length > 0 ? { kind: 'info', title: '後処理', lines } : null;

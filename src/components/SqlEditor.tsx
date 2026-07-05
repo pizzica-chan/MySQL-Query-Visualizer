@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { highlightSqlToHtml } from '../lib/sql-highlight';
+import type { SourceSpan } from '../lib/types';
 
 interface SqlEditorProps {
   value: string;
@@ -9,6 +10,7 @@ interface SqlEditorProps {
   onLoadDeleteSample: () => void;
   onLoadUnionSample: () => void;
   error?: string;
+  focusSpan?: SourceSpan | null;
 }
 
 export function SqlEditor({
@@ -19,13 +21,15 @@ export function SqlEditor({
   onLoadDeleteSample,
   onLoadUnionSample,
   error,
+  focusSpan = null,
 }: SqlEditorProps) {
   const highlightRef = useRef<HTMLPreElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const highlightedHtml = useMemo(() => {
-    const html = highlightSqlToHtml(value);
+    const html = highlightSqlToHtml(value, focusSpan ?? undefined);
     return value.endsWith('\n') ? `${html} ` : html;
-  }, [value]);
+  }, [value, focusSpan]);
 
   const syncScroll = useCallback((target: HTMLTextAreaElement) => {
     const layer = highlightRef.current;
@@ -33,6 +37,17 @@ export function SqlEditor({
     layer.scrollTop = target.scrollTop;
     layer.scrollLeft = target.scrollLeft;
   }, []);
+
+  useEffect(() => {
+    if (!focusSpan || !textareaRef.current) return;
+    const textarea = textareaRef.current;
+    const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 22;
+    const textBefore = value.slice(0, focusSpan.start);
+    const line = textBefore.split('\n').length - 1;
+    const targetTop = Math.max(0, line * lineHeight - textarea.clientHeight * 0.35);
+    textarea.scrollTop = targetTop;
+    syncScroll(textarea);
+  }, [focusSpan, value, syncScroll]);
 
   return (
     <div className="sql-editor">
@@ -58,6 +73,7 @@ export function SqlEditor({
           <code dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
         </pre>
         <textarea
+          ref={textareaRef}
           className="sql-textarea sql-textarea--highlight"
           value={value}
           onChange={(e) => onChange(e.target.value)}

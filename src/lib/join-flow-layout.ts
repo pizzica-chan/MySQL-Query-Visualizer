@@ -1,7 +1,7 @@
 import type { Edge, Node } from '@xyflow/react';
 import { MarkerType } from '@xyflow/react';
 import { effectiveInnerAnalysisByJoinId } from './join-effective-inner';
-import type { JoinEdge, ParsedQuery, TableRef } from './types';
+import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
 
 /** React Flow ミニマップ用 — 背景と区別できる控えめな色 */
@@ -83,6 +83,7 @@ export interface JoinFlowNodeData extends Record<string, unknown> {
   alias?: string;
   aliasNote?: string;
   isDerived?: boolean;
+  sourceSpan?: SourceSpan;
 }
 
 /** JOIN 図のレイアウト変更検知用 — useEffect の依存はこれだけに限定する */
@@ -131,6 +132,7 @@ export function buildJoinFlowLayout(
         alias: t.alias,
         aliasNote: label.aliasNote,
         isDerived: t.isDerived,
+        sourceSpan: t.sourceSpan,
       },
     };
   });

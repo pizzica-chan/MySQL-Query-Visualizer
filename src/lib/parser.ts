@@ -1,6 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Parser } from 'node-sql-parser';
 import { normalizeConditionTree } from './condition-tree-normalize';
+import {
+  columnEntrySourceSpan,
+  limitOffsetSourceSpans,
+  orderByEntrySourceSpan,
+  toSourceSpan,
+} from './source-span';
 import type {
   ConditionNode,
   JoinEdge,
@@ -10,6 +16,8 @@ import type {
   SelectColumn,
   SetClause,
   DeleteTarget,
+  SqlFragment,
+  SourceSpan,
   TableRef,
 } from './types';
 
@@ -181,6 +189,25 @@ function collectUnionBranches(root: any): Array<{ ast: any; unionOp?: string }> 
   return branches;
 }
 
+function withConditionSpan(node: ConditionNode, astNode: any): ConditionNode {
+  const sourceSpan = toSourceSpan(astNode?.loc);
+  return sourceSpan ? { ...node, sourceSpan } : node;
+}
+
+function extendColumnSpanWithAlias(
+  sql: string | undefined,
+  col: any,
+  span: SourceSpan | undefined,
+): SourceSpan | undefined {
+  if (!span || !sql || !col?.as) return span;
+  const aliasNeedle = ` AS ${col.as}`;
+  const idx = sql.indexOf(aliasNeedle, Math.max(0, span.end - 1));
+  if (idx >= 0 && idx <= span.end + 5) {
+    return { start: span.start, end: idx + aliasNeedle.length };
+  }
+  return span;
+}
+
 function normalizeJoinType(join: string | undefined): JoinType {
   if (!join) return 'INNER JOIN';
   const upper = join.toUpperCase().replace(/\s+/g, ' ').trim();
@@ -195,28 +222,34 @@ function normalizeJoinType(join: string | undefined): JoinType {
 function parseComparison(node: any): ConditionNode {
   const left = exprToString(node.left);
   const right = exprToString(node.right);
-  return {
-    id: nextId('cond'),
-    type: 'comparison',
-    label: `${left} ${node.operator} ${right}`,
-    operator: node.operator,
-    left,
-    right,
-  };
+  return withConditionSpan(
+    {
+      id: nextId('cond'),
+      type: 'comparison',
+      label: `${left} ${node.operator} ${right}`,
+      operator: node.operator,
+      left,
+      right,
+    },
+    node,
+  );
 }
 
 function parseComparisonWithSubquery(node: any): ConditionNode {
   const left = exprToString(node.left);
   const subAst = extractSubquerySelectAst(node.right);
   if (subAst) {
-    return {
-      id: nextId('cond'),
-      type: 'subquery',
-      label: `${left} ${node.operator} ${summarizeSelect(subAst)}`,
-      operator: node.operator,
-      left,
-      nestedQuery: buildSelectParsed(subAst),
-    };
+    return withConditionSpan(
+      {
+        id: nextId('cond'),
+        type: 'subquery',
+        label: `${left} ${node.operator} ${summarizeSelect(subAst)}`,
+        operator: node.operator,
+        left,
+        nestedQuery: buildSelectParsed(subAst),
+      },
+      node,
+    );
   }
   return parseComparison(node);
 }
@@ -234,52 +267,64 @@ function parseConditionTree(node: any): ConditionNode | undefined {
         const right = parseConditionTree(node.right);
         if (left) children.push(left);
         if (right) children.push(right);
-        return {
-          id: nextId('cond'),
-          type: op === 'AND' ? 'and' : 'or',
-          label: op,
-          operator: op,
-          children,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: op === 'AND' ? 'and' : 'or',
+            label: op,
+            operator: op,
+            children,
+          },
+          node,
+        );
       }
 
       if (op === 'IS') {
         const left = exprToString(node.left);
         const right = exprToString(node.right);
-        return {
-          id: nextId('cond'),
-          type: 'is_null',
-          label: `${left} IS ${right}`,
-          left,
-          right,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'is_null',
+            label: `${left} IS ${right}`,
+            left,
+            right,
+          },
+          node,
+        );
       }
 
       if (op === 'IN' || op === 'NOT IN') {
         const left = exprToString(node.left);
         const subAst = extractSubquerySelectAst(node.right);
         if (subAst) {
-          return {
-            id: nextId('cond'),
-            type: 'in',
-            label: `${left} ${node.operator} ${summarizeSelect(subAst)}`,
-            operator: node.operator,
-            left,
-            nestedQuery: buildSelectParsed(subAst),
-          };
+          return withConditionSpan(
+            {
+              id: nextId('cond'),
+              type: 'in',
+              label: `${left} ${node.operator} ${summarizeSelect(subAst)}`,
+              operator: node.operator,
+              left,
+              nestedQuery: buildSelectParsed(subAst),
+            },
+            node,
+          );
         }
         const values =
           node.right?.type === 'expr_list'
             ? toArray<any>(node.right.value).map((a: any) => exprToString(a)).join(', ')
             : exprToString(node.right);
-        return {
-          id: nextId('cond'),
-          type: 'in',
-          label: `${left} ${node.operator} (${values})`,
-          operator: node.operator,
-          left,
-          right: values,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'in',
+            label: `${left} ${node.operator} (${values})`,
+            operator: node.operator,
+            left,
+            right: values,
+          },
+          node,
+        );
       }
 
       if (op === 'BETWEEN' || op === 'NOT BETWEEN') {
@@ -288,14 +333,17 @@ function parseConditionTree(node: any): ConditionNode | undefined {
           node.right?.type === 'expr_list'
             ? toArray<any>(node.right.value).map((a: any) => exprToString(a))
             : [exprToString(node.right), ''];
-        return {
-          id: nextId('cond'),
-          type: 'between',
-          label: `${left} ${node.operator} ${low} AND ${high}`,
-          operator: node.operator,
-          left,
-          right: `${low} AND ${high}`,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'between',
+            label: `${left} ${node.operator} ${low} AND ${high}`,
+            operator: node.operator,
+            left,
+            right: `${low} AND ${high}`,
+          },
+          node,
+        );
       }
 
       return parseComparisonWithSubquery(node);
@@ -303,12 +351,15 @@ function parseConditionTree(node: any): ConditionNode | undefined {
 
     case 'subquery': {
       const subAst = extractSubquerySelectAst(node);
-      return {
-        id: nextId('cond'),
-        type: 'subquery',
-        label: summarizeSelect(subAst ?? node),
-        nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
-      };
+      return withConditionSpan(
+        {
+          id: nextId('cond'),
+          type: 'subquery',
+          label: summarizeSelect(subAst ?? node),
+          nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
+        },
+        node,
+      );
     }
 
     case 'unary_expr': {
@@ -316,29 +367,38 @@ function parseConditionTree(node: any): ConditionNode | undefined {
 
       if (op === 'NOT EXISTS' || op === 'EXISTS') {
         const subAst = extractSubquerySelectAst(node.expr);
-        return {
-          id: nextId('cond'),
-          type: 'exists',
-          label: subAst ? `${op} ${summarizeSelect(subAst)}` : `${op} (subquery)`,
-          nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'exists',
+            label: subAst ? `${op} ${summarizeSelect(subAst)}` : `${op} (subquery)`,
+            nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
+          },
+          node,
+        );
       }
 
       if (op === 'NOT') {
         const child = parseConditionTree(node.expr);
-        return {
-          id: nextId('cond'),
-          type: 'not',
-          label: 'NOT',
-          operator: 'NOT',
-          children: child ? [child] : [],
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'not',
+            label: 'NOT',
+            operator: 'NOT',
+            children: child ? [child] : [],
+          },
+          node,
+        );
       }
-      return {
-        id: nextId('cond'),
-        type: 'raw',
-        label: exprToString(node),
-      };
+      return withConditionSpan(
+        {
+          id: nextId('cond'),
+          type: 'raw',
+          label: exprToString(node),
+        },
+        node,
+      );
     }
 
     case 'function': {
@@ -347,63 +407,81 @@ function parseConditionTree(node: any): ConditionNode | undefined {
 
       if (name === 'NOT') {
         const child = args[0] ? parseConditionTree(args[0]) : undefined;
-        return {
-          id: nextId('cond'),
-          type: 'not',
-          label: 'NOT',
-          operator: 'NOT',
-          children: child ? [child] : [],
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'not',
+            label: 'NOT',
+            operator: 'NOT',
+            children: child ? [child] : [],
+          },
+          node,
+        );
       }
 
       if (name === 'IN') {
         const left = exprToString(args[0]);
         const values = args.slice(1).map((a: any) => exprToString(a)).join(', ');
-        return {
-          id: nextId('cond'),
-          type: 'in',
-          label: `${left} IN (${values})`,
-          left,
-          right: values,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'in',
+            label: `${left} IN (${values})`,
+            left,
+            right: values,
+          },
+          node,
+        );
       }
 
       if (name === 'EXISTS') {
         const subAst = extractSubquerySelectAst(args[0]);
-        return {
-          id: nextId('cond'),
-          type: 'exists',
-          label: subAst ? `EXISTS ${summarizeSelect(subAst)}` : 'EXISTS (subquery)',
-          nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'exists',
+            label: subAst ? `EXISTS ${summarizeSelect(subAst)}` : 'EXISTS (subquery)',
+            nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
+          },
+          node,
+        );
       }
 
       if (name === 'BETWEEN') {
         const expr = exprToString(args[0]);
         const low = exprToString(args[1]);
         const high = exprToString(args[2]);
-        return {
-          id: nextId('cond'),
-          type: 'between',
-          label: `${expr} BETWEEN ${low} AND ${high}`,
-          left: expr,
-          right: `${low} AND ${high}`,
-        };
+        return withConditionSpan(
+          {
+            id: nextId('cond'),
+            type: 'between',
+            label: `${expr} BETWEEN ${low} AND ${high}`,
+            left: expr,
+            right: `${low} AND ${high}`,
+          },
+          node,
+        );
       }
 
-      return {
-        id: nextId('cond'),
-        type: 'function',
-        label: exprToString(node),
-      };
+      return withConditionSpan(
+        {
+          id: nextId('cond'),
+          type: 'function',
+          label: exprToString(node),
+        },
+        node,
+      );
     }
 
     default:
-      return {
-        id: nextId('cond'),
-        type: 'raw',
-        label: exprToString(node),
-      };
+      return withConditionSpan(
+        {
+          id: nextId('cond'),
+          type: 'raw',
+          label: exprToString(node),
+        },
+        node,
+      );
   }
 }
 
@@ -418,20 +496,31 @@ function enrichConditionTree(node: ConditionNode): ConditionNode {
   return normalizeConditionTree(enriched);
 }
 
-function parseColumns(columns: any[]): SelectColumn[] {
+function parseColumns(columns: any[], rawSql?: string): SelectColumn[] {
   if (!columns || columns.length === 0) return [{ expression: '*' }];
 
   return columns.map((col) => {
     if (col === '*' || col.expr?.type === 'star') {
-      return { expression: col.expr?.table ? `${col.expr.table}.*` : '*' };
+      const sourceSpan = toSourceSpan(col.expr?.loc ?? col.loc);
+      return {
+        expression: col.expr?.table ? `${col.expr.table}.*` : '*',
+        sourceSpan,
+      };
     }
     const expr = col.expr ? exprToString(col.expr) : exprToString(col);
     const alias = col.as ?? col.alias;
-    return { expression: expr, alias: alias || undefined };
+    const sourceSpan = extendColumnSpanWithAlias(
+      rawSql,
+      col,
+      columnEntrySourceSpan(col),
+    );
+    return { expression: expr, alias: alias || undefined, sourceSpan };
   });
 }
 
 function buildTableRef(entry: any, index: number): TableRef {
+  const sourceSpan = toSourceSpan(entry.loc);
+
   if (entry.expr?.ast?.type === 'select') {
     const alias = entry.as ?? entry.alias ?? `derived_${index}`;
     const derivedQuery = buildSelectParsed(entry.expr.ast);
@@ -442,6 +531,7 @@ function buildTableRef(entry: any, index: number): TableRef {
       displayName: `${alias} (派生テーブル)`,
       isDerived: true,
       derivedQuery,
+      sourceSpan,
     };
   }
 
@@ -455,6 +545,7 @@ function buildTableRef(entry: any, index: number): TableRef {
     table,
     alias: alias || undefined,
     displayName,
+    sourceSpan,
   };
 }
 
@@ -502,13 +593,14 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
       targetId: tableRef.id,
       condition,
       conditionParts: parts,
+      sourceSpan: toSourceSpan(entry.on?.loc),
     });
   });
 
   return { tables, joins };
 }
 
-function buildSelectParsed(ast: any): ParsedQuery {
+function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
   const { tables, joins } = parseFromClause(ast.from);
 
   let where = parseConditionTree(ast.where);
@@ -517,15 +609,17 @@ function buildSelectParsed(ast: any): ParsedQuery {
   let having = parseConditionTree(ast.having);
   if (having) having = enrichConditionTree(having);
 
-  const groupBy = toArray<any>(ast.groupby?.columns ?? ast.groupby).map((g: any) =>
-    exprToString(g),
-  );
+  const groupBy: SqlFragment[] = toArray<any>(ast.groupby?.columns ?? ast.groupby).map((g: any) => ({
+    text: exprToString(g),
+    sourceSpan: toSourceSpan(g.loc),
+  }));
 
-  const orderBy = toArray<any>(ast.orderby).map(
-    (o: any) => `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
-  );
+  const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
+    text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
+    sourceSpan: orderByEntrySourceSpan(o),
+  }));
 
-  const { limit, offset } = parseLimitOffset(ast);
+  const { limit, offset, limitSpan, offsetSpan } = parseLimitOffset(ast);
 
   return {
     rawSql: '',
@@ -534,25 +628,27 @@ function buildSelectParsed(ast: any): ParsedQuery {
     joins,
     where,
     having,
-    columns: parseColumns(ast.columns),
+    columns: parseColumns(ast.columns, rawSql),
     groupBy,
     orderBy,
     limit,
+    limitSpan,
     offset,
+    offsetSpan,
     distinct: Boolean(ast.distinct),
   };
 }
 
 function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
   const branches = collectUnionBranches(ast);
-  const main = buildSelectParsed(branches[0].ast);
+  const main = buildSelectParsed(branches[0].ast, rawSql);
   main.rawSql = rawSql;
 
   if (branches.length > 1) {
     main.unionBranches = branches.map((branch, index) => ({
       id: nextId('union'),
       operator: index === 0 ? undefined : branch.unionOp,
-      query: { ...buildSelectParsed(branch.ast), rawSql: '' },
+      query: { ...buildSelectParsed(branch.ast, rawSql), rawSql: '' },
     }));
   }
 
@@ -582,11 +678,12 @@ function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
   let where = parseConditionTree(ast.where);
   if (where) where = enrichConditionTree(where);
 
-  const orderBy = toArray<any>(ast.orderby).map(
-    (o: any) => `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
-  );
+  const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
+    text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
+    sourceSpan: orderByEntrySourceSpan(o),
+  }));
 
-  const { limit, offset } = parseLimitOffset(ast);
+  const { limit, offset, limitSpan, offsetSpan } = parseLimitOffset(ast);
 
   return {
     rawSql,
@@ -599,7 +696,9 @@ function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
     groupBy: [],
     orderBy,
     limit,
+    limitSpan,
     offset,
+    offsetSpan,
     distinct: false,
   };
 }
@@ -627,22 +726,36 @@ function limitOffsetValue(entry: any): string | undefined {
   return undefined;
 }
 
-function parseLimitOffset(ast: any): { limit?: string; offset?: string } {
+function parseLimitOffset(ast: any): {
+  limit?: string;
+  offset?: string;
+  limitSpan?: SourceSpan;
+  offsetSpan?: SourceSpan;
+} {
   if (!ast.limit) return {};
+
+  const spanInfo = limitOffsetSourceSpans(ast);
 
   if (ast.limit.value?.length) {
     const limit = limitOffsetValue(ast.limit.value[0]);
     const offset = limitOffsetValue(ast.limit.value[1]);
-    return { limit, offset };
+    return { limit, offset, ...spanInfo };
   }
 
-  return { limit: exprToString(ast.limit) };
+  return { limit: exprToString(ast.limit), ...spanInfo };
 }
 
-function parseLimitAndOrder(ast: any): { orderBy: string[]; limit?: string; offset?: string } {
-  const orderBy = toArray<any>(ast.orderby).map(
-    (o: any) => `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
-  );
+function parseLimitAndOrder(ast: any): {
+  orderBy: SqlFragment[];
+  limit?: string;
+  offset?: string;
+  limitSpan?: SourceSpan;
+  offsetSpan?: SourceSpan;
+} {
+  const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
+    text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
+    sourceSpan: orderByEntrySourceSpan(o),
+  }));
 
   return { orderBy, ...parseLimitOffset(ast) };
 }
@@ -653,7 +766,7 @@ function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
   let where = parseConditionTree(ast.where);
   if (where) where = enrichConditionTree(where);
 
-  const { orderBy, limit, offset } = parseLimitAndOrder(ast);
+  const { orderBy, limit, offset, limitSpan, offsetSpan } = parseLimitAndOrder(ast);
 
   return {
     rawSql,
@@ -666,7 +779,9 @@ function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
     groupBy: [],
     orderBy,
     limit,
+    limitSpan,
     offset,
+    offsetSpan,
     distinct: false,
   };
 }
@@ -680,7 +795,10 @@ export function parseMySqlQuery(sql: string): ParseResult {
   }
 
   try {
-    const ast = parser.astify(trimmed, { database: 'MySQL' });
+    const ast = parser.astify(trimmed, {
+      database: 'MySQL',
+      parseOptions: { includeLocations: true },
+    });
     const statements = Array.isArray(ast) ? ast : [ast];
     const first = statements[0];
 

@@ -15,7 +15,8 @@ import {
   parseMySqlQuery,
 } from './lib/parser';
 import { collectAllNestedQueries, countNestedItems, hasUnion } from './lib/query-utils';
-import type { ParsedQuery } from './lib/types';
+import type { ParsedQuery, SourceSpan } from './lib/types';
+import type { OnSourceSpanSelect } from './lib/source-link';
 
 type TabId = 'effect' | 'joins' | 'where' | 'summary' | 'nested';
 
@@ -32,6 +33,16 @@ export default function App() {
   const [error, setError] = useState<string | undefined>();
   const [activeTab, setActiveTab] = useState<TabId>('effect');
   const [resolveAliases, setResolveAliases] = useState(false);
+  const [activeSourceSpan, setActiveSourceSpan] = useState<SourceSpan | null>(null);
+
+  const handleSourceSpanSelect: OnSourceSpanSelect = useCallback((span) => {
+    setActiveSourceSpan(span ?? null);
+  }, []);
+
+  const sourceLinkProps = {
+    activeSourceSpan,
+    onSourceSpanSelect: handleSourceSpanSelect,
+  };
 
   const displayQuery = useMemo(
     () => (parsed ? applyAliasResolution(parsed, resolveAliases) : null),
@@ -76,6 +87,10 @@ export default function App() {
   }, [sql, runParse]);
 
   useEffect(() => {
+    setActiveSourceSpan(null);
+  }, [sql]);
+
+  useEffect(() => {
     if (activeTab === 'nested' && !nestedInfo.showTab) {
       setActiveTab('effect');
     }
@@ -99,6 +114,7 @@ export default function App() {
             onLoadDeleteSample={() => setSql(DELETE_SAMPLE_SQL)}
             onLoadUnionSample={() => setSql(UNION_SAMPLE_SQL)}
             error={error}
+            focusSpan={activeSourceSpan}
           />
         </section>
 
@@ -155,6 +171,7 @@ export default function App() {
                     <UnionJoinPanel
                       branches={displayQuery.unionBranches}
                       resolveAliases={resolveAliases}
+                      {...sourceLinkProps}
                     />
                   ) : (
                     <JoinDiagram
@@ -162,6 +179,7 @@ export default function App() {
                       joins={displayQuery.joins}
                       resolveAliases={resolveAliases}
                       query={displayQuery}
+                      {...sourceLinkProps}
                     />
                   ))}
                 {activeTab === 'where' &&
@@ -169,13 +187,24 @@ export default function App() {
                     <UnionWherePanel
                       branches={displayQuery.unionBranches}
                       resolveAliases={resolveAliases}
+                      {...sourceLinkProps}
                     />
                   ) : (
                     <div className="where-panel">
-                      <WhereTree root={displayQuery.where} title="WHERE" resolveAliases={resolveAliases} />
+                      <WhereTree
+                        root={displayQuery.where}
+                        title="WHERE"
+                        resolveAliases={resolveAliases}
+                        {...sourceLinkProps}
+                      />
                       {displayQuery.having && (
                         <div className="having-section">
-                          <WhereTree root={displayQuery.having} title="HAVING" resolveAliases={resolveAliases} />
+                          <WhereTree
+                            root={displayQuery.having}
+                            title="HAVING"
+                            resolveAliases={resolveAliases}
+                            {...sourceLinkProps}
+                          />
                         </div>
                       )}
                     </div>
@@ -185,9 +214,14 @@ export default function App() {
                     <UnionSummaryPanel
                       branches={displayQuery.unionBranches}
                       resolveAliases={resolveAliases}
+                      {...sourceLinkProps}
                     />
                   ) : (
-                    <QuerySummary query={displayQuery} resolveAliases={resolveAliases} />
+                    <QuerySummary
+                      query={displayQuery}
+                      resolveAliases={resolveAliases}
+                      {...sourceLinkProps}
+                    />
                   ))}
                 {activeTab === 'nested' && (
                   <div className="nested-tab">

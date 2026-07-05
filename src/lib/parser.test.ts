@@ -59,6 +59,14 @@ describe('parseMySqlQuery', () => {
       expect(nested.some((q) => q.tables.some((t) => t.table === 'payments'))).toBe(true);
       expect(nested.some((q) => q.tables.some((t) => t.table === 'banned_users'))).toBe(true);
 
+      expect(result.query.where?.sourceSpan).toBeDefined();
+      expect(result.query.tables[0]?.sourceSpan).toBeDefined();
+      expect(result.query.joins[0]?.sourceSpan).toBeDefined();
+      expect(result.query.columns[0]?.sourceSpan).toBeDefined();
+      expect(result.query.groupBy[0]?.sourceSpan).toBeDefined();
+      expect(result.query.orderBy[0]?.sourceSpan).toBeDefined();
+      expect(result.query.limitSpan).toBeDefined();
+
       expect(() => assertParseInvariants(result.query, 'SAMPLE_SQL')).not.toThrow();
     });
   });

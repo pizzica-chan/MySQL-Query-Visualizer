@@ -383,7 +383,7 @@ WHERE status = 1`,
     expectSuccess: true,
     assert: (q) => {
       if (q.orderBy.length !== 3) throw new Error('orderBy');
-      if (!q.orderBy[1]?.includes('DESC')) throw new Error('DESC');
+      if (!q.orderBy[1]?.text.includes('DESC')) throw new Error('DESC');
     },
   },
   {

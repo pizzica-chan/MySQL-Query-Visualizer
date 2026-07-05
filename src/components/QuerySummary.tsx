@@ -1,10 +1,13 @@
-import type { DeleteTarget, ParsedQuery, TableRef } from '../lib/types';
+import type { DeleteTarget, ParsedQuery, SourceSpan, TableRef } from '../lib/types';
+import { sourceSelectableProps, type OnSourceSpanSelect } from '../lib/source-link';
 import { countNestedItems, formatUnionBranches, hasUnion } from '../lib/query-utils';
 
 interface QuerySummaryProps {
   query: ParsedQuery;
   resolveAliases: boolean;
   compact?: boolean;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
 }
 
 function isDeleteTargetTable(table: TableRef, targets: DeleteTarget[] | undefined): boolean {
@@ -18,11 +21,21 @@ function isDeleteTargetTable(table: TableRef, targets: DeleteTarget[] | undefine
   );
 }
 
-export function QuerySummary({ query, resolveAliases, compact = false }: QuerySummaryProps) {
+export function QuerySummary({
+  query,
+  resolveAliases,
+  compact = false,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
+}: QuerySummaryProps) {
   const isSelect = query.statementType === 'SELECT';
   const isUpdate = query.statementType === 'UPDATE';
   const isDelete = query.statementType === 'DELETE';
   const { unions, subqueries } = countNestedItems(query);
+  const selectProps = (span: SourceSpan | undefined, className: string) =>
+    onSourceSpanSelect
+      ? sourceSelectableProps(span, activeSourceSpan, onSourceSpanSelect, className)
+      : { className };
 
   return (
     <div className="query-summary">
@@ -51,23 +64,29 @@ export function QuerySummary({ query, resolveAliases, compact = false }: QuerySu
             </>
           )}
           <dt>WHERE</dt>
-          <dd>{query.where ? 'あり' : 'なし'}</dd>
+          <dd {...selectProps(query.where?.sourceSpan, query.where ? 'summary-dd-link' : '')}>
+            {query.where ? 'あり' : 'なし'}
+          </dd>
           {isSelect && (
             <>
               <dt>GROUP BY</dt>
               <dd>{query.groupBy.length > 0 ? `${query.groupBy.length} 列` : 'なし'}</dd>
               <dt>HAVING</dt>
-              <dd>{query.having ? 'あり' : 'なし'}</dd>
+              <dd {...selectProps(query.having?.sourceSpan, query.having ? 'summary-dd-link' : '')}>
+                {query.having ? 'あり' : 'なし'}
+              </dd>
             </>
           )}
           <dt>ORDER BY</dt>
           <dd>{query.orderBy.length > 0 ? `${query.orderBy.length} 列` : 'なし'}</dd>
           <dt>LIMIT</dt>
-          <dd>{query.limit ?? 'なし'}</dd>
+          <dd {...selectProps(query.limitSpan, query.limit ? 'summary-dd-link' : '')}>
+            {query.limit ?? 'なし'}
+          </dd>
           {query.offset && (
             <>
               <dt>OFFSET</dt>
-              <dd>{query.offset}</dd>
+              <dd {...selectProps(query.offsetSpan, 'summary-dd-link')}>{query.offset}</dd>
             </>
           )}
           {isSelect && hasUnion(query) && (
@@ -113,32 +132,32 @@ export function QuerySummary({ query, resolveAliases, compact = false }: QuerySu
       )}
 
       {!compact && (
-      <section className="summary-section">
-        <h3>テーブル一覧</h3>
-        <div className="table-cards">
-          {query.tables.map((t) => (
-            <div key={t.id} className="table-card">
-              <div className="table-card-name">{t.table}</div>
-              {t.schema && <div className="table-card-meta">schema: {t.schema}</div>}
-              {t.isDerived && (
-                <div className="table-card-meta table-card-meta--derived">派生テーブル（サブクエリ）</div>
-              )}
-              {t.alias && (
-                <div className="table-card-meta">
-                  エイリアス: <strong>{t.alias}</strong>
-                  {resolveAliases ? '（実名表示中）' : ''}
-                </div>
-              )}
-              {isUpdate && query.tables[0]?.id === t.id && (
-                <div className="table-card-meta table-card-meta--target">更新対象</div>
-              )}
-              {isDelete && isDeleteTargetTable(t, query.deleteTargets) && (
-                <div className="table-card-meta table-card-meta--delete">削除対象</div>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
+        <section className="summary-section">
+          <h3>テーブル一覧</h3>
+          <div className="table-cards">
+            {query.tables.map((t) => (
+              <div key={t.id} {...selectProps(t.sourceSpan, 'table-card')}>
+                <div className="table-card-name">{t.table}</div>
+                {t.schema && <div className="table-card-meta">schema: {t.schema}</div>}
+                {t.isDerived && (
+                  <div className="table-card-meta table-card-meta--derived">派生テーブル（サブクエリ）</div>
+                )}
+                {t.alias && (
+                  <div className="table-card-meta">
+                    エイリアス: <strong>{t.alias}</strong>
+                    {resolveAliases ? '（実名表示中）' : ''}
+                  </div>
+                )}
+                {isUpdate && query.tables[0]?.id === t.id && (
+                  <div className="table-card-meta table-card-meta--target">更新対象</div>
+                )}
+                {isDelete && isDeleteTargetTable(t, query.deleteTargets) && (
+                  <div className="table-card-meta table-card-meta--delete">削除対象</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {isSelect && !compact && (
@@ -146,7 +165,7 @@ export function QuerySummary({ query, resolveAliases, compact = false }: QuerySu
           <h3>SELECT 列 ({query.columns.length})</h3>
           <ul className="column-list">
             {query.columns.map((col, i) => (
-              <li key={i}>
+              <li key={i} {...selectProps(col.sourceSpan, 'column-list-item')}>
                 <code>{col.expression}</code>
                 {col.alias && <span className="column-alias"> AS {col.alias}</span>}
               </li>
@@ -160,7 +179,7 @@ export function QuerySummary({ query, resolveAliases, compact = false }: QuerySu
           <h3>GROUP BY</h3>
           <ul className="tag-list">
             {query.groupBy.map((g, i) => (
-              <li key={i} className="tag">{g}</li>
+              <li key={i} {...selectProps(g.sourceSpan, 'tag')}>{g.text}</li>
             ))}
           </ul>
         </section>
@@ -171,7 +190,7 @@ export function QuerySummary({ query, resolveAliases, compact = false }: QuerySu
           <h3>ORDER BY</h3>
           <ul className="tag-list">
             {query.orderBy.map((o, i) => (
-              <li key={i} className="tag tag--order">{o}</li>
+              <li key={i} {...selectProps(o.sourceSpan, 'tag tag--order')}>{o.text}</li>
             ))}
           </ul>
         </section>

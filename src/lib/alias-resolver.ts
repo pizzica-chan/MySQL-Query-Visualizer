@@ -109,8 +109,14 @@ export function applyAliasResolution(query: ParsedQuery, enabled: boolean): Pars
     })),
     setClauses: query.setClauses?.map((s) => resolveSetClause(s, aliasMap)),
     deleteTargets: query.deleteTargets?.map((d) => resolveDeleteTarget(d, aliasMap)),
-    groupBy: query.groupBy.map((g) => resolveAliasesInText(g, aliasMap)),
-    orderBy: query.orderBy.map((o) => resolveAliasesInText(o, aliasMap)),
+    groupBy: query.groupBy.map((g) => ({
+      ...g,
+      text: resolveAliasesInText(g.text, aliasMap),
+    })),
+    orderBy: query.orderBy.map((o) => ({
+      ...o,
+      text: resolveAliasesInText(o.text, aliasMap),
+    })),
     unionBranches: query.unionBranches?.map((branch) => ({
       ...branch,
       query: applyAliasResolution(branch.query, true),
