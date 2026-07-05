@@ -44,22 +44,53 @@ interface MatchCandidate {
   text: string;
 }
 
+interface TableTermSets {
+  tableTerms: string[];
+  qualifiedTableTerms: string[];
+}
+
 function tableLabel(table: TableRef): string {
+  if (table.schema) {
+    const physical = `${table.schema}.${table.table}`;
+    if (table.alias && table.alias !== table.table) {
+      return `${physical}（${table.alias}）`;
+    }
+    return physical;
+  }
   if (table.alias && table.alias !== table.table) {
     return `${table.table}（${table.alias}）`;
   }
   return table.table;
 }
 
-function collectTableTerms(query: ParsedQuery): string[] {
+function collectTableTerms(query: ParsedQuery): TableTermSets {
   const terms = new Set<string>();
+  const qualified = new Set<string>();
+
   for (const table of query.tables) {
     terms.add(tableLabel(table));
     if (table.table) terms.add(table.table);
     if (table.alias) terms.add(table.alias);
     if (table.displayName) terms.add(table.displayName);
+
+    if (table.schema) {
+      const physical = `${table.schema}.${table.table}`;
+      terms.add(physical);
+      qualified.add(physical);
+      if (table.alias && table.alias !== table.table) {
+        const withAlias = `${physical}（${table.alias}）`;
+        terms.add(withAlias);
+        qualified.add(withAlias);
+      }
+    } else if (table.displayName.includes('.')) {
+      qualified.add(table.displayName);
+    }
   }
-  return [...terms].sort((a, b) => b.length - a.length);
+
+  return {
+    tableTerms: [...terms].sort((a, b) => b.length - a.length),
+    qualifiedTableTerms: [...qualified].sort((a, b) => b.length - a.length),
+  };
 }
 
 function isIdentifierChar(ch: string | undefined): boolean {
@@ -80,7 +111,12 @@ function matchesTerm(text: string, pos: number, term: string): boolean {
   return true;
 }
 
-function findBestMatch(text: string, pos: number, tableTerms: string[]): MatchCandidate | null {
+function findBestMatch(
+  text: string,
+  pos: number,
+  tableTerms: string[],
+  qualifiedTableTerms: string[],
+): MatchCandidate | null {
   if (text[pos] === '「') {
     const end = text.indexOf('」', pos + 1);
     if (end !== -1) {
@@ -104,6 +140,12 @@ function findBestMatch(text: string, pos: number, tableTerms: string[]): MatchCa
     }
   }
 
+  for (const term of qualifiedTableTerms) {
+    if (matchesTerm(text, pos, term)) {
+      return { length: term.length, kind: 'table', text: term };
+    }
+  }
+
   const columnMatch = text.slice(pos).match(COLUMN_PATTERN);
   if (columnMatch) {
     return {
@@ -122,11 +164,26 @@ function findBestMatch(text: string, pos: number, tableTerms: string[]): MatchCa
   return null;
 }
 
-function segmentInnerCondition(text: string, tableTerms: string[]): EffectTextSegment[] {
+function segmentInnerCondition(
+  text: string,
+  tableTerms: string[],
+  qualifiedTableTerms: string[],
+): EffectTextSegment[] {
   const segments: EffectTextSegment[] = [];
   let pos = 0;
 
   while (pos < text.length) {
+    let matched = false;
+    for (const term of qualifiedTableTerms) {
+      if (matchesTerm(text, pos, term)) {
+        segments.push({ text: term, kind: 'table' });
+        pos += term.length;
+        matched = true;
+        break;
+      }
+    }
+    if (matched) continue;
+
     const columnMatch = text.slice(pos).match(COLUMN_PATTERN);
     if (columnMatch) {
       segments.push({ text: columnMatch[0], kind: 'column' });
@@ -134,7 +191,7 @@ function segmentInnerCondition(text: string, tableTerms: string[]): EffectTextSe
       continue;
     }
 
-    let matched = false;
+    matched = false;
     for (const term of tableTerms) {
       if (matchesTerm(text, pos, term)) {
         segments.push({ text: term, kind: 'table' });
@@ -147,9 +204,10 @@ function segmentInnerCondition(text: string, tableTerms: string[]): EffectTextSe
 
     let nextPos = pos + 1;
     while (nextPos < text.length) {
+      const hasQualifiedTable = qualifiedTableTerms.some((term) => matchesTerm(text, nextPos, term));
       const hasColumn = COLUMN_PATTERN.test(text.slice(nextPos));
       const hasTable = tableTerms.some((term) => matchesTerm(text, nextPos, term));
-      if (hasColumn || hasTable) break;
+      if (hasQualifiedTable || hasColumn || hasTable) break;
       nextPos += 1;
     }
     segments.push({ text: text.slice(pos, nextPos) });
@@ -159,11 +217,15 @@ function segmentInnerCondition(text: string, tableTerms: string[]): EffectTextSe
   return mergeAdjacentPlainSegments(segments);
 }
 
-function segmentQuotedString(text: string, tableTerms: string[]): EffectTextSegment[] {
+function segmentQuotedString(
+  text: string,
+  tableTerms: string[],
+  qualifiedTableTerms: string[],
+): EffectTextSegment[] {
   const inner = text.slice(1, -1);
   return [
     { text: '「', kind: 'string' },
-    ...segmentInnerCondition(inner, tableTerms),
+    ...segmentInnerCondition(inner, tableTerms, qualifiedTableTerms),
     { text: '」', kind: 'string' },
   ];
 }
@@ -182,16 +244,18 @@ function mergeAdjacentPlainSegments(segments: EffectTextSegment[]): EffectTextSe
 }
 
 export function segmentEffectText(text: string, query?: ParsedQuery): EffectTextSegment[] {
-  const tableTerms = query ? collectTableTerms(query) : [];
+  const { tableTerms, qualifiedTableTerms } = query
+    ? collectTableTerms(query)
+    : { tableTerms: [], qualifiedTableTerms: [] };
   const segments: EffectTextSegment[] = [];
   let pos = 0;
 
   while (pos < text.length) {
-    const match = findBestMatch(text, pos, tableTerms);
+    const match = findBestMatch(text, pos, tableTerms, qualifiedTableTerms);
 
     if (!match) {
       let nextPos = pos + 1;
-      while (nextPos < text.length && !findBestMatch(text, nextPos, tableTerms)) {
+      while (nextPos < text.length && !findBestMatch(text, nextPos, tableTerms, qualifiedTableTerms)) {
         nextPos += 1;
       }
       segments.push({ text: text.slice(pos, nextPos) });
@@ -200,7 +264,7 @@ export function segmentEffectText(text: string, query?: ParsedQuery): EffectText
     }
 
     if (match.kind === 'string') {
-      segments.push(...segmentQuotedString(match.text, tableTerms));
+      segments.push(...segmentQuotedString(match.text, tableTerms, qualifiedTableTerms));
     } else {
       segments.push({ text: match.text, kind: match.kind });
     }

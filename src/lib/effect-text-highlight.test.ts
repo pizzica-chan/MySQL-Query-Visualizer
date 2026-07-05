@@ -64,4 +64,25 @@ describe('effect-text-highlight', () => {
     const restored = segmentEffectText(line, query.query).map((s) => s.text).join('');
     expect(restored).toBe(line);
   });
+
+  it('スキーマ付きテーブル名を列参照ではなくテーブルとしてハイライトする', () => {
+    const query = parseMySqlQuery(`
+      SELECT u.id FROM mydb.users u
+      INNER JOIN mydb.orders o ON o.user_id = u.id
+    `);
+    expect(query.success).toBe(true);
+    if (!query.success) return;
+
+    const segments = segmentEffectText(
+      'mydb.users（u）と mydb.orders（o）は INNER JOIN — 結合条件「o.user_id = u.id」',
+      query.query,
+    );
+
+    expect(segments.some((s) => s.kind === 'table' && s.text === 'mydb.users（u）')).toBe(true);
+    expect(segments.some((s) => s.kind === 'table' && s.text === 'mydb.orders（o）')).toBe(true);
+    expect(segments.some((s) => s.kind === 'column' && s.text === 'mydb.users')).toBe(false);
+    expect(segments.some((s) => s.kind === 'column' && s.text === 'mydb.orders')).toBe(false);
+    expect(segments.some((s) => s.kind === 'column' && s.text === 'o.user_id')).toBe(true);
+    expect(segments.some((s) => s.kind === 'column' && s.text === 'u.id')).toBe(true);
+  });
 });
