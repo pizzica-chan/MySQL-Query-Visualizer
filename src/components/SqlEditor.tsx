@@ -1,3 +1,6 @@
+import { useCallback, useMemo, useRef } from 'react';
+import { highlightSqlToHtml } from '../lib/sql-highlight';
+
 interface SqlEditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -17,6 +20,20 @@ export function SqlEditor({
   onLoadUnionSample,
   error,
 }: SqlEditorProps) {
+  const highlightRef = useRef<HTMLPreElement>(null);
+
+  const highlightedHtml = useMemo(() => {
+    const html = highlightSqlToHtml(value);
+    return value.endsWith('\n') ? `${html} ` : html;
+  }, [value]);
+
+  const syncScroll = useCallback((target: HTMLTextAreaElement) => {
+    const layer = highlightRef.current;
+    if (!layer) return;
+    layer.scrollTop = target.scrollTop;
+    layer.scrollLeft = target.scrollLeft;
+  }, []);
+
   return (
     <div className="sql-editor">
       <div className="sql-editor-toolbar">
@@ -36,13 +53,19 @@ export function SqlEditor({
           </button>
         </div>
       </div>
-      <textarea
-        className={`sql-textarea${error ? ' sql-textarea--error' : ''}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="SELECT / UPDATE / DELETE ..."
-        spellCheck={false}
-      />
+      <div className={`sql-editor-body${error ? ' sql-editor-body--error' : ''}`}>
+        <pre ref={highlightRef} className="sql-highlight-layer" aria-hidden="true">
+          <code dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+        </pre>
+        <textarea
+          className="sql-textarea sql-textarea--highlight"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onScroll={(e) => syncScroll(e.currentTarget)}
+          placeholder="SELECT / UPDATE / DELETE ..."
+          spellCheck={false}
+        />
+      </div>
       {error && (
         <div className="parse-error" role="alert">
           <strong>解析エラー:</strong> {error}

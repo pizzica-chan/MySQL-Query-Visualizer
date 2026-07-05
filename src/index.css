@@ -26,6 +26,8 @@
   --radius-sm: 4px;
   --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Yu Gothic UI', sans-serif;
   --font-mono: 'Cascadia Code', 'Consolas', 'MS Gothic', monospace;
+  /* SQL 入力 — リガチャ・日本語フォントによる >= → ≧ 等の字形変換を避ける */
+  --font-mono-input: 'Cascadia Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
 }
 
 *,
@@ -175,6 +177,77 @@ body {
   color: var(--text);
 }
 
+.sql-editor-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.sql-editor-body:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.sql-editor-body--error {
+  border-color: var(--danger);
+}
+
+.sql-highlight-layer {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 16px;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  font-family: var(--font-mono-input);
+  font-size: 0.85rem;
+  line-height: 1.65;
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+  color: var(--text);
+  background: transparent;
+  border: none;
+}
+
+.sql-highlight-layer code {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.sql-hl--keyword {
+  color: #d4b06a;
+  font-weight: 600;
+}
+
+.sql-hl--string {
+  color: #c8b8e8;
+}
+
+.sql-hl--comment {
+  color: #6a7585;
+  font-style: italic;
+}
+
+.sql-hl--number {
+  color: #b8dcc0;
+}
+
+.sql-hl--identifier {
+  color: #b8d4f0;
+}
+
+.sql-hl--operator {
+  color: #e8b4b4;
+}
+
 .sql-textarea {
   flex: 1;
   width: 100%;
@@ -184,17 +257,42 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
-  font-family: var(--font-mono);
+  font-family: var(--font-mono-input);
   font-size: 0.85rem;
   line-height: 1.65;
   resize: none;
   outline: none;
   transition: border-color 0.15s;
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+
+.sql-textarea--highlight {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: transparent;
+  caret-color: var(--text);
+  -webkit-text-fill-color: transparent;
+}
+
+.sql-textarea--highlight::selection {
+  background: rgba(107, 159, 212, 0.35);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 .sql-textarea:focus {
   border-color: var(--border-focus);
   box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.sql-textarea--highlight:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .sql-textarea--error {
