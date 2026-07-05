@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Parser } from 'node-sql-parser';
 import { normalizeConditionTree } from './condition-tree-normalize';
+import { formatJoinConditionLabel } from './join-condition';
 import {
   columnEntrySourceSpan,
   orderByEntrySourceSpan,
@@ -551,13 +552,18 @@ function buildTableRef(entry: any, index: number): TableRef {
 function parseJoinCondition(on: any): {
   condition: string;
   parts?: { left: string; operator: string; right: string };
+  conditionRoot?: ConditionNode;
 } {
   if (!on) return { condition: '(no condition)' };
-  const condition = exprToString(on);
+
+  let conditionRoot = parseConditionTree(on);
+  if (conditionRoot) conditionRoot = enrichConditionTree(conditionRoot);
+  const condition = conditionRoot ? formatJoinConditionLabel(conditionRoot) : exprToString(on);
 
   if (on.type === 'binary_expr' && on.operator === '=') {
     return {
       condition,
+      conditionRoot,
       parts: {
         left: exprToString(on.left),
         operator: '=',
@@ -566,7 +572,7 @@ function parseJoinCondition(on: any): {
     };
   }
 
-  return { condition };
+  return { condition, conditionRoot };
 }
 
 function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] } {
@@ -583,7 +589,7 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
 
     const joinType = normalizeJoinType(entry.join);
     const prevTable = tables[index - 1];
-    const { condition, parts } = parseJoinCondition(entry.on);
+    const { condition, parts, conditionRoot } = parseJoinCondition(entry.on);
 
     joins.push({
       id: nextId('join'),
@@ -592,6 +598,7 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
       targetId: tableRef.id,
       condition,
       conditionParts: parts,
+      conditionRoot,
       sourceSpan: toSourceSpan(entry.on?.loc),
     });
   });

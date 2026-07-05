@@ -1,70 +1,19 @@
 import type { JoinEdge, TableRef } from './types';
+import { collectTableIdsFromJoinCondition } from './join-condition';
 
 const LAYOUT_H_GAP = 290;
 const LAYOUT_V_GAP = 128;
 const LAYOUT_X0 = 40;
 const LAYOUT_Y0 = 72;
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function tableIndex(tables: TableRef[], tableId: string): number {
   return tables.findIndex((t) => t.id === tableId);
 }
 
-function resolveAliasToTableId(name: string, tables: TableRef[]): string | undefined {
-  const normalized = name.trim();
-  const byAlias = tables.find((t) => t.alias === normalized);
-  if (byAlias) return byAlias.id;
-  if (tables.some((t) => t.id === normalized)) return normalized;
-  const byTable = tables.filter(
-    (t) => t.table === normalized || t.displayName === normalized,
-  );
-  if (byTable.length === 1) return byTable[0]!.id;
-  return undefined;
-}
-
-function joinForLayout(join: JoinEdge): Pick<JoinEdge, 'condition' | 'conditionParts'> {
-  return {
-    condition: join.layoutCondition ?? join.condition,
-    conditionParts: join.layoutConditionParts ?? join.conditionParts,
-  };
-}
-
-function addTableIdFromExpression(expr: string, tables: TableRef[], ids: Set<string>): void {
-  const match = expr.trim().match(/^(`?)([a-zA-Z_][\w$]*)\1\.(?:`?)([a-zA-Z_*][\w$]*)(?:`?)/);
-  if (!match) return;
-  const id = resolveAliasToTableId(match[2]!, tables);
-  if (id) ids.add(id);
-}
-
 /** ON 条件から参照されるテーブル id を抽出 */
 export function getTableIdsReferencedInJoin(join: JoinEdge, tables: TableRef[]): string[] {
-  const ids = new Set<string>([join.targetId]);
-  const { condition, conditionParts } = joinForLayout(join);
-
-  if (conditionParts) {
-    addTableIdFromExpression(conditionParts.left, tables, ids);
-    addTableIdFromExpression(conditionParts.right, tables, ids);
-    return [...ids];
-  }
-
-  for (const table of tables) {
-    if (!table.alias) continue;
-    const re = new RegExp(`\\b${escapeRegExp(table.alias)}\\.`, 'i');
-    if (re.test(condition)) ids.add(table.id);
-  }
-
-  const unambiguous = tables.filter((t) => !t.alias);
-  for (const table of unambiguous) {
-    const terms = [table.table, table.displayName].filter(Boolean) as string[];
-    for (const term of terms) {
-      const re = new RegExp(`\\b${escapeRegExp(term)}\\.`, 'i');
-      if (re.test(condition)) ids.add(table.id);
-    }
-  }
-
+  const ids = new Set<string>();
+  collectTableIdsFromJoinCondition(join, tables, ids);
   return [...ids];
 }
 

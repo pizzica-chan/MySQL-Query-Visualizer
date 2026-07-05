@@ -66,6 +66,7 @@ function resolveJoin(join: JoinEdge, aliasMap: Map<string, string>): JoinEdge {
     ...join,
     layoutCondition: join.layoutCondition ?? join.condition,
     layoutConditionParts: join.layoutConditionParts ?? join.conditionParts,
+    layoutConditionRoot: join.layoutConditionRoot ?? join.conditionRoot,
     condition: resolveAliasesInText(join.condition, aliasMap),
     conditionParts: join.conditionParts
       ? {
@@ -73,6 +74,9 @@ function resolveJoin(join: JoinEdge, aliasMap: Map<string, string>): JoinEdge {
           operator: join.conditionParts.operator,
           right: resolveAliasesInText(join.conditionParts.right, aliasMap),
         }
+      : undefined,
+    conditionRoot: join.conditionRoot
+      ? resolveConditionNode(join.conditionRoot, aliasMap)
       : undefined,
   };
 }
