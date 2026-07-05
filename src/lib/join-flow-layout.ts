@@ -3,6 +3,11 @@ import { MarkerType } from '@xyflow/react';
 import { effectiveInnerAnalysisByJoinId } from './join-effective-inner';
 import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
+import {
+  computeJoinLayoutParent,
+  computeJoinNodePositions,
+  resolveJoinDisplaySource,
+} from './join-graph-layout';
 
 /** React Flow ミニマップ用 — 背景と区別できる控えめな色 */
 export const MINIMAP_NODE_COLORS = {
@@ -116,14 +121,17 @@ export function buildJoinFlowLayout(
   compact = false,
 ): { nodes: Node[]; edges: Edge[] } {
   const effectiveInnerByJoinId = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
+  const layoutParent = computeJoinLayoutParent(tables, joins);
+  const nodePositions = computeJoinNodePositions(tables, joins);
 
-  const nodes: Node[] = tables.map((t, i) => {
+  const nodes: Node[] = tables.map((t) => {
     const label = formatTableLabel(t, resolveAliases);
     const hasExtraLine = Boolean(t.schema || t.alias || label.aliasNote);
+    const position = nodePositions.get(t.id) ?? { x: 0, y: 72 };
     return {
       id: t.id,
       type: 'tableNode',
-      position: { x: i * 300, y: 72 + (i % 2) * 88 },
+      position,
       // ミニマップ表示に必須（onNodesChange による計測前のフォールバック）
       width: 176,
       height: hasExtraLine ? 108 : 88,
@@ -146,7 +154,7 @@ export function buildJoinFlowLayout(
     return {
       id: j.id,
       type: 'joinEdge',
-      source: j.sourceId,
+      source: resolveJoinDisplaySource(j, layoutParent),
       target: j.targetId,
       // animated は React Flow が path に stroke-dasharray を付ける — 実質 INNER のみ
       animated: effectiveInner,
