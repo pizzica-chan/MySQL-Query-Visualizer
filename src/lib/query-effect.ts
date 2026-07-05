@@ -4,6 +4,7 @@ import {
   formatEffectiveInnerJoinScopeLine,
   type EffectiveInnerReason,
 } from './join-effective-inner';
+import { resolveJoinLayoutSources } from './join-graph-layout';
 import { hasUnion } from './query-utils';
 
 export type EffectAction = 'select' | 'update' | 'delete';
@@ -145,6 +146,19 @@ const JOIN_SCOPE: Record<string, (left: string, right: string, condition: string
   'CROSS JOIN': (l, r) => `${l} と ${r} の直積（すべての組み合わせ）`,
 };
 
+const MULTI_SOURCE_JOIN_SCOPE: Record<string, (sources: string, target: string, condition: string) => string> = {
+  'INNER JOIN': (s, r, c) =>
+    `${s} と ${r} を INNER JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  JOIN: (s, r, c) =>
+    `${s} と ${r} を JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  'LEFT JOIN': (s, r, c) =>
+    `${s} を基準に ${r} を LEFT JOIN — 結合条件「${c}」（${r} が無い組み合わせも LEFT 側は残る）`,
+  'RIGHT JOIN': (s, r, c) =>
+    `${r} を基準に ${s} を RIGHT JOIN — 結合条件「${c}」`,
+  'FULL JOIN': (s, r, c) => `${s} と ${r} を FULL JOIN — 結合条件「${c}」`,
+  'CROSS JOIN': (s, r) => `${s} と ${r} の直積（すべての組み合わせ）`,
+};
+
 function tablePrimaryName(table: TableRef): string {
   if (table.isDerived) return `${table.table}（派生テーブル）`;
   if (table.alias && table.alias !== table.table) {
@@ -175,13 +189,19 @@ function tableName(_join: JoinEdge, tables: TableRef[], id: string): string {
   return t ? tableLabel(t) : id;
 }
 
+function joinSourceLabels(join: JoinEdge, tables: TableRef[]): string[] {
+  return resolveJoinLayoutSources(join, tables).map((id) => tableName(join, tables, id));
+}
+
 function describeJoin(
   join: JoinEdge,
   tables: TableRef[],
   effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
 ): string {
-  const left = tableName(join, tables, join.sourceId);
+  const sourceLabels = joinSourceLabels(join, tables);
+  const sourcesText = sourceLabels.join('、');
   const right = tableName(join, tables, join.targetId);
+  const left = sourceLabels.length === 1 ? sourceLabels[0]! : sourcesText;
 
   if (effectiveInner) {
     const preservedLabel = join.type === 'LEFT JOIN' ? left : right;
@@ -191,6 +211,11 @@ function describeJoin(
       effectiveInner.nullableTable,
       effectiveInner.reasons,
     );
+  }
+
+  if (sourceLabels.length > 1) {
+    const fn = MULTI_SOURCE_JOIN_SCOPE[join.type] ?? MULTI_SOURCE_JOIN_SCOPE.JOIN;
+    return fn(sourcesText, right, join.condition);
   }
 
   const fn = JOIN_SCOPE[join.type] ?? JOIN_SCOPE.JOIN;

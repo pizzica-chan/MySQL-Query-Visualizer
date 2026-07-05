@@ -61,6 +61,17 @@ describe('query-effect', () => {
       expect(categoriesLine).toBeDefined();
       expect(categoriesLine).not.toContain('は実質 INNER JOIN');
       expect(categoriesLine).toContain('LEFT JOIN');
+      expect(categoriesLine).toContain('p の行をすべて残し c を LEFT JOIN');
+
+      const lmLine = lines.find((l) => l.includes('lm.user_id'));
+      expect(lmLine).toBeDefined();
+      expect(lmLine).toContain('u、o、p');
+      expect(lmLine).toContain('lm');
+
+      const hotLine = lines.find((l) => l.includes('hot.user_id'));
+      expect(hotLine).toBeDefined();
+      expect(hotLine).toContain('u と hot');
+      expect(hotLine).not.toContain('c と hot');
     });
 
     it('UPDATE サンプルでは WHERE によりと説明する', () => {
