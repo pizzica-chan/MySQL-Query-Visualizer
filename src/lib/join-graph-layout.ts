@@ -1,7 +1,7 @@
 import type { JoinEdge, TableRef } from './types';
 
 const LAYOUT_H_GAP = 290;
-const LAYOUT_V_GAP = 112;
+const LAYOUT_V_GAP = 128;
 const LAYOUT_X0 = 40;
 const LAYOUT_Y0 = 72;
 

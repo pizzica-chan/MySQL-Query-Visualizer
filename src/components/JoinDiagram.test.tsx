@@ -61,6 +61,35 @@ describe('JoinDiagram', () => {
     expect(container.textContent).not.toContain('c → hot');
   });
 
+  it('グラフ上の ON 条件表示を切り替えられる', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    mount({
+      tables: result.query.tables,
+      joins: result.query.joins,
+      resolveAliases: false,
+      query: result.query,
+    });
+
+    expect(container.querySelector('.join-diagram-toolbar')).toBeTruthy();
+    const toggle = container.querySelector(
+      '.join-diagram-toolbar-toggle input',
+    ) as HTMLInputElement | null;
+    expect(toggle?.checked).toBe(true);
+
+    act(() => {
+      toggle!.click();
+    });
+    expect(toggle?.checked).toBe(false);
+
+    act(() => {
+      toggle!.click();
+    });
+    expect(toggle?.checked).toBe(true);
+  });
+
   it('SAMPLE_SQL で実質 INNER JOIN の凡例と JOIN 条件バッジを表示する', () => {
     const result = parseMySqlQuery(SAMPLE_SQL);
     expect(result.success).toBe(true);

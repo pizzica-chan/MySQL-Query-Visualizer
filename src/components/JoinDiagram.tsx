@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, useCallback } from 'react';
+import { type MouseEvent, type ReactNode, useCallback, useMemo, useState } from 'react';
 import {
   Background,
   Controls,
@@ -19,6 +19,9 @@ import {
   JOIN_EDGE_COLORS,
   JOIN_MINIMAP_COMPACT_SIZE,
   JOIN_MINIMAP_SIZE,
+  JOIN_NODE_HANDLE_OFFSETS,
+  JOIN_NODE_SOURCE_HANDLES,
+  JOIN_NODE_TARGET_HANDLES,
   MINIMAP_NODE_COLORS,
   minimapNodeColor,
   type JoinFlowNodeData,
@@ -47,7 +50,16 @@ function TableNode({ data: raw }: NodeProps) {
 
   return (
     <div {...selectable}>
-      <Handle type="target" position={Position.Left} className="table-handle" />
+      {JOIN_NODE_TARGET_HANDLES.map((id, index) => (
+        <Handle
+          key={id}
+          id={id}
+          type="target"
+          position={Position.Left}
+          className="table-handle table-handle--distributed"
+          style={{ top: JOIN_NODE_HANDLE_OFFSETS[index] }}
+        />
+      ))}
       <div className="table-node-header">{data.isDerived ? 'DERIVED' : 'TABLE'}</div>
       <div className="table-node-name">{data.table}</div>
       {data.schema && <div className="table-node-schema">{data.schema}</div>}
@@ -61,7 +73,16 @@ function TableNode({ data: raw }: NodeProps) {
           AS <span>{data.alias}</span>
         </div>
       )}
-      <Handle type="source" position={Position.Right} className="table-handle" />
+      {JOIN_NODE_SOURCE_HANDLES.map((id, index) => (
+        <Handle
+          key={id}
+          id={id}
+          type="source"
+          position={Position.Right}
+          className="table-handle table-handle--distributed"
+          style={{ top: JOIN_NODE_HANDLE_OFFSETS[index] }}
+        />
+      ))}
     </div>
   );
 }
@@ -90,6 +111,7 @@ function JoinDiagramFlow({
 }: JoinDiagramFlowProps) {
   const effectiveInnerByJoin = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
   const hasEffectiveInner = effectiveInnerByJoin.size > 0;
+  const [showGraphJoinConditions, setShowGraphJoinConditions] = useState(true);
 
   const { flowNodes, flowEdges, onNodesChange, onEdgesChange } = useJoinFlowState(
     tables,
@@ -97,6 +119,18 @@ function JoinDiagramFlow({
     resolveAliases,
     query,
     compact,
+  );
+
+  const displayEdges = useMemo(
+    () =>
+      flowEdges.map((edge) => ({
+        ...edge,
+        data: {
+          ...edge.data,
+          showGraphJoinCondition: compact ? false : showGraphJoinConditions,
+        },
+      })),
+    [flowEdges, compact, showGraphJoinConditions],
   );
 
   const handleNodeClick = useCallback(
@@ -114,9 +148,22 @@ function JoinDiagramFlow({
         activeSourceSpan={activeSourceSpan}
         onSourceSpanSelect={onSourceSpanSelect}
       >
-        <ReactFlow
+        <div className="join-diagram-flow-wrap">
+          {!compact && joins.length > 0 && (
+            <div className="join-diagram-toolbar">
+              <label className="option-toggle join-diagram-toolbar-toggle">
+                <input
+                  type="checkbox"
+                  checked={showGraphJoinConditions}
+                  onChange={(event) => setShowGraphJoinConditions(event.target.checked)}
+                />
+                <span>グラフ上の ON 条件</span>
+              </label>
+            </div>
+          )}
+          <ReactFlow
           nodes={flowNodes}
-          edges={flowEdges}
+          edges={displayEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={handleNodeClick}
@@ -163,6 +210,7 @@ function JoinDiagramFlow({
             />
           )}
         </ReactFlow>
+        </div>
       </SourceLinkContextProvider>
 
       {hasEffectiveInner && !compact && (

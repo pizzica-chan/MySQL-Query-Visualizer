@@ -28,6 +28,7 @@ export function JoinFlowEdge({
     targetX,
     targetY,
     targetPosition,
+    curvature: edgeData.pathCurvature ?? 0.28,
   });
 
   const color = (style?.stroke as string | undefined) ?? '#64748b';
@@ -35,7 +36,10 @@ export function JoinFlowEdge({
   if (edgeData.effectiveInner) typeLines.push('≈INNER');
   const condition = edgeData.condition?.trim() ?? '';
   const showCondition =
-    !edgeData.compact && !edgeData.isFanInConnector && condition.length > 0;
+    edgeData.showGraphJoinCondition !== false &&
+    !edgeData.compact &&
+    !edgeData.isFanInConnector &&
+    condition.length > 0;
   const showTypeLabel = !edgeData.isFanInConnector;
   const labelOffset = computeJoinEdgeLabelOffset(
     sourceX,

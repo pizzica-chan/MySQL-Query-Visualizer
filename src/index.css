@@ -480,6 +480,34 @@ body {
   min-height: 400px;
 }
 
+.join-diagram-flow-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+}
+
+.join-diagram-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  padding: 6px 10px;
+  background: rgba(40, 44, 52, 0.92);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  backdrop-filter: blur(4px);
+}
+
+.join-diagram-toolbar-toggle {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.join-diagram-flow-wrap .react-flow,
 .join-diagram .react-flow {
   flex: 1;
   min-height: 280px;
@@ -609,6 +637,20 @@ body {
   height: 8px !important;
   background: var(--accent) !important;
   border: 2px solid var(--bg-base) !important;
+}
+
+.table-handle--distributed {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.join-diagram .react-flow__edge:hover path {
+  stroke-width: 3 !important;
+  filter: drop-shadow(0 0 2px rgba(107, 159, 212, 0.45));
+}
+
+.join-diagram .react-flow__edge:hover .join-edge-labels {
+  z-index: 3;
 }
 
 .join-conditions-panel {

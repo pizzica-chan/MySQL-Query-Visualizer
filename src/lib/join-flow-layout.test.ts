@@ -86,6 +86,40 @@ describe('join-flow-layout', () => {
     expect(() => assertJoinFlowLayoutReady(nodes)).not.toThrow();
   });
 
+  it('assignJoinEdgeHandles はファンイン先へ異なる接続ハンドルを割り当てる', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const { edges } = buildJoinFlowLayout(
+      result.query.tables,
+      result.query.joins,
+      false,
+      result.query,
+    );
+    const lm = result.query.tables.find((t) => t.alias === 'lm')!;
+    const lmEdges = edges.filter((e) => e.target === lm.id);
+    expect(lmEdges.length).toBeGreaterThan(1);
+    expect(new Set(lmEdges.map((e) => e.targetHandle)).size).toBeGreaterThan(1);
+    expect(lmEdges.every((e) => (e.data as { pathCurvature?: number }).pathCurvature)).toBe(true);
+  });
+
+  it('assignJoinEdgeHandles は星型の source 側も分散する', () => {
+    const result = parseMySqlQuery(`
+      SELECT * FROM orders o
+      JOIN users u ON o.user_id = u.id
+      JOIN products p ON o.product_id = p.id
+    `);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const { edges } = buildJoinFlowLayout(result.query.tables, result.query.joins, false);
+    const o = result.query.tables[0]!;
+    const fromOrders = edges.filter((e) => e.source === o.id);
+    expect(fromOrders.length).toBe(2);
+    expect(new Set(fromOrders.map((e) => e.sourceHandle)).size).toBe(2);
+  });
+
   it('SAMPLE_SQL で実質 INNER JOIN の LEFT JOIN エッジを破線・≈INNER ラベルで示す', () => {
     const result = parseMySqlQuery(SAMPLE_SQL);
     expect(result.success).toBe(true);
@@ -198,6 +232,16 @@ describe('join-flow-layout', () => {
       const { edges } = buildJoinFlowLayout(sampleTables, sampleJoins, false, undefined, true);
       expect(edges[0]?.data?.compact).toBe(true);
       expect(edges[0]?.data?.condition).toBe('o.user_id = u.id');
+    });
+
+    it('showGraphJoinCondition=false のとき ON 条件ラベル非表示（JoinFlowEdge 用）', () => {
+      const { edges } = buildJoinFlowLayout(sampleTables, sampleJoins, false);
+      expect(edges[0]?.data?.showGraphJoinCondition).toBeUndefined();
+      const hidden = {
+        ...edges[0]!,
+        data: { ...edges[0]!.data, showGraphJoinCondition: false },
+      };
+      expect((hidden.data as { showGraphJoinCondition: boolean }).showGraphJoinCondition).toBe(false);
     });
 
     it('truncateJoinCondition が長い条件を省略する', () => {

@@ -19,6 +19,13 @@ export const MINIMAP_NODE_COLORS = {
 export const JOIN_MINIMAP_SIZE = { width: 120, height: 72 } as const;
 export const JOIN_MINIMAP_COMPACT_SIZE = { width: 56, height: 36 } as const;
 
+/** ノード上下に分散した接続ハンドル（混線低減） */
+export const JOIN_NODE_SOURCE_HANDLES = ['source-top', 'source-mid', 'source-bot'] as const;
+export const JOIN_NODE_TARGET_HANDLES = ['target-top', 'target-mid', 'target-bot'] as const;
+export const JOIN_NODE_HANDLE_OFFSETS = ['22%', '50%', '78%'] as const;
+
+const DEFAULT_PATH_CURVATURE = 0.28;
+
 export const JOIN_EDGE_COLORS: Record<string, string> = {
   'INNER JOIN': '#6b9fd4',
   'LEFT JOIN': '#7db88a',
@@ -41,6 +48,10 @@ export interface JoinFlowEdgeData extends Record<string, unknown> {
   sourceSpan?: SourceSpan;
   /** ファンインの補助エッジ（ラベルなし） */
   isFanInConnector?: boolean;
+  /** ベジェ曲線の曲率 — 混線回避用 */
+  pathCurvature?: number;
+  /** グラフ上の ON 条件ラベルを表示する */
+  showGraphJoinCondition?: boolean;
 }
 
 export const EFFECTIVE_INNER_EDGE_STYLE = {
@@ -117,6 +128,72 @@ export function minimapNodeColor(node: Node): string {
   return data.isDerived ? MINIMAP_NODE_COLORS.derived : MINIMAP_NODE_COLORS.table;
 }
 
+function nodeCenterY(node: Node | undefined): number {
+  if (!node) return 0;
+  return node.position.y + (node.height ?? 88) / 2;
+}
+
+function pickHandleSlot(index: number, count: number, slotCount: number): number {
+  if (count <= 1) return Math.floor(slotCount / 2);
+  return Math.round((index / (count - 1)) * (slotCount - 1));
+}
+
+/** 同一ノードに集中するエッジを上下ハンドルへ分散 */
+export function assignJoinEdgeHandles(edges: Edge[], nodes: Node[]): Edge[] {
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const centerY = (nodeId: string) => nodeCenterY(nodeById.get(nodeId));
+
+  const byTarget = new Map<string, Edge[]>();
+  const bySource = new Map<string, Edge[]>();
+  for (const edge of edges) {
+    const tg = byTarget.get(edge.target) ?? [];
+    tg.push(edge);
+    byTarget.set(edge.target, tg);
+    const sg = bySource.get(edge.source) ?? [];
+    sg.push(edge);
+    bySource.set(edge.source, sg);
+  }
+
+  for (const group of byTarget.values()) {
+    group.sort((a, b) => centerY(a.source) - centerY(b.source));
+  }
+  for (const group of bySource.values()) {
+    group.sort((a, b) => centerY(a.target) - centerY(b.target));
+  }
+
+  return edges.map((edge) => {
+    const targetGroup = byTarget.get(edge.target) ?? [edge];
+    const sourceGroup = bySource.get(edge.source) ?? [edge];
+    const targetIndex = targetGroup.findIndex((e) => e.id === edge.id);
+    const sourceIndex = sourceGroup.findIndex((e) => e.id === edge.id);
+    const targetSlot = pickHandleSlot(
+      targetIndex,
+      targetGroup.length,
+      JOIN_NODE_TARGET_HANDLES.length,
+    );
+    const sourceSlot = pickHandleSlot(
+      sourceIndex,
+      sourceGroup.length,
+      JOIN_NODE_SOURCE_HANDLES.length,
+    );
+    const targetSpread = targetIndex - (targetGroup.length - 1) / 2;
+    const sourceSpread = sourceIndex - (sourceGroup.length - 1) / 2;
+
+    return {
+      ...edge,
+      targetHandle: JOIN_NODE_TARGET_HANDLES[targetSlot],
+      sourceHandle: JOIN_NODE_SOURCE_HANDLES[sourceSlot],
+      data: {
+        ...edge.data,
+        pathCurvature:
+          DEFAULT_PATH_CURVATURE +
+          Math.abs(targetSpread) * 0.05 +
+          Math.abs(sourceSpread) * 0.04,
+      },
+    };
+  });
+}
+
 /** JOIN 図のノード・エッジを生成（純粋関数 — コンポーネント外でテスト可能） */
 export function buildJoinFlowLayout(
   tables: TableRef[],
@@ -187,7 +264,7 @@ export function buildJoinFlowLayout(
     }
   });
 
-  return { nodes, edges };
+  return { nodes, edges: assignJoinEdgeHandles(edges, nodes) };
 }
 
 /** ミニマップ表示の前提条件（回帰テスト用） */
