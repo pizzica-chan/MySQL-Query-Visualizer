@@ -120,6 +120,27 @@ describe('join-flow-layout', () => {
     expect(new Set(fromOrders.map((e) => e.sourceHandle)).size).toBe(2);
   });
 
+  it('ファンイン補助線も主エッジと同じ sourceSpan・interactionWidth を持つ', () => {
+    const result = parseMySqlQuery(`
+      SELECT *
+      FROM users u
+      JOIN orders o ON u.id = o.user_id
+      JOIN products p ON u.id = p.owner_id
+      JOIN summary s ON u.score = s.u_score AND o.total = s.o_total AND p.cnt = s.p_cnt
+    `);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const sJoin = result.query.joins.find((j) => j.targetId === result.query.tables.find((t) => t.alias === 's')!.id)!;
+    const { edges } = buildJoinFlowLayout(result.query.tables, result.query.joins, false, result.query);
+    const sEdges = edges.filter((e) => e.target === sJoin.targetId);
+    const primary = sEdges.find((e) => e.id === sJoin.id);
+    const fanIn = sEdges.find((e) => e.data?.isFanInConnector);
+    expect(primary?.interactionWidth).toBe(24);
+    expect(fanIn?.interactionWidth).toBe(24);
+    expect(fanIn?.data?.sourceSpan).toEqual(sJoin.sourceSpan);
+  });
+
   it('SAMPLE_SQL で実質 INNER JOIN の LEFT JOIN エッジを破線・≈INNER ラベルで示す', () => {
     const result = parseMySqlQuery(SAMPLE_SQL);
     expect(result.success).toBe(true);

@@ -251,13 +251,14 @@ export function buildJoinFlowLayout(
           ...(isPrimary && effectiveInner ? EFFECTIVE_INNER_EDGE_STYLE : {}),
         },
         markerEnd: { type: MarkerType.ArrowClosed, color },
+        interactionWidth: 24,
         data: {
           condition: j.condition,
           joinType: j.type,
           effectiveInner: isPrimary ? effectiveInner : false,
           compact,
           labelOffsetFlip: joinIndex % 2 === 0 ? 1 : -1,
-          sourceSpan: isPrimary ? j.sourceSpan : undefined,
+          sourceSpan: j.sourceSpan,
           isFanInConnector: !isPrimary,
         } satisfies JoinFlowEdgeData,
       });

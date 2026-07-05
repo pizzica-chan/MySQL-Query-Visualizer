@@ -1,6 +1,7 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
 import { useSourceLink } from '../contexts/source-link-context';
 import { sourceSelectableProps } from '../lib/source-link';
+import { spansEqual } from '../lib/source-span';
 import {
   truncateJoinCondition,
   computeJoinEdgeLabelOffset,
@@ -18,6 +19,7 @@ export function JoinFlowEdge({
   style,
   markerEnd,
   data,
+  interactionWidth = 20,
 }: EdgeProps) {
   const { activeSourceSpan, onSourceSpanSelect } = useSourceLink();
   const edgeData = (data ?? {}) as JoinFlowEdgeData;
@@ -52,6 +54,7 @@ export function JoinFlowEdge({
   const labelPosX = labelX + labelOffset.x;
   const labelPosY = labelY + labelOffset.y;
   const interactive = Boolean(onSourceSpanSelect && edgeData.sourceSpan);
+  const isActive = interactive && spansEqual(activeSourceSpan, edgeData.sourceSpan);
   const typeLabelClass = `join-edge-type-label${
     edgeData.effectiveInner ? ' join-edge-type-label--effective-inner' : ''
   }`;
@@ -75,7 +78,14 @@ export function JoinFlowEdge({
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={style}
+        interactionWidth={interactive ? interactionWidth : 0}
+        className={isActive ? 'join-edge-path--active' : undefined}
+      />
       <EdgeLabelRenderer>
         {showTypeLabel && (
         <div

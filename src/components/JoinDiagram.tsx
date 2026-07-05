@@ -6,6 +6,7 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  type Edge,
   type Node,
   type NodeProps,
 } from '@xyflow/react';
@@ -25,6 +26,7 @@ import {
   MINIMAP_NODE_COLORS,
   minimapNodeColor,
   type JoinFlowNodeData,
+  type JoinFlowEdgeData,
 } from '../lib/join-flow-layout';
 import { sourceSelectableProps, toggleSourceSpan, type OnSourceSpanSelect } from '../lib/source-link';
 import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from '../lib/types';
@@ -142,6 +144,15 @@ function JoinDiagramFlow({
     [activeSourceSpan, onSourceSpanSelect],
   );
 
+  const handleEdgeClick = useCallback(
+    (_event: MouseEvent, edge: Edge) => {
+      if (!onSourceSpanSelect) return;
+      const span = (edge.data as JoinFlowEdgeData | undefined)?.sourceSpan;
+      toggleSourceSpan(span, activeSourceSpan, onSourceSpanSelect);
+    },
+    [activeSourceSpan, onSourceSpanSelect],
+  );
+
   return (
     <div className={`join-diagram${compact ? ' join-diagram--compact' : ''}`}>
       <SourceLinkContextProvider
@@ -167,6 +178,7 @@ function JoinDiagramFlow({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={handleNodeClick}
+          onEdgeClick={onSourceSpanSelect ? handleEdgeClick : undefined}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           fitView
