@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { JoinDiagram } from './components/JoinDiagram';
+import { QueryEffectBanner } from './components/QueryEffectPanel';
 import { QuerySummary } from './components/QuerySummary';
 import { SqlEditor } from './components/SqlEditor';
 import { SubqueryDetail } from './components/SubqueryDetail';
@@ -16,9 +17,10 @@ import {
 import { collectAllNestedQueries, countNestedItems, hasUnion } from './lib/query-utils';
 import type { ParsedQuery } from './lib/types';
 
-type TabId = 'joins' | 'where' | 'summary' | 'nested';
+type TabId = 'effect' | 'joins' | 'where' | 'summary' | 'nested';
 
 const BASE_TABS: { id: TabId; label: string }[] = [
+  { id: 'effect', label: '対象レコード' },
   { id: 'joins', label: 'JOIN 図' },
   { id: 'where', label: 'WHERE / HAVING' },
   { id: 'summary', label: '概要' },
@@ -150,6 +152,7 @@ export default function App() {
               </nav>
 
               <div className="tab-content">
+                {activeTab === 'effect' && <QueryEffectBanner query={displayQuery} />}
                 {activeTab === 'joins' &&
                   (hasUnion(displayQuery) && displayQuery.unionBranches ? (
                     <UnionJoinPanel
