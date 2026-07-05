@@ -4,24 +4,31 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
-/** file:// 直開き — ビルド後にインライン script の type=module を外す */
-function stripInlineModuleType(): Plugin {
+/** file:// 直開き — インライン script を #root の後ろへ移動し type=module を外す */
+function finalizeSingleFileHtml(): Plugin {
   return {
-    name: 'strip-inline-module-type',
+    name: 'finalize-single-file-html',
     closeBundle() {
       const htmlPath = resolve(process.cwd(), 'dist/index.html');
-      const html = readFileSync(htmlPath, 'utf8');
-      writeFileSync(
-        htmlPath,
-        html.replace(/<script type="module" crossorigin>/g, '<script>'),
+      let html = readFileSync(htmlPath, 'utf8');
+
+      const scriptMatch = html.match(/<script(?:\s[^>]*)?>[\s\S]*?<\/script>/);
+      if (!scriptMatch) return;
+
+      html = html.replace(scriptMatch[0], '');
+      html = html.replace(
+        /<div id="root"><\/div>/,
+        `<div id="root"></div>\n    ${scriptMatch[0].replace(/<script(?:\s[^>]*)?>/, '<script>')}`,
       );
+
+      writeFileSync(htmlPath, html);
     },
   };
 }
 
 export default defineConfig({
   base: './',
-  plugins: [react(), viteSingleFile({ removeViteModuleLoader: true }), stripInlineModuleType()],
+  plugins: [react(), viteSingleFile({ removeViteModuleLoader: true }), finalizeSingleFileHtml()],
   build: {
     // file:// 直開き — 外部 module スクリプトを使わず IIFE を index.html にインライン
     cssCodeSplit: false,

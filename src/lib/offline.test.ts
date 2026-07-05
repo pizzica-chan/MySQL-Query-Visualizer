@@ -69,6 +69,11 @@ describe('オフライン実行（外部通信なし）', () => {
       expect(html).not.toMatch(/<script[^>]+type="module"[^>]+src=/i);
       expect(html).not.toMatch(/<script[^>]+src=["']\.\/assets\//i);
       expect(html).toMatch(/<script>var /);
+
+      const rootIdx = html.indexOf('id="root"');
+      const scriptIdx = html.indexOf('<script');
+      expect(rootIdx).toBeGreaterThan(-1);
+      expect(scriptIdx).toBeGreaterThan(rootIdx);
     });
   });
 
