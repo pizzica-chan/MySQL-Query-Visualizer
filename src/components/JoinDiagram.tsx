@@ -12,10 +12,18 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
 import { JoinFlowEdge } from './JoinFlowEdge';
+import { JoinFocusContextProvider, useJoinFocus } from '../contexts/join-focus-context';
 import { SourceLinkContext, useSourceLink } from '../contexts/source-link-context';
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
 import { effectiveInnerAnalysisByJoinId } from '../lib/join-effective-inner';
 import { formatJoinTableLink } from '../lib/join-graph-layout';
+import {
+  computeJoinFocusHighlight,
+  joinFocusNodeClass,
+  joinIdFromEdgeId,
+  toggleJoinDiagramFocus,
+  type JoinDiagramFocus,
+} from '../lib/join-diagram-focus';
 import {
   JOIN_EDGE_COLORS,
   JOIN_MINIMAP_COMPACT_SIZE,
@@ -45,12 +53,26 @@ interface JoinDiagramProps {
 
 const JOIN_COLORS = JOIN_EDGE_COLORS;
 
-function TableNode({ data: raw }: NodeProps) {
+function TableNode({ id, data: raw }: NodeProps) {
   const data = raw as JoinFlowNodeData;
   const { activeSourceSpan, onSourceSpanSelect } = useSourceLink();
-  const selectable = onSourceSpanSelect
-    ? sourceSelectableProps(data.sourceSpan, activeSourceSpan, onSourceSpanSelect, 'table-node nopan')
-    : { className: 'table-node' };
+  const { highlight, selectNode } = useJoinFocus();
+  const focusClass = joinFocusNodeClass(id, highlight);
+  const baseProps = onSourceSpanSelect
+    ? sourceSelectableProps(
+        data.sourceSpan,
+        activeSourceSpan,
+        onSourceSpanSelect,
+        `table-node nopan${focusClass ? ` ${focusClass}` : ''}`,
+      )
+    : { className: `table-node${focusClass ? ` ${focusClass}` : ''}` };
+  const selectable = {
+    ...baseProps,
+    onClick: (event: MouseEvent) => {
+      selectNode(id);
+      (baseProps as { onClick?: (event: MouseEvent) => void }).onClick?.(event);
+    },
+  };
 
   return (
     <div {...selectable}>
@@ -118,9 +140,14 @@ function JoinDiagramFlow({
   const effectiveInnerByJoin = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
   const hasEffectiveInner = effectiveInnerByJoin.size > 0;
   const [showGraphJoinConditions, setShowGraphJoinConditions] = useState(true);
+  const [joinFocus, setJoinFocus] = useState<JoinDiagramFocus | null>(null);
 
   const { flowNodes, flowEdges, onNodesChange, onEdgesChange, layoutKey, resetLayout } =
     useJoinFlowState(tables, joins, resolveAliases, query, compact);
+
+  useEffect(() => {
+    setJoinFocus(null);
+  }, [layoutKey]);
 
   const reactFlowRef = useRef<{ fitView: (options?: { padding?: number }) => Promise<boolean> } | null>(
     null,
@@ -165,32 +192,67 @@ function JoinDiagramFlow({
     [flowEdges, compact, showGraphJoinConditions],
   );
 
+  const joinFocusHighlight = useMemo(
+    () =>
+      computeJoinFocusHighlight(
+        joinFocus,
+        displayEdges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+      ),
+    [joinFocus, displayEdges],
+  );
+
   const handleNodeClick = useCallback(
     (_event: MouseEvent, node: Node) => {
-      if (!onSourceSpanSelect) return;
-      const span = (node.data as JoinFlowNodeData).sourceSpan;
-      toggleSourceSpan(span, activeSourceSpan, onSourceSpanSelect);
+      if (onSourceSpanSelect) return;
+      setJoinFocus((current) =>
+        toggleJoinDiagramFocus(current, { type: 'node', nodeId: node.id }),
+      );
     },
-    [activeSourceSpan, onSourceSpanSelect],
+    [onSourceSpanSelect],
   );
+
+  const selectNode = useCallback((nodeId: string) => {
+    setJoinFocus((current) => toggleJoinDiagramFocus(current, { type: 'node', nodeId }));
+  }, []);
+
+  const selectEdge = useCallback((edgeId: string) => {
+    setJoinFocus((current) =>
+      toggleJoinDiagramFocus(current, {
+        type: 'edge',
+        edgeId,
+        joinId: joinIdFromEdgeId(edgeId),
+      }),
+    );
+  }, []);
 
   const handleEdgeClick = useCallback(
     (_event: MouseEvent, edge: Edge) => {
+      selectEdge(edge.id);
       if (!onSourceSpanSelect) return;
       const span = (edge.data as JoinFlowEdgeData | undefined)?.sourceSpan;
       toggleSourceSpan(span, activeSourceSpan, onSourceSpanSelect);
     },
-    [activeSourceSpan, onSourceSpanSelect],
+    [activeSourceSpan, onSourceSpanSelect, selectEdge],
   );
+
+  const handlePaneClick = useCallback(() => {
+    setJoinFocus(null);
+  }, []);
 
   return (
     <div
-      className={`join-diagram${compact ? ' join-diagram--compact' : ' join-diagram--draggable'}`}
+      className={`join-diagram${compact ? ' join-diagram--compact' : ' join-diagram--draggable'}${joinFocus ? ' join-diagram--has-focus' : ''}`}
     >
       <SourceLinkContextProvider
         activeSourceSpan={activeSourceSpan}
         onSourceSpanSelect={onSourceSpanSelect}
       >
+        <JoinFocusContextProvider
+          highlight={joinFocusHighlight}
+          hasFocus={joinFocus !== null}
+          selectNode={selectNode}
+          selectEdge={selectEdge}
+        >
         <div className="join-diagram-flow-wrap">
           {!compact && joins.length > 0 && (
             <div className="join-diagram-toolbar">
@@ -218,7 +280,8 @@ function JoinDiagramFlow({
           onEdgesChange={onEdgesChange}
           onInit={handleInit}
           onNodeClick={handleNodeClick}
-          onEdgeClick={onSourceSpanSelect ? handleEdgeClick : undefined}
+          onEdgeClick={handleEdgeClick}
+          onPaneClick={handlePaneClick}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           minZoom={0.4}
@@ -262,6 +325,7 @@ function JoinDiagramFlow({
           )}
         </ReactFlow>
         </div>
+        </JoinFocusContextProvider>
       </SourceLinkContextProvider>
 
       {hasEffectiveInner && !compact && (

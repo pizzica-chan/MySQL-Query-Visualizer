@@ -571,8 +571,59 @@ body {
   cursor: pointer;
 }
 
-.join-diagram .react-flow__edge-path.join-edge-path--active {
+.join-diagram .react-flow__edge-path.join-edge-path--source-linked {
   filter: drop-shadow(0 0 3px rgba(107, 159, 212, 0.85));
+}
+
+/* JOIN 図フォーカス — primary = クリック対象、related = 関連オブジェクト */
+.join-diagram--has-focus .react-flow__node:not(:has(.join-focus--primary)):not(:has(.join-focus--related)) {
+  opacity: 0.42;
+}
+
+.join-diagram--has-focus .react-flow__edge-path:not(.join-focus--primary):not(.join-focus--related) {
+  opacity: 0.3;
+}
+
+.table-node.join-focus--primary {
+  border-color: var(--accent);
+  border-left-width: 4px;
+  box-shadow:
+    0 0 0 2px rgba(107, 159, 212, 0.55),
+    0 4px 14px rgba(107, 159, 212, 0.28);
+}
+
+.table-node.join-focus--related {
+  border-color: rgba(107, 159, 212, 0.75);
+  border-left-color: rgba(107, 159, 212, 0.85);
+  box-shadow: 0 0 0 1px rgba(107, 159, 212, 0.35);
+}
+
+.join-diagram .react-flow__edge-path.join-focus--primary {
+  stroke-width: 3.5 !important;
+  filter: drop-shadow(0 0 4px rgba(107, 159, 212, 0.95));
+}
+
+.join-diagram .react-flow__edge-path.join-focus--related {
+  stroke-width: 3 !important;
+  filter: drop-shadow(0 0 2px rgba(107, 159, 212, 0.55));
+}
+
+.join-edge-type-label.join-focus--primary,
+.join-edge-condition-label.join-focus--primary {
+  box-shadow:
+    0 0 0 2px rgba(107, 159, 212, 0.65),
+    0 2px 8px rgba(107, 159, 212, 0.35);
+}
+
+.join-edge-type-label.join-focus--related,
+.join-edge-condition-label.join-focus--related {
+  box-shadow: 0 0 0 1px rgba(107, 159, 212, 0.45);
+  opacity: 0.95;
+}
+
+.join-diagram--has-focus .join-edge-type-label:not(.join-focus--primary):not(.join-focus--related),
+.join-diagram--has-focus .join-edge-condition-label:not(.join-focus--primary):not(.join-focus--related) {
+  opacity: 0.4;
 }
 
 .join-edge-type-label {
