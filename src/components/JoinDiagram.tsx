@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type MouseEvent, type ReactNode, useCallback } from 'react';
 import {
   Background,
   Controls,
@@ -6,6 +6,7 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  type Node,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
@@ -19,7 +20,7 @@ import {
   minimapNodeColor,
   type JoinFlowNodeData,
 } from '../lib/join-flow-layout';
-import { sourceSelectableProps, type OnSourceSpanSelect } from '../lib/source-link';
+import { sourceSelectableProps, toggleSourceSpan, type OnSourceSpanSelect } from '../lib/source-link';
 import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from '../lib/types';
 
 interface JoinDiagramProps {
@@ -38,7 +39,7 @@ function TableNode({ data: raw }: NodeProps) {
   const data = raw as JoinFlowNodeData;
   const { activeSourceSpan, onSourceSpanSelect } = useSourceLink();
   const selectable = onSourceSpanSelect
-    ? sourceSelectableProps(data.sourceSpan, activeSourceSpan, onSourceSpanSelect, 'table-node')
+    ? sourceSelectableProps(data.sourceSpan, activeSourceSpan, onSourceSpanSelect, 'table-node nopan')
     : { className: 'table-node' };
 
   return (
@@ -95,6 +96,15 @@ function JoinDiagramFlow({
     compact,
   );
 
+  const handleNodeClick = useCallback(
+    (_event: MouseEvent, node: Node) => {
+      if (!onSourceSpanSelect) return;
+      const span = (node.data as JoinFlowNodeData).sourceSpan;
+      toggleSourceSpan(span, activeSourceSpan, onSourceSpanSelect);
+    },
+    [activeSourceSpan, onSourceSpanSelect],
+  );
+
   return (
     <div className={`join-diagram${compact ? ' join-diagram--compact' : ''}`}>
       <SourceLinkContextProvider
@@ -106,6 +116,7 @@ function JoinDiagramFlow({
           edges={flowEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onNodeClick={handleNodeClick}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           fitView

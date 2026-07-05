@@ -506,6 +506,19 @@ body {
   pointer-events: none;
 }
 
+.join-edge-labels--interactive {
+  pointer-events: auto;
+}
+
+.join-edge-type-label.source-selectable,
+.join-edge-condition-label.source-selectable {
+  cursor: pointer;
+}
+
+.join-diagram .react-flow__node:has(.table-node.source-selectable) {
+  cursor: pointer;
+}
+
 .join-edge-type-label {
   display: flex;
   flex-direction: column;

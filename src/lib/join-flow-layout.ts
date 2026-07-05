@@ -29,6 +29,8 @@ export interface JoinFlowEdgeData extends Record<string, unknown> {
   compact?: boolean;
   /** エッジラベルの垂直オフセット方向（1 または -1） */
   labelOffsetFlip?: 1 | -1;
+  /** ON 条件の SQL 位置 */
+  sourceSpan?: SourceSpan;
 }
 
 export const EFFECTIVE_INNER_EDGE_STYLE = {
@@ -160,6 +162,7 @@ export function buildJoinFlowLayout(
         effectiveInner,
         compact,
         labelOffsetFlip: joinIndex % 2 === 0 ? 1 : -1,
+        sourceSpan: j.sourceSpan,
       } satisfies JoinFlowEdgeData,
     };
   });

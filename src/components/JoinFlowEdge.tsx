@@ -1,5 +1,11 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
-import { truncateJoinCondition, computeJoinEdgeLabelOffset, type JoinFlowEdgeData } from '../lib/join-flow-layout';
+import { useSourceLink } from '../contexts/source-link-context';
+import { sourceSelectableProps } from '../lib/source-link';
+import {
+  truncateJoinCondition,
+  computeJoinEdgeLabelOffset,
+  type JoinFlowEdgeData,
+} from '../lib/join-flow-layout';
 
 export function JoinFlowEdge({
   id,
@@ -13,6 +19,7 @@ export function JoinFlowEdge({
   markerEnd,
   data,
 }: EdgeProps) {
+  const { activeSourceSpan, onSourceSpanSelect } = useSourceLink();
   const edgeData = (data ?? {}) as JoinFlowEdgeData;
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
@@ -38,23 +45,40 @@ export function JoinFlowEdge({
   );
   const labelPosX = labelX + labelOffset.x;
   const labelPosY = labelY + labelOffset.y;
+  const interactive = Boolean(onSourceSpanSelect && edgeData.sourceSpan);
+  const typeLabelClass = `join-edge-type-label${
+    edgeData.effectiveInner ? ' join-edge-type-label--effective-inner' : ''
+  }`;
+  const labelColorStyle = { borderColor: color, color };
+  const typeLabelProps = interactive
+    ? sourceSelectableProps(
+        edgeData.sourceSpan,
+        activeSourceSpan,
+        onSourceSpanSelect!,
+        `${typeLabelClass} nopan`,
+      )
+    : { className: typeLabelClass };
+  const conditionLabelProps = interactive
+    ? sourceSelectableProps(
+        edgeData.sourceSpan,
+        activeSourceSpan,
+        onSourceSpanSelect!,
+        'join-edge-condition-label nopan',
+      )
+    : { className: 'join-edge-condition-label' };
 
   return (
     <>
       <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
       <EdgeLabelRenderer>
         <div
-          className="join-edge-labels nodrag nopan"
+          className={`join-edge-labels nodrag nopan${interactive ? ' join-edge-labels--interactive' : ''}`}
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelPosX}px,${labelPosY}px)`,
-            pointerEvents: 'none',
           }}
         >
-          <div
-            className={`join-edge-type-label${edgeData.effectiveInner ? ' join-edge-type-label--effective-inner' : ''}`}
-            style={{ borderColor: color, color }}
-          >
+          <div {...typeLabelProps} style={labelColorStyle}>
             {typeLines.map((line) => (
               <span key={line} className="join-edge-type-line">
                 {line}
@@ -62,7 +86,7 @@ export function JoinFlowEdge({
             ))}
           </div>
           {showCondition && (
-            <div className="join-edge-condition-label">{truncateJoinCondition(condition)}</div>
+            <div {...conditionLabelProps}>{truncateJoinCondition(condition)}</div>
           )}
         </div>
       </EdgeLabelRenderer>
