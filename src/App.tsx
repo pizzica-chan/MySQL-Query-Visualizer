@@ -166,11 +166,15 @@ export default function App() {
 
               <div className="tab-content">
                 {activeTab === 'effect' && <QueryEffectBanner query={displayQuery} />}
-                {activeTab === 'joins' &&
-                  (hasUnion(displayQuery) && displayQuery.unionBranches ? (
+                <div
+                  className={`tab-pane${activeTab === 'joins' ? '' : ' tab-pane--hidden'}`}
+                  aria-hidden={activeTab !== 'joins'}
+                >
+                  {hasUnion(displayQuery) && displayQuery.unionBranches ? (
                     <UnionJoinPanel
                       branches={displayQuery.unionBranches}
                       resolveAliases={resolveAliases}
+                      isActive={activeTab === 'joins'}
                       {...sourceLinkProps}
                     />
                   ) : (
@@ -179,9 +183,11 @@ export default function App() {
                       joins={displayQuery.joins}
                       resolveAliases={resolveAliases}
                       query={displayQuery}
+                      isActive={activeTab === 'joins'}
                       {...sourceLinkProps}
                     />
-                  ))}
+                  )}
+                </div>
                 {activeTab === 'where' &&
                   (hasUnion(displayQuery) && displayQuery.unionBranches ? (
                     <UnionWherePanel

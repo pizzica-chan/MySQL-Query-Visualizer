@@ -38,6 +38,7 @@ describe('JoinDiagram', () => {
     ).not.toThrow();
 
     expect(container.querySelector('.join-diagram')).toBeTruthy();
+    expect(container.querySelector('.join-diagram--draggable')).toBeTruthy();
     expect(container.querySelector('.react-flow')).toBeTruthy();
     expect(container.querySelector('.react-flow__minimap')).toBeTruthy();
   });
@@ -74,6 +75,7 @@ describe('JoinDiagram', () => {
     });
 
     expect(container.querySelector('.join-diagram-toolbar')).toBeTruthy();
+    expect(container.querySelector('.join-diagram-toolbar-btn')?.textContent).toContain('配置をリセット');
     const toggle = container.querySelector(
       '.join-diagram-toolbar-toggle input',
     ) as HTMLInputElement | null;
@@ -143,6 +145,7 @@ describe('JoinDiagram', () => {
 
     const minimap = container.querySelector('.join-minimap--compact') as HTMLElement | null;
     expect(minimap).toBeTruthy();
+    expect(container.querySelector('.join-diagram--draggable')).toBeFalsy();
     expect(minimap?.style.width).toBe(`${JOIN_MINIMAP_COMPACT_SIZE.width}px`);
     expect(minimap?.style.height).toBe(`${JOIN_MINIMAP_COMPACT_SIZE.height}px`);
   });

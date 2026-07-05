@@ -11,6 +11,7 @@ interface UnionPanelProps {
   resolveAliases: boolean;
   activeSourceSpan?: SourceSpan | null;
   onSourceSpanSelect?: OnSourceSpanSelect;
+  isActive?: boolean;
 }
 
 interface NestedPanelProps {
@@ -105,6 +106,7 @@ export function UnionJoinPanel({
   resolveAliases,
   activeSourceSpan,
   onSourceSpanSelect,
+  isActive = true,
 }: UnionPanelProps) {
   return (
     <UnionBranchShell
@@ -119,6 +121,7 @@ export function UnionJoinPanel({
           query={branch.query}
           activeSourceSpan={activeSourceSpan}
           onSourceSpanSelect={onSourceSpanSelect}
+          isActive={isActive}
         />
       )}
       renderBranch={(branch, index) => (
@@ -131,6 +134,7 @@ export function UnionJoinPanel({
             query={branch.query}
             activeSourceSpan={activeSourceSpan}
             onSourceSpanSelect={onSourceSpanSelect}
+            isActive={isActive}
           />
         </div>
       )}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useEdgesState, useNodesState, type Edge, type Node } from '@xyflow/react';
 import { buildJoinFlowLayout, computeJoinLayoutKey } from '../lib/join-flow-layout';
 import type { ParsedQuery } from '../lib/types';
@@ -9,6 +9,7 @@ export interface UseJoinFlowStateResult {
   flowEdges: Edge[];
   onNodesChange: ReturnType<typeof useNodesState>[2];
   onEdgesChange: ReturnType<typeof useEdgesState>[2];
+  resetLayout: () => void;
 }
 
 /**
@@ -47,5 +48,10 @@ export function useJoinFlowState(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- nodes/edges は layoutKey と同期した useMemo 結果
   }, [layoutKey, setFlowNodes, setFlowEdges]);
 
-  return { layoutKey, flowNodes, flowEdges, onNodesChange, onEdgesChange };
+  const resetLayout = useCallback(() => {
+    setFlowNodes(nodes);
+    setFlowEdges(edges);
+  }, [nodes, edges, setFlowNodes, setFlowEdges]);
+
+  return { layoutKey, flowNodes, flowEdges, onNodesChange, onEdgesChange, resetLayout };
 }

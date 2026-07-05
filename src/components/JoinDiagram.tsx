@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, useCallback, useMemo, useState } from 'react';
+import { type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background,
   Controls,
@@ -39,6 +39,8 @@ interface JoinDiagramProps {
   query?: ParsedQuery;
   activeSourceSpan?: SourceSpan | null;
   onSourceSpanSelect?: OnSourceSpanSelect;
+  /** false のとき非表示だがマウントは維持（タブ切替で配置を保持） */
+  isActive?: boolean;
 }
 
 const JOIN_COLORS = JOIN_EDGE_COLORS;
@@ -100,6 +102,7 @@ interface JoinDiagramFlowProps {
   query?: ParsedQuery;
   activeSourceSpan?: SourceSpan | null;
   onSourceSpanSelect?: OnSourceSpanSelect;
+  isActive: boolean;
 }
 
 function JoinDiagramFlow({
@@ -110,18 +113,45 @@ function JoinDiagramFlow({
   query,
   activeSourceSpan = null,
   onSourceSpanSelect,
+  isActive = true,
 }: JoinDiagramFlowProps) {
   const effectiveInnerByJoin = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
   const hasEffectiveInner = effectiveInnerByJoin.size > 0;
   const [showGraphJoinConditions, setShowGraphJoinConditions] = useState(true);
 
-  const { flowNodes, flowEdges, onNodesChange, onEdgesChange } = useJoinFlowState(
-    tables,
-    joins,
-    resolveAliases,
-    query,
-    compact,
+  const { flowNodes, flowEdges, onNodesChange, onEdgesChange, layoutKey, resetLayout } =
+    useJoinFlowState(tables, joins, resolveAliases, query, compact);
+
+  const reactFlowRef = useRef<{ fitView: (options?: { padding?: number }) => Promise<boolean> } | null>(
+    null,
   );
+
+  const fitDiagramView = useCallback(() => {
+    requestAnimationFrame(() => {
+      void reactFlowRef.current?.fitView({ padding: 0.3 });
+    });
+  }, []);
+
+  const lastFitLayoutKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isActive) return;
+    if (lastFitLayoutKey.current === layoutKey) return;
+    lastFitLayoutKey.current = layoutKey;
+    fitDiagramView();
+  }, [layoutKey, isActive, fitDiagramView]);
+
+  const handleInit = useCallback(
+    (instance: { fitView: (options?: { padding?: number }) => Promise<boolean> }) => {
+      reactFlowRef.current = instance;
+    },
+    [],
+  );
+
+  const handleResetLayout = useCallback(() => {
+    resetLayout();
+    fitDiagramView();
+  }, [resetLayout, fitDiagramView]);
 
   const displayEdges = useMemo(
     () =>
@@ -154,7 +184,9 @@ function JoinDiagramFlow({
   );
 
   return (
-    <div className={`join-diagram${compact ? ' join-diagram--compact' : ''}`}>
+    <div
+      className={`join-diagram${compact ? ' join-diagram--compact' : ' join-diagram--draggable'}`}
+    >
       <SourceLinkContextProvider
         activeSourceSpan={activeSourceSpan}
         onSourceSpanSelect={onSourceSpanSelect}
@@ -162,6 +194,13 @@ function JoinDiagramFlow({
         <div className="join-diagram-flow-wrap">
           {!compact && joins.length > 0 && (
             <div className="join-diagram-toolbar">
+              <button
+                type="button"
+                className="btn btn--ghost join-diagram-toolbar-btn"
+                onClick={handleResetLayout}
+              >
+                配置をリセット
+              </button>
               <label className="option-toggle join-diagram-toolbar-toggle">
                 <input
                   type="checkbox"
@@ -174,21 +213,21 @@ function JoinDiagramFlow({
           )}
           <ReactFlow
           nodes={flowNodes}
-          edges={displayEdges}
+          edges={displayEdges as Edge[]}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onInit={handleInit}
           onNodeClick={handleNodeClick}
           onEdgeClick={onSourceSpanSelect ? handleEdgeClick : undefined}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.3 }}
           minZoom={0.4}
           maxZoom={1.5}
           proOptions={{ hideAttribution: true }}
-          nodesDraggable={false}
+          nodesDraggable={!compact}
           nodesConnectable={false}
           elementsSelectable={false}
+          nodeClickDistance={6}
         >
           <Background color="#3a4049" gap={20} />
           <Controls showInteractive={false} />
@@ -298,6 +337,7 @@ export function JoinDiagram({
   query,
   activeSourceSpan = null,
   onSourceSpanSelect,
+  isActive = true,
 }: JoinDiagramProps) {
   if (tables.length === 0) {
     return (
@@ -316,6 +356,7 @@ export function JoinDiagram({
       query={query}
       activeSourceSpan={activeSourceSpan}
       onSourceSpanSelect={onSourceSpanSelect}
+      isActive={isActive}
     />
   );
 }
