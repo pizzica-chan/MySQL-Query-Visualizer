@@ -5,8 +5,8 @@ import {
   computeJoinLayoutParent,
   computeJoinNodePositions,
   getTableIdsReferencedInJoin,
-  resolveJoinDisplaySource,
   resolveJoinLayoutAnchor,
+  resolveJoinLayoutSources,
 } from './join-graph-layout';
 import { buildJoinFlowLayout } from './join-flow-layout';
 
@@ -32,6 +32,30 @@ describe('join-graph-layout', () => {
     const pPos = positions.get(joins[1]!.targetId)!;
     expect(uPos.x).toBe(pPos.x);
     expect(uPos.y).not.toBe(pPos.y);
+  });
+
+  it('SAMPLE_SQL の line_metrics は users / orders / products からファンインする', () => {
+    const result = parseMySqlQuery(SAMPLE_SQL);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const u = result.query.tables.find((t) => t.alias === 'u')!;
+    const o = result.query.tables.find((t) => t.alias === 'o')!;
+    const p = result.query.tables.find((t) => t.alias === 'p')!;
+    const lm = result.query.tables.find((t) => t.alias === 'lm')!;
+    const lmJoin = result.query.joins.find((j) => j.targetId === lm.id)!;
+
+    expect(resolveJoinLayoutSources(lmJoin, result.query.tables)).toEqual([u.id, o.id, p.id]);
+
+    const { edges } = buildJoinFlowLayout(
+      result.query.tables,
+      result.query.joins,
+      false,
+      result.query,
+    );
+    const lmEdges = edges.filter((e) => e.target === lm.id);
+    expect(lmEdges).toHaveLength(3);
+    expect(lmEdges.map((e) => e.source).sort()).toEqual([u.id, o.id, p.id].sort());
   });
 
   it('SAMPLE_SQL の hot は users から分岐する', () => {
@@ -71,7 +95,49 @@ describe('join-graph-layout', () => {
     };
 
     expect(getTableIdsReferencedInJoin(join, tables).sort()).toEqual(['t-o', 't-u']);
-    expect(resolveJoinDisplaySource(join, computeJoinLayoutParent(tables, [join]))).toBe('t-o');
+    expect(resolveJoinLayoutSources(join, tables)).toEqual(['t-o']);
+    expect(resolveJoinLayoutAnchor(join, tables)).toBe('t-o');
+  });
+
+  it('複数テーブルから1テーブルへファンインする', () => {
+    const result = parseMySqlQuery(`
+      SELECT *
+      FROM users u
+      JOIN orders o ON u.id = o.user_id
+      JOIN products p ON u.id = p.owner_id
+      JOIN summary s ON u.score = s.u_score AND o.total = s.o_total AND p.cnt = s.p_cnt
+    `);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const { tables, joins } = result.query;
+    const u = tables.find((t) => t.alias === 'u')!;
+    const o = tables.find((t) => t.alias === 'o')!;
+    const p = tables.find((t) => t.alias === 'p')!;
+    const s = tables.find((t) => t.alias === 's')!;
+    const sJoin = joins.find((j) => j.targetId === s.id)!;
+
+    expect(resolveJoinLayoutSources(sJoin, tables)).toEqual([u.id, o.id, p.id]);
+    expect(resolveJoinLayoutAnchor(sJoin, tables)).toBe(p.id);
+
+    const positions = computeJoinNodePositions(tables, joins);
+    expect(positions.get(u.id)!.x).toBeLessThan(positions.get(s.id)!.x);
+    expect(positions.get(o.id)!.x).toBeLessThan(positions.get(s.id)!.x);
+    expect(positions.get(p.id)!.x).toBeLessThan(positions.get(s.id)!.x);
+    expect(positions.get(o.id)!.x).toBe(positions.get(p.id)!.x);
+
+    const { edges } = buildJoinFlowLayout(tables, joins, false, result.query);
+    const sEdges = edges.filter((e) => e.target === s.id);
+    expect(sEdges).toHaveLength(3);
+    expect(sEdges.map((e) => e.source).sort()).toEqual([u.id, o.id, p.id].sort());
+
+    const primary = sEdges.find((e) => e.id === sJoin.id);
+    expect(primary?.source).toBe(p.id);
+    expect(primary?.data?.isFanInConnector).toBeFalsy();
+
+    const connectors = sEdges.filter((e) => e.data?.isFanInConnector);
+    expect(connectors).toHaveLength(2);
+    expect(connectors.every((e) => !e.data?.effectiveInner)).toBe(true);
   });
 
   it('同一テーブルを2回JOINしてもエイリアス解決後も星型レイアウトを保つ', () => {

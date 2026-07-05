@@ -81,8 +81,8 @@ describe('join-flow-layout', () => {
       false,
       result.query,
     );
-    expect(nodes.length).toBe(6);
-    expect(edges.length).toBe(5);
+    expect(nodes.length).toBe(7);
+    expect(edges.length).toBe(8);
     expect(() => assertJoinFlowLayoutReady(nodes)).not.toThrow();
   });
 

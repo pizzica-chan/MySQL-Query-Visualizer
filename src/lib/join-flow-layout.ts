@@ -4,9 +4,8 @@ import { effectiveInnerAnalysisByJoinId } from './join-effective-inner';
 import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
 import {
-  computeJoinLayoutParent,
   computeJoinNodePositions,
-  resolveJoinDisplaySource,
+  resolveJoinLayoutSources,
 } from './join-graph-layout';
 
 /** React Flow ミニマップ用 — 背景と区別できる控えめな色 */
@@ -36,6 +35,8 @@ export interface JoinFlowEdgeData extends Record<string, unknown> {
   labelOffsetFlip?: 1 | -1;
   /** ON 条件の SQL 位置 */
   sourceSpan?: SourceSpan;
+  /** ファンインの補助エッジ（ラベルなし） */
+  isFanInConnector?: boolean;
 }
 
 export const EFFECTIVE_INNER_EDGE_STYLE = {
@@ -121,7 +122,6 @@ export function buildJoinFlowLayout(
   compact = false,
 ): { nodes: Node[]; edges: Edge[] } {
   const effectiveInnerByJoinId = query ? effectiveInnerAnalysisByJoinId(query) : new Map();
-  const layoutParent = computeJoinLayoutParent(tables, joins);
   const nodePositions = computeJoinNodePositions(tables, joins);
 
   const nodes: Node[] = tables.map((t) => {
@@ -147,32 +147,40 @@ export function buildJoinFlowLayout(
     };
   });
 
-  const edges: Edge[] = joins.map((j, joinIndex) => {
+  const edges: Edge[] = [];
+  joins.forEach((j, joinIndex) => {
     const effectiveInner = isEffectiveInnerJoin(j.id, effectiveInnerByJoinId);
     const baseColor = JOIN_COLORS[j.type] ?? '#64748b';
     const color = effectiveInner ? (JOIN_COLORS['INNER JOIN'] ?? baseColor) : baseColor;
-    return {
-      id: j.id,
-      type: 'joinEdge',
-      source: resolveJoinDisplaySource(j, layoutParent),
-      target: j.targetId,
-      // animated は React Flow が path に stroke-dasharray を付ける — 実質 INNER のみ
-      animated: effectiveInner,
-      style: {
-        stroke: color,
-        strokeWidth: effectiveInner ? 2.5 : 2,
-        ...(effectiveInner ? EFFECTIVE_INNER_EDGE_STYLE : {}),
-      },
-      markerEnd: { type: MarkerType.ArrowClosed, color },
-      data: {
-        condition: j.condition,
-        joinType: j.type,
-        effectiveInner,
-        compact,
-        labelOffsetFlip: joinIndex % 2 === 0 ? 1 : -1,
-        sourceSpan: j.sourceSpan,
-      } satisfies JoinFlowEdgeData,
-    };
+    const sources = resolveJoinLayoutSources(j, tables);
+    const anchorId = sources[sources.length - 1] ?? j.sourceId;
+
+    for (const sourceId of sources) {
+      const isPrimary = sourceId === anchorId;
+      edges.push({
+        id: isPrimary ? j.id : `${j.id}@${sourceId}`,
+        type: 'joinEdge',
+        source: sourceId,
+        target: j.targetId,
+        animated: isPrimary && effectiveInner,
+        style: {
+          stroke: color,
+          strokeWidth: isPrimary ? (effectiveInner ? 2.5 : 2) : 1.5,
+          opacity: isPrimary ? 1 : 0.75,
+          ...(isPrimary && effectiveInner ? EFFECTIVE_INNER_EDGE_STYLE : {}),
+        },
+        markerEnd: { type: MarkerType.ArrowClosed, color },
+        data: {
+          condition: j.condition,
+          joinType: j.type,
+          effectiveInner: isPrimary ? effectiveInner : false,
+          compact,
+          labelOffsetFlip: joinIndex % 2 === 0 ? 1 : -1,
+          sourceSpan: isPrimary ? j.sourceSpan : undefined,
+          isFanInConnector: !isPrimary,
+        } satisfies JoinFlowEdgeData,
+      });
+    }
   });
 
   return { nodes, edges };

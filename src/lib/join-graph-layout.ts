@@ -68,21 +68,26 @@ export function getTableIdsReferencedInJoin(join: JoinEdge, tables: TableRef[]):
   return [...ids];
 }
 
-/** レイアウト上の親テーブル（ON 条件で実際につながる側） */
-export function resolveJoinLayoutAnchor(join: JoinEdge, tables: TableRef[]): string {
+/** target より前に ON で参照されるテーブル id（ファンイン用・FROM 順） */
+export function resolveJoinLayoutSources(join: JoinEdge, tables: TableRef[]): string[] {
   const targetId = join.targetId;
   const targetIdx = tableIndex(tables, targetId);
   const referenced = getTableIdsReferencedInJoin(join, tables);
 
-  const anchorCandidates = referenced
+  const sources = referenced
     .filter((id) => id !== targetId)
     .filter((id) => tableIndex(tables, id) < targetIdx)
     .sort((a, b) => tableIndex(tables, a) - tableIndex(tables, b));
 
-  if (anchorCandidates.length > 0) {
-    return anchorCandidates[anchorCandidates.length - 1]!;
-  }
+  if (sources.length > 0) return sources;
+  if (join.sourceId && join.sourceId !== targetId) return [join.sourceId];
+  return [];
+}
 
+/** レイアウト上の親テーブル（ON 条件で実際につながる側 — 主エッジ用） */
+export function resolveJoinLayoutAnchor(join: JoinEdge, tables: TableRef[]): string {
+  const sources = resolveJoinLayoutSources(join, tables);
+  if (sources.length > 0) return sources[sources.length - 1]!;
   return join.sourceId;
 }
 
@@ -117,14 +122,15 @@ export function computeJoinNodePositions(
   const positions = new Map<string, { x: number; y: number }>();
   if (tables.length === 0) return positions;
 
-  const layoutParent = computeJoinLayoutParent(tables, joins);
   const rootId = tables[0]!.id;
   const depth = new Map<string, number>();
   depth.set(rootId, 0);
 
   for (const join of joins) {
-    const anchor = layoutParent.get(join.targetId) ?? join.sourceId;
-    depth.set(join.targetId, (depth.get(anchor) ?? 0) + 1);
+    const sources = resolveJoinLayoutSources(join, tables);
+    const sourceDepths = sources.map((id) => depth.get(id) ?? 0);
+    const targetDepth = Math.max(0, ...sourceDepths) + 1;
+    depth.set(join.targetId, targetDepth);
   }
 
   const byDepth = new Map<number, string[]>();

@@ -34,7 +34,9 @@ export function JoinFlowEdge({
   const typeLines = [edgeData.joinType ?? 'JOIN'];
   if (edgeData.effectiveInner) typeLines.push('≈INNER');
   const condition = edgeData.condition?.trim() ?? '';
-  const showCondition = !edgeData.compact && condition.length > 0;
+  const showCondition =
+    !edgeData.compact && !edgeData.isFanInConnector && condition.length > 0;
+  const showTypeLabel = !edgeData.isFanInConnector;
   const labelOffset = computeJoinEdgeLabelOffset(
     sourceX,
     sourceY,
@@ -71,6 +73,7 @@ export function JoinFlowEdge({
     <>
       <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
       <EdgeLabelRenderer>
+        {showTypeLabel && (
         <div
           className={`join-edge-labels nodrag nopan${interactive ? ' join-edge-labels--interactive' : ''}`}
           style={{
@@ -89,6 +92,7 @@ export function JoinFlowEdge({
             <div {...conditionLabelProps}>{truncateJoinCondition(condition)}</div>
           )}
         </div>
+        )}
       </EdgeLabelRenderer>
     </>
   );

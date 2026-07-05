@@ -869,11 +869,13 @@ export const SAMPLE_SQL = `SELECT
   o.total_amount,
   p.product_name,
   c.category_name,
+  lm.metric_score,
   hot.order_cnt
 FROM users u
 INNER JOIN orders o ON o.user_id = u.id
 LEFT JOIN order_items oi ON oi.order_id = o.id
 INNER JOIN products p ON p.id = oi.product_id
+LEFT JOIN line_metrics lm ON lm.user_id = u.id AND lm.order_id = o.id AND lm.product_id = p.id
 LEFT JOIN categories c ON c.id = p.category_id
 INNER JOIN (
   SELECT user_id, COUNT(*) AS order_cnt
@@ -893,7 +895,7 @@ WHERE u.status = 'active'
     SELECT 1 FROM payments pay WHERE pay.order_id = o.id AND pay.status = 'paid'
   )
   AND u.id NOT IN (SELECT user_id FROM banned_users)
-GROUP BY u.id, u.name, u.email, o.order_no, o.total_amount, p.product_name, c.category_name, hot.order_cnt
+GROUP BY u.id, u.name, u.email, o.order_no, o.total_amount, p.product_name, c.category_name, lm.metric_score, hot.order_cnt
 HAVING SUM(oi.quantity) > (
   SELECT AVG(item_cnt) FROM (
     SELECT COUNT(*) AS item_cnt FROM order_items GROUP BY order_id

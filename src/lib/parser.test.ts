@@ -37,13 +37,13 @@ describe('parseMySqlQuery', () => {
       if (!result.success) return;
 
       expect(result.query.statementType).toBe('SELECT');
-      expect(result.query.tables).toHaveLength(6);
-      expect(result.query.joins).toHaveLength(5);
+      expect(result.query.tables).toHaveLength(7);
+      expect(result.query.joins).toHaveLength(6);
       expect(result.query.tables.some((t) => t.isDerived)).toBe(true);
       expect(result.query.where?.type).toBe('and');
       expect(result.query.having).toBeDefined();
       expect(result.query.limit).toBe('100');
-      expect(result.query.groupBy).toHaveLength(8);
+      expect(result.query.groupBy).toHaveLength(9);
       expect(result.query.orderBy).toHaveLength(2);
 
       const wTypes = collectConditionTypes(result.query.where);
