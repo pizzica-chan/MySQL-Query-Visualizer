@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { applyAliasResolution } from './alias-resolver';
 import { parseMySqlQuery, SAMPLE_SQL } from './parser';
 import {
   computeJoinLayoutParent,
@@ -71,5 +72,39 @@ describe('join-graph-layout', () => {
 
     expect(getTableIdsReferencedInJoin(join, tables).sort()).toEqual(['t-o', 't-u']);
     expect(resolveJoinDisplaySource(join, computeJoinLayoutParent(tables, [join]))).toBe('t-o');
+  });
+
+  it('同一テーブルを2回JOINしてもエイリアス解決後も星型レイアウトを保つ', () => {
+    const result = parseMySqlQuery(`
+      SELECT *
+      FROM orders o
+      INNER JOIN users u1 ON o.buyer_id = u1.id
+      INNER JOIN users u2 ON o.seller_id = u2.id
+    `);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const resolved = applyAliasResolution(result.query, true);
+    const orders = resolved.tables[0]!;
+    const u1 = resolved.tables.find((t) => t.alias === 'u1')!;
+    const u2 = resolved.tables.find((t) => t.alias === 'u2')!;
+    const joinU1 = resolved.joins[0]!;
+    const joinU2 = resolved.joins[1]!;
+
+    expect(joinU1.condition).toContain('users.');
+    expect(joinU1.layoutCondition).toBe('o.buyer_id = u1.id');
+    expect(getTableIdsReferencedInJoin(joinU2, resolved.tables).sort()).toEqual([orders.id, u2.id].sort());
+
+    const parent = computeJoinLayoutParent(resolved.tables, resolved.joins);
+    expect(parent.get(u1.id)).toBe(orders.id);
+    expect(parent.get(u2.id)).toBe(orders.id);
+
+    const { edges } = buildJoinFlowLayout(resolved.tables, resolved.joins, true, resolved);
+    expect(edges.find((e) => e.id === joinU1.id)?.source).toBe(orders.id);
+    expect(edges.find((e) => e.id === joinU2.id)?.source).toBe(orders.id);
+
+    const positions = computeJoinNodePositions(resolved.tables, resolved.joins);
+    expect(positions.get(u1.id)!.x).toBe(positions.get(u2.id)!.x);
+    expect(positions.get(u1.id)!.y).not.toBe(positions.get(u2.id)!.y);
   });
 });

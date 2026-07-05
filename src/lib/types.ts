@@ -43,6 +43,9 @@ export interface JoinEdge {
   targetId: string;
   condition: string;
   conditionParts?: { left: string; operator: string; right: string };
+  /** レイアウト解析用 — エイリアス解決前の ON 条件（表示用 condition とは別） */
+  layoutCondition?: string;
+  layoutConditionParts?: { left: string; operator: string; right: string };
   /** ON 条件の位置 */
   sourceSpan?: SourceSpan;
 }

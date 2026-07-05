@@ -15,14 +15,21 @@ function tableIndex(tables: TableRef[], tableId: string): number {
 
 function resolveAliasToTableId(name: string, tables: TableRef[]): string | undefined {
   const normalized = name.trim();
-  const match = tables.find(
-    (t) =>
-      t.alias === normalized ||
-      t.table === normalized ||
-      t.displayName === normalized ||
-      t.id === normalized,
+  const byAlias = tables.find((t) => t.alias === normalized);
+  if (byAlias) return byAlias.id;
+  if (tables.some((t) => t.id === normalized)) return normalized;
+  const byTable = tables.filter(
+    (t) => t.table === normalized || t.displayName === normalized,
   );
-  return match?.id;
+  if (byTable.length === 1) return byTable[0]!.id;
+  return undefined;
+}
+
+function joinForLayout(join: JoinEdge): Pick<JoinEdge, 'condition' | 'conditionParts'> {
+  return {
+    condition: join.layoutCondition ?? join.condition,
+    conditionParts: join.layoutConditionParts ?? join.conditionParts,
+  };
 }
 
 function addTableIdFromExpression(expr: string, tables: TableRef[], ids: Set<string>): void {
@@ -35,18 +42,26 @@ function addTableIdFromExpression(expr: string, tables: TableRef[], ids: Set<str
 /** ON 条件から参照されるテーブル id を抽出 */
 export function getTableIdsReferencedInJoin(join: JoinEdge, tables: TableRef[]): string[] {
   const ids = new Set<string>([join.targetId]);
+  const { condition, conditionParts } = joinForLayout(join);
 
-  if (join.conditionParts) {
-    addTableIdFromExpression(join.conditionParts.left, tables, ids);
-    addTableIdFromExpression(join.conditionParts.right, tables, ids);
+  if (conditionParts) {
+    addTableIdFromExpression(conditionParts.left, tables, ids);
+    addTableIdFromExpression(conditionParts.right, tables, ids);
     return [...ids];
   }
 
   for (const table of tables) {
-    const terms = [table.alias, table.table, table.displayName].filter(Boolean) as string[];
+    if (!table.alias) continue;
+    const re = new RegExp(`\\b${escapeRegExp(table.alias)}\\.`, 'i');
+    if (re.test(condition)) ids.add(table.id);
+  }
+
+  const unambiguous = tables.filter((t) => !t.alias);
+  for (const table of unambiguous) {
+    const terms = [table.table, table.displayName].filter(Boolean) as string[];
     for (const term of terms) {
       const re = new RegExp(`\\b${escapeRegExp(term)}\\.`, 'i');
-      if (re.test(join.condition)) ids.add(table.id);
+      if (re.test(condition)) ids.add(table.id);
     }
   }
 

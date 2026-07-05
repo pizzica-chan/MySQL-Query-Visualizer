@@ -64,6 +64,8 @@ function resolveTableRef(table: TableRef): TableRef {
 function resolveJoin(join: JoinEdge, aliasMap: Map<string, string>): JoinEdge {
   return {
     ...join,
+    layoutCondition: join.layoutCondition ?? join.condition,
+    layoutConditionParts: join.layoutConditionParts ?? join.conditionParts,
     condition: resolveAliasesInText(join.condition, aliasMap),
     conditionParts: join.conditionParts
       ? {
