@@ -436,4 +436,111 @@ describe('query-effect', () => {
     expect(tree.type).toBe('and');
     expect(tree.children?.some((c) => c.type === 'or')).toBe(true);
   });
+
+  describe('直近修正の回帰', () => {
+    function sectionIndex(effect: ReturnType<typeof buildQueryEffect>, kind: string): number {
+      return effect.sections.findIndex((s) => s.kind === kind);
+    }
+
+    it('SELECT のセクション順は 表示対象 → 検索範囲 → WHERE', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const effect = buildQueryEffect(result.query);
+      const kinds = effect.sections.map((s) => `${s.kind}:${s.title ?? ''}`);
+
+      expect(kinds[0]).toBe('target:表示対象');
+      expect(kinds[1]).toBe('scope:検索範囲');
+      expect(sectionIndex(effect, 'target')).toBeLessThan(sectionIndex(effect, 'scope'));
+      expect(sectionIndex(effect, 'scope')).toBeLessThan(sectionIndex(effect, 'filter'));
+    });
+
+    it('UPDATE / DELETE も操作対象セクションが先頭に来る', () => {
+      const update = parseMySqlQuery(UPDATE_SAMPLE_SQL);
+      const del = parseMySqlQuery(DELETE_SAMPLE_SQL);
+      expect(update.success && del.success).toBe(true);
+      if (!update.success || !del.success) return;
+
+      const updateEffect = buildQueryEffect(update.query);
+      const deleteEffect = buildQueryEffect(del.query);
+
+      expect(updateEffect.sections[0]?.kind).toBe('target');
+      expect(updateEffect.sections[0]?.title).toBe('更新対象');
+      expect(updateEffect.sections.find((s) => s.kind === 'scope')?.title).toBe('検索範囲');
+
+      expect(deleteEffect.sections[0]?.kind).toBe('target');
+      expect(deleteEffect.sections[0]?.title).toBe('削除対象');
+      expect(deleteEffect.sections.some((s) => s.title === '対象の範囲')).toBe(false);
+    });
+
+    it('要約行のテーブル表記は SELECT / UPDATE / DELETE で users（u）形式に統一される', () => {
+      const selectResult = parseMySqlQuery(SAMPLE_SQL);
+      const updateResult = parseMySqlQuery(UPDATE_SAMPLE_SQL);
+      const deleteResult = parseMySqlQuery(DELETE_SAMPLE_SQL);
+      expect(selectResult.success && updateResult.success && deleteResult.success).toBe(true);
+      if (!selectResult.success || !updateResult.success || !deleteResult.success) return;
+
+      const select = buildQueryEffect(selectResult.query);
+      const update = buildQueryEffect(updateResult.query);
+      const del = buildQueryEffect(deleteResult.query);
+
+      expect(select.summary).toContain('users（u）');
+      expect(update.summary).toContain('users（u）');
+      expect(del.summary).toContain('users（u）');
+      expect(select.summary).not.toContain(' AS ');
+      expect(update.summary).not.toContain(' AS ');
+      expect(del.summary).not.toContain(' AS ');
+    });
+
+    it('エイリアス解決 ON でも要約・表示対象・レコード必須欄は併記形式を維持する', () => {
+      const raw = parseMySqlQuery(SAMPLE_SQL);
+      expect(raw.success).toBe(true);
+      if (!raw.success) return;
+
+      const resolvedQuery = applyAliasResolution(raw.query, true);
+      const unresolvedEffect = buildQueryEffect(raw.query);
+      const resolvedEffect = buildQueryEffect(resolvedQuery);
+
+      expect(unresolvedEffect.summary).toContain('users（u）');
+      expect(resolvedEffect.summary).toContain('users（u）');
+
+      const unresolvedTarget = unresolvedEffect.sections.find((s) => s.kind === 'target')?.lines ?? [];
+      const resolvedTarget = resolvedEffect.sections.find((s) => s.kind === 'target')?.lines ?? [];
+      expect(unresolvedTarget.some((l) => l.includes('users（u）.id'))).toBe(true);
+      expect(resolvedTarget.some((l) => l.includes('users（u）.id'))).toBe(true);
+
+      const required = (effect: ReturnType<typeof buildQueryEffect>) =>
+        effect.sections.find((s) => s.kind === 'scope')?.presenceGroups?.find((g) => g.kind === 'required')
+          ?.tables ?? [];
+
+      expect(required(unresolvedEffect)).toContain('users（u）');
+      expect(required(resolvedEffect)).toContain('users（u）');
+    });
+
+    it('検索範囲のレコード必須に実質 INNER JOIN 表記と派生テーブル単一表記を維持する', () => {
+      const scope = scopeSection(SAMPLE_SQL);
+      const required = scope?.presenceGroups?.find((g) => g.kind === 'required');
+
+      expect(required?.tables.some((t) => t.includes('order_items（oi）（実質 INNER JOIN）'))).toBe(true);
+
+      const hot = required?.tables.find((t) => t.includes('hot'));
+      expect(hot).toContain('hot (派生テーブル)');
+      expect(hot?.match(/派生テーブル/g)?.length).toBe(1);
+    });
+
+    it('WHERE の NOT EXISTS 説明が EXISTS と混同しない', () => {
+      const result = parseMySqlQuery(`
+        SELECT id FROM guest_users g
+        WHERE g.trial_ends_at < NOW()
+          AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id = g.id)
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const texts = collectLeafTexts(buildConditionEffectTree(result.query.where!));
+      expect(texts.some((t) => t.startsWith('関連行が存在しないものだけ'))).toBe(true);
+      expect(texts.some((t) => t.startsWith('関連行が存在するものだけ'))).toBe(false);
+    });
+  });
 });
