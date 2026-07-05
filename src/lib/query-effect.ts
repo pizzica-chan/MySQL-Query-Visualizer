@@ -630,10 +630,7 @@ function primaryTarget(query: ParsedQuery): string {
     return formatSummaryTableList(updatedTargetTables(query));
   }
   if (query.joins.length > 0) {
-    return formatSummaryTableList(
-      query.tables.filter((t) => !t.isDerived),
-      'の組み合わせ',
-    );
+    return formatSummaryTableList(query.tables, 'の組み合わせ');
   }
   const main = query.tables[0];
   return main ? tablePrimaryName(main) : 'テーブル';

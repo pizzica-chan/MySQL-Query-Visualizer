@@ -40,7 +40,7 @@ export function QuerySummary({
   return (
     <div className="query-summary">
       <section className="summary-section">
-        <h3>概要</h3>
+        <h3>SQL構造</h3>
         <dl className="summary-grid">
           <dt>文の種類</dt>
           <dd>

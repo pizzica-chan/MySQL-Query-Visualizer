@@ -120,18 +120,10 @@ body {
 .sql-editor-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex-shrink: 0;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.sql-editor-label {
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--text-dim);
-  white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .sql-editor-actions {
@@ -140,6 +132,46 @@ body {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.sample-load {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sample-load-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.sample-load-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sample-load-btn {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 6px 10px;
+}
+
+.welcome-state .sample-load {
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.welcome-state .sample-load-buttons {
+  justify-content: center;
 }
 
 .btn {
@@ -1157,13 +1189,6 @@ body {
 
 .set-clause-list code {
   color: var(--text);
-}
-
-.welcome-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
 }
 
 .union-panel,

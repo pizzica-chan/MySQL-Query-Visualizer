@@ -123,7 +123,7 @@ export function QueryEffectBanner({ query }: QueryEffectBannerProps) {
     return (
       <div className="query-effect-banner">
         <div className="query-effect-banner-header">
-          <h2 className="query-effect-banner-title">対象レコード</h2>
+          <h2 className="query-effect-banner-title">作用説明</h2>
           <p className="query-effect-banner-desc">
             UNION の各 SELECT が返す行の条件です（ブランチごとに独立）
           </p>
@@ -155,7 +155,7 @@ export function QueryEffectBanner({ query }: QueryEffectBannerProps) {
   return (
     <div className="query-effect-banner">
       <div className="query-effect-banner-header">
-        <h2 className="query-effect-banner-title">対象レコード</h2>
+        <h2 className="query-effect-banner-title">作用説明</h2>
         <p className="query-effect-banner-desc">この SQL で{actionWord}される行の条件</p>
       </div>
       <QueryEffectPanel query={query} />

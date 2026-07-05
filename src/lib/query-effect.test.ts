@@ -50,6 +50,9 @@ describe('query-effect', () => {
     expect(effect.summary).toContain('表示');
     expect(effect.summary).toContain('100');
     expect(effect.summary).toContain('users（u）');
+    expect(effect.summary).toContain(
+      `users（u） など ${result.query.tables.length} テーブルの組み合わせ`,
+    );
     expect(effect.summary).not.toContain(' AS ');
 
     const scope = effect.sections.find((s) => s.kind === 'scope');

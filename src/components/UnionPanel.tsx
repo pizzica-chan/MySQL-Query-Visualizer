@@ -186,7 +186,7 @@ export function UnionSummaryPanel({
     <UnionBranchShell
       branches={branches}
       title="UNION 全ブランチ"
-      description="各 SELECT の概要を個別に表示しています"
+      description="各 SELECT の SQL 構造を個別に表示しています"
       singleBranch={(branch) => (
         <QuerySummary
           query={branch.query}

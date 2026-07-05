@@ -92,7 +92,7 @@ describe('JOIN ON サブクエリ', () => {
     expect(resolveJoinLayoutSources(join, tables)).toEqual([u.id]);
   });
 
-  it('対象レコードタブの JOIN 説明がサブクエリ ON でも破綻しない', () => {
+  it('作用説明タブの JOIN 説明がサブクエリ ON でも破綻しない', () => {
     const result = parseMySqlQuery(`
       SELECT u.id
       FROM users u
@@ -109,7 +109,7 @@ describe('JOIN ON サブクエリ', () => {
     expect(joinLine).toContain('o.user_id');
   });
 
-  it('対象レコードタブの JOIN 説明にも JSON が露出しない', () => {
+  it('作用説明タブの JOIN 説明にも JSON が露出しない', () => {
     for (const sql of SUBQUERY_ON_SQL) {
       const result = parseMySqlQuery(sql);
       expect(result.success).toBe(true);

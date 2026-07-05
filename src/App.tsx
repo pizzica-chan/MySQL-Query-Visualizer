@@ -3,6 +3,7 @@ import { JoinDiagram } from './components/JoinDiagram';
 import { QueryEffectBanner } from './components/QueryEffectPanel';
 import { QuerySummary } from './components/QuerySummary';
 import { SqlEditor } from './components/SqlEditor';
+import { SampleLoadButtons } from './components/SampleLoadButtons';
 import { SubqueryDetail } from './components/SubqueryDetail';
 import { WhereTree } from './components/WhereTree';
 import { UnionJoinPanel, UnionPanel, UnionSummaryPanel, UnionWherePanel } from './components/UnionPanel';
@@ -21,10 +22,10 @@ import type { OnSourceSpanSelect } from './lib/source-link';
 type TabId = 'effect' | 'joins' | 'where' | 'summary' | 'nested';
 
 const BASE_TABS: { id: TabId; label: string }[] = [
-  { id: 'effect', label: '対象レコード' },
+  { id: 'effect', label: '作用説明' },
+  { id: 'summary', label: 'SQL構造' },
   { id: 'joins', label: 'JOIN 図' },
   { id: 'where', label: 'WHERE / HAVING' },
-  { id: 'summary', label: '概要' },
 ];
 
 export default function App() {
@@ -122,20 +123,13 @@ export default function App() {
           {!parsed && !error && (
             <div className="welcome-state">
               <p className="welcome-hint">左のエディタに SQL を入力するか、サンプルを読み込んでください。</p>
-              <div className="welcome-actions">
-                <button type="button" className="btn btn--primary" onClick={() => setSql(SAMPLE_SQL)} title="SELECTサンプルを読み込む">
-                  SELECT
-                </button>
-                <button type="button" className="btn btn--ghost" onClick={() => setSql(UNION_SAMPLE_SQL)} title="UNIONサンプルを読み込む">
-                  UNION
-                </button>
-                <button type="button" className="btn btn--ghost" onClick={() => setSql(UPDATE_SAMPLE_SQL)} title="UPDATEサンプルを読み込む">
-                  UPDATE
-                </button>
-                <button type="button" className="btn btn--ghost" onClick={() => setSql(DELETE_SAMPLE_SQL)} title="DELETEサンプルを読み込む">
-                  DELETE
-                </button>
-              </div>
+              <SampleLoadButtons
+                highlightSelect
+                onSelect={() => setSql(SAMPLE_SQL)}
+                onUpdate={() => setSql(UPDATE_SAMPLE_SQL)}
+                onUnion={() => setSql(UNION_SAMPLE_SQL)}
+                onDelete={() => setSql(DELETE_SAMPLE_SQL)}
+              />
             </div>
           )}
 

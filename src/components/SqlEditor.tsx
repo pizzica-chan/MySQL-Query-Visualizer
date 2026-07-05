@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { highlightSqlToHtml } from '../lib/sql-highlight';
 import type { SourceSpan } from '../lib/types';
+import { SampleLoadButtons } from './SampleLoadButtons';
 
 interface SqlEditorProps {
   value: string;
@@ -52,21 +53,12 @@ export function SqlEditor({
   return (
     <div className="sql-editor">
       <div className="sql-editor-toolbar">
-        <span className="sql-editor-label">MySQL SQL</span>
-        <div className="sql-editor-actions">
-          <button type="button" className="btn btn--ghost" onClick={onLoadSample} title="SELECTサンプルを読み込む">
-            SELECT
-          </button>
-          <button type="button" className="btn btn--ghost" onClick={onLoadUpdateSample} title="UPDATEサンプルを読み込む">
-            UPDATE
-          </button>
-          <button type="button" className="btn btn--ghost" onClick={onLoadUnionSample} title="UNIONサンプルを読み込む">
-            UNION
-          </button>
-          <button type="button" className="btn btn--ghost" onClick={onLoadDeleteSample} title="DELETEサンプルを読み込む">
-            DELETE
-          </button>
-        </div>
+        <SampleLoadButtons
+          onSelect={onLoadSample}
+          onUpdate={onLoadUpdateSample}
+          onUnion={onLoadUnionSample}
+          onDelete={onLoadDeleteSample}
+        />
       </div>
       <div className={`sql-editor-body${error ? ' sql-editor-body--error' : ''}`}>
         <pre ref={highlightRef} className="sql-highlight-layer" aria-hidden="true">
