@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -56,6 +56,19 @@ describe('オフライン実行（外部通信なし）', () => {
       }
       const violations = auditDistBundle(PROJECT_ROOT);
       expect(violations, formatViolations(violations ?? [])).toEqual([]);
+    });
+
+    it('dist/index.html は file:// 直開き向けの単一 HTML になっている', () => {
+      const distDir = resolve(PROJECT_ROOT, 'dist');
+      const htmlPath = resolve(distDir, 'index.html');
+      if (!existsSync(htmlPath)) return;
+
+      expect(readdirSync(distDir)).toEqual(['index.html']);
+
+      const html = readFileSync(htmlPath, 'utf8');
+      expect(html).not.toMatch(/<script[^>]+type="module"[^>]+src=/i);
+      expect(html).not.toMatch(/<script[^>]+src=["']\.\/assets\//i);
+      expect(html).toMatch(/<script>var /);
     });
   });
 
