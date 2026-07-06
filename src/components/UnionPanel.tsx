@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import type { ParsedQuery, SourceSpan, UnionBranch } from '../lib/types';
 import type { OnSourceSpanSelect } from '../lib/source-link';
 import { JoinDiagram } from './JoinDiagram';
-import { QuerySummary } from './QuerySummary';
 import { SubqueryDetail } from './SubqueryDetail';
 import { WhereTree } from './WhereTree';
 
@@ -165,40 +164,6 @@ export function UnionWherePanel({
         <div className="union-branch-section">
           <BranchSectionTitle index={index} />
           <BranchWherePanel
-            query={branch.query}
-            resolveAliases={resolveAliases}
-            activeSourceSpan={activeSourceSpan}
-            onSourceSpanSelect={onSourceSpanSelect}
-          />
-        </div>
-      )}
-    />
-  );
-}
-
-export function UnionSummaryPanel({
-  branches,
-  resolveAliases,
-  activeSourceSpan,
-  onSourceSpanSelect,
-}: UnionPanelProps) {
-  return (
-    <UnionBranchShell
-      branches={branches}
-      title="UNION 全ブランチ"
-      description="各 SELECT の SQL 構造を個別に表示しています"
-      singleBranch={(branch) => (
-        <QuerySummary
-          query={branch.query}
-          resolveAliases={resolveAliases}
-          activeSourceSpan={activeSourceSpan}
-          onSourceSpanSelect={onSourceSpanSelect}
-        />
-      )}
-      renderBranch={(branch, index) => (
-        <div className="union-branch-section">
-          <BranchSectionTitle index={index} />
-          <QuerySummary
             query={branch.query}
             resolveAliases={resolveAliases}
             activeSourceSpan={activeSourceSpan}

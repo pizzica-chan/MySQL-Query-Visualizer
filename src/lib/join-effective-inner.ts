@@ -1,4 +1,5 @@
 import type { ConditionNode, JoinEdge, JoinType, ParsedQuery, TableRef } from './types';
+import { resolveJoinConditionExpression } from './join-condition';
 
 export interface EffectiveInnerReason {
   kind: 'inner_join' | 'where' | 'having';
@@ -126,7 +127,7 @@ function findSubsequentInnerJoinReasons(
   for (let i = joinIndex + 1; i < joins.length; i++) {
     const join = joins[i]!;
     if (!isInnerJoinType(join.type)) continue;
-    if (!expressionReferencesTable(join.condition, nullableTable)) continue;
+    if (!expressionReferencesTable(resolveJoinConditionExpression(join), nullableTable)) continue;
     reasons.push({
       kind: 'inner_join',
       label: innerJoinReasonLabel(join, tables),

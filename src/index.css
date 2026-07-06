@@ -1041,6 +1041,8 @@ body {
   font-size: 0.85rem;
   color: var(--text);
   word-break: break-all;
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
 }
 
 .condition-breakdown {
@@ -1145,6 +1147,8 @@ body {
 .column-list code {
   font-family: var(--font-mono);
   color: var(--text);
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
 }
 
 .column-alias {

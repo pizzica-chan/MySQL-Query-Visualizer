@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { JoinDiagram } from './components/JoinDiagram';
 import { QueryEffectBanner } from './components/QueryEffectPanel';
-import { QuerySummary } from './components/QuerySummary';
 import { SqlEditor } from './components/SqlEditor';
 import { SampleLoadButtons } from './components/SampleLoadButtons';
 import { SubqueryDetail } from './components/SubqueryDetail';
 import { WhereTree } from './components/WhereTree';
-import { UnionJoinPanel, UnionPanel, UnionSummaryPanel, UnionWherePanel } from './components/UnionPanel';
+import { UnionJoinPanel, UnionPanel, UnionWherePanel } from './components/UnionPanel';
 import { applyAliasResolution } from './lib/alias-resolver';
 import {
   SAMPLE_SQL,
@@ -19,11 +18,10 @@ import { collectAllNestedQueries, countNestedItems, hasUnion } from './lib/query
 import type { ParsedQuery, SourceSpan } from './lib/types';
 import type { OnSourceSpanSelect } from './lib/source-link';
 
-type TabId = 'effect' | 'joins' | 'where' | 'summary' | 'nested';
+type TabId = 'effect' | 'joins' | 'where' | 'nested';
 
 const BASE_TABS: { id: TabId; label: string }[] = [
   { id: 'effect', label: '作用説明' },
-  { id: 'summary', label: 'SQL構造' },
   { id: 'joins', label: 'JOIN 図' },
   { id: 'where', label: 'WHERE / HAVING' },
 ];
@@ -208,20 +206,6 @@ export default function App() {
                         </div>
                       )}
                     </div>
-                  ))}
-                {activeTab === 'summary' &&
-                  (hasUnion(displayQuery) && displayQuery.unionBranches ? (
-                    <UnionSummaryPanel
-                      branches={displayQuery.unionBranches}
-                      resolveAliases={resolveAliases}
-                      {...sourceLinkProps}
-                    />
-                  ) : (
-                    <QuerySummary
-                      query={displayQuery}
-                      resolveAliases={resolveAliases}
-                      {...sourceLinkProps}
-                    />
                   ))}
                 {activeTab === 'nested' && (
                   <div className="nested-tab">

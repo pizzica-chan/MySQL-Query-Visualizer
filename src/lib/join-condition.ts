@@ -35,6 +35,13 @@ export function formatJoinConditionLabel(node: ConditionNode): string {
   return node.label;
 }
 
+/** JOIN 条件の意味解析用テキスト（USING は conditionRoot の等価条件に展開） */
+export function resolveJoinConditionExpression(join: JoinEdge): string {
+  const root = join.layoutConditionRoot ?? join.conditionRoot;
+  if (root) return formatJoinConditionLabel(root);
+  return join.layoutCondition ?? join.condition;
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -103,7 +103,7 @@ describe('query-effect', () => {
     const filter = effect.sections.find((s) => s.kind === 'filter' && s.title === '行の絞り込み');
     expect(filter?.filterParts?.length).toBeGreaterThan(0);
     expect(joinFilterNodes(SAMPLE_SQL).some((n) => n.label === 'INNER JOIN')).toBe(true);
-    expect(filterLeafTexts(SAMPLE_SQL).some((t) => t.includes('u.status = active'))).toBe(true);
+    expect(filterLeafTexts(SAMPLE_SQL).some((t) => t.includes("u.status = 'active'"))).toBe(true);
 
     const target = effect.sections.find((s) => s.kind === 'target');
     expect(target?.title).toBe('表示対象');
@@ -537,7 +537,7 @@ describe('query-effect', () => {
       const productsOn = productsJoin!.children![0]!;
       expect(productsOn.type).toBe('and');
       expect(productsOn.children?.some((c) => c.type === 'or')).toBe(true);
-      expect(collectLeafTexts(productsOn).some((l) => l.includes('p.status = active'))).toBe(true);
+      expect(collectLeafTexts(productsOn).some((l) => l.includes("p.status = 'active'"))).toBe(true);
       expect(collectLeafTexts(productsOn).some((l) => l.includes('p.clearance = 1'))).toBe(true);
 
       const wherePart = filterSection(SAMPLE_SQL)?.filterParts?.find((p) => p.label === 'WHERE');

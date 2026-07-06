@@ -49,7 +49,7 @@ describe('join-condition', () => {
       if (!result.success) return;
 
       const label = formatJoinConditionLabel(result.query.joins[0]!.conditionRoot!);
-      expect(label).toBe('o.user_id = u.id AND o.status = active');
+      expect(label).toBe("o.user_id = u.id AND o.status = 'active'");
     });
   });
 

@@ -111,12 +111,43 @@ function matchesTerm(text: string, pos: number, term: string): boolean {
   return true;
 }
 
+function readSqlQuotedString(text: string, pos: number, quote: "'" | '"'): MatchCandidate | null {
+  if (text[pos] !== quote) return null;
+
+  let i = pos + 1;
+  while (i < text.length) {
+    if (text[i] === quote) {
+      if (text[i + 1] === quote) {
+        i += 2;
+        continue;
+      }
+      return {
+        length: i - pos + 1,
+        kind: 'string',
+        text: text.slice(pos, i + 1),
+      };
+    }
+    i += 1;
+  }
+
+  return {
+    length: text.length - pos,
+    kind: 'string',
+    text: text.slice(pos),
+  };
+}
+
 function findBestMatch(
   text: string,
   pos: number,
   tableTerms: string[],
   qualifiedTableTerms: string[],
 ): MatchCandidate | null {
+  const sqlString = readSqlQuotedString(text, pos, "'");
+  if (sqlString) return sqlString;
+  const sqlDoubleString = readSqlQuotedString(text, pos, '"');
+  if (sqlDoubleString) return sqlDoubleString;
+
   if (text[pos] === '「') {
     const end = text.indexOf('」', pos + 1);
     if (end !== -1) {
@@ -264,7 +295,11 @@ export function segmentEffectText(text: string, query?: ParsedQuery): EffectText
     }
 
     if (match.kind === 'string') {
-      segments.push(...segmentQuotedString(match.text, tableTerms, qualifiedTableTerms));
+      if (match.text.startsWith("'") || match.text.startsWith('"')) {
+        segments.push({ text: match.text, kind: 'string' });
+      } else {
+        segments.push(...segmentQuotedString(match.text, tableTerms, qualifiedTableTerms));
+      }
     } else {
       segments.push({ text: match.text, kind: match.kind });
     }

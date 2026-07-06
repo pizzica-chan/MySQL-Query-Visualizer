@@ -79,6 +79,28 @@ function extractFunctionArgs(node: any): any[] {
   return toArray(raw);
 }
 
+function unescapeSqlSingleQuotedValue(value: string): string {
+  return value.replace(/''/g, "'");
+}
+
+function formatSingleQuotedString(value: string): string {
+  const unescaped = unescapeSqlSingleQuotedValue(value);
+  return `'${unescaped.replace(/'/g, "''")}'`;
+}
+
+function formatDoubleQuotedString(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function formatQuotedLiteral(node: any): string {
+  if (typeof node.raw === 'string' && node.raw.length > 0) {
+    const raw = node.raw;
+    if (raw.startsWith("'") || raw.startsWith('"')) return raw;
+  }
+  if (node.type === 'double_quote_string') return formatDoubleQuotedString(String(node.value));
+  return formatSingleQuotedString(String(node.value));
+}
+
 function exprToString(node: any): string {
   if (!node) return '';
 
@@ -91,9 +113,11 @@ function exprToString(node: any): string {
     }
     case 'number':
     case 'bool':
+      return String(node.value);
+    case 'string':
     case 'single_quote_string':
     case 'double_quote_string':
-      return String(node.value);
+      return formatQuotedLiteral(node);
     case 'null':
       return 'NULL';
     case 'star':
@@ -575,6 +599,91 @@ function parseJoinCondition(on: any): {
   return { condition, conditionRoot };
 }
 
+function tableJoinQualifier(table: TableRef): string {
+  return table.alias ?? table.table;
+}
+
+function parseUsingColumnName(entry: unknown): string {
+  if (typeof entry === 'string') return entry;
+  if (entry && typeof entry === 'object') {
+    const value = (entry as { value?: unknown; column?: unknown }).value
+      ?? (entry as { column?: unknown }).column;
+    if (typeof value === 'string') return value;
+  }
+  return '';
+}
+
+function formatUsingClause(columns: string[]): string {
+  return `USING (${columns.join(', ')})`;
+}
+
+function buildUsingComparison(
+  column: string,
+  source: TableRef,
+  target: TableRef,
+): ConditionNode {
+  const left = `${tableJoinQualifier(source)}.${column}`;
+  const right = `${tableJoinQualifier(target)}.${column}`;
+  return {
+    id: nextId('cond'),
+    type: 'comparison',
+    label: `${left} = ${right}`,
+    operator: '=',
+    left,
+    right,
+  };
+}
+
+function parseUsingJoinCondition(
+  using: unknown[],
+  source: TableRef,
+  target: TableRef,
+): {
+  condition: string;
+  parts?: { left: string; operator: string; right: string };
+  conditionRoot?: ConditionNode;
+} {
+  const columns = using.map(parseUsingColumnName).filter(Boolean);
+  if (columns.length === 0) return { condition: '(no condition)' };
+
+  const comparisons = columns.map((col) => buildUsingComparison(col, source, target));
+  const conditionRoot = enrichConditionTree(
+    comparisons.length === 1
+      ? comparisons[0]!
+      : {
+          id: nextId('cond'),
+          type: 'and',
+          label: 'AND',
+          operator: 'AND',
+          children: comparisons,
+        },
+  );
+
+  const first = comparisons[0]!;
+  const parts =
+    comparisons.length === 1
+      ? { left: first.left!, operator: '=', right: first.right! }
+      : undefined;
+
+  return {
+    condition: formatUsingClause(columns),
+    conditionRoot,
+    parts,
+  };
+}
+
+function parseJoinConditionFromEntry(
+  entry: any,
+  source: TableRef,
+  target: TableRef,
+): ReturnType<typeof parseJoinCondition> {
+  const using = toArray(entry?.using);
+  if (using.length > 0) {
+    return parseUsingJoinCondition(using, source, target);
+  }
+  return parseJoinCondition(entry.on);
+}
+
 function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] } {
   const tables: TableRef[] = [];
   const joins: JoinEdge[] = [];
@@ -589,7 +698,7 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
 
     const joinType = normalizeJoinType(entry.join);
     const prevTable = tables[index - 1];
-    const { condition, parts, conditionRoot } = parseJoinCondition(entry.on);
+    const { condition, parts, conditionRoot } = parseJoinConditionFromEntry(entry, prevTable, tableRef);
 
     joins.push({
       id: nextId('join'),

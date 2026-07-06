@@ -65,6 +65,29 @@ describe('effect-text-highlight', () => {
     expect(restored).toBe(line);
   });
 
+  it('SQL のシングルクォート文字列をハイライトする', () => {
+    const query = parseMySqlQuery("SELECT id FROM users WHERE status = 'active'");
+    expect(query.success).toBe(true);
+    if (!query.success) return;
+
+    const segments = segmentEffectText("u.status = 'active'", query.query);
+    expect(segments.some((s) => s.kind === 'string' && s.text === "'active'")).toBe(true);
+    expect(segments.map((s) => s.text).join('')).toBe("u.status = 'active'");
+  });
+
+  it('LIKE パターンのクォートを欠落なく復元できる', () => {
+    const query = parseMySqlQuery("SELECT id FROM users WHERE email LIKE '%@example.com'");
+    expect(query.success).toBe(true);
+    if (!query.success) return;
+
+    const input = "email LIKE '%@example.com'";
+    const restored = segmentEffectText(input, query.query).map((s) => s.text).join('');
+    expect(restored).toBe(input);
+    expect(segmentEffectText(input, query.query).some((s) => s.kind === 'string' && s.text === "'%@example.com'")).toBe(
+      true,
+    );
+  });
+
   it('スキーマ付きテーブル名を列参照ではなくテーブルとしてハイライトする', () => {
     const query = parseMySqlQuery(`
       SELECT u.id FROM mydb.users u
