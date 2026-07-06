@@ -74,7 +74,7 @@ describe('NATURAL JOIN', () => {
     const optional = buildQueryEffect(result.query).sections
       .find((s) => s.title === '結合するテーブル')
       ?.presenceGroups?.find((g) => g.kind === 'optional');
-    expect(optional?.entries.some((e) => e.join?.root.label === 'NATURAL LEFT JOIN')).toBe(true);
+    expect(optional?.entries.some((e) => e.join?.type === 'NATURAL LEFT JOIN')).toBe(true);
   });
 
   it('エイリアス解決後も NATURAL 表示を維持する', () => {

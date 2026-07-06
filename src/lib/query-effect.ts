@@ -3,6 +3,7 @@ import { formatJoinDisplayType } from './parser';
 import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
+  formatEffectiveInnerJoinScopeLine,
   type EffectiveInnerReason,
 } from './join-effective-inner';
 import { resolveJoinLayoutSources } from './join-graph-layout';
@@ -24,8 +25,8 @@ export interface ConditionEffectNode {
 }
 
 export interface TablePresenceJoin {
-  /** 行の絞り込み「結合条件」と同じ join ノード（種別ヘッダー + ON 句） */
-  root: ConditionEffectNode;
+  type: string;
+  condition: ConditionEffectNode;
 }
 
 export interface TablePresenceEntry {
@@ -64,6 +65,8 @@ export interface QueryEffectSection {
   conditionRoot?: ConditionEffectNode;
 }
 
+export type QueryEffectMode = 'sql' | 'japanese';
+
 export interface QueryEffect {
   action: EffectAction;
   actionLabel: string;
@@ -74,6 +77,15 @@ export interface QueryEffect {
 
 const AGGREGATE_FUNC_PATTERN =
   /\b(COUNT|SUM|AVG|MIN|MAX|GROUP_CONCAT|BIT_AND|BIT_OR|STD|STDDEV|VARIANCE)\s*\(/i;
+const COUNT_DISTINCT_PATTERN = /\bCOUNT\s*\(\s*DISTINCT\b/i;
+
+function columnLabel(col: SelectColumn): string {
+  return col.alias ?? col.expression;
+}
+
+function hasStarProjection(columns: SelectColumn[]): boolean {
+  return columns.some((c) => c.expression === '*' || /\.\*$/.test(c.expression));
+}
 
 function formatSelectColumnSql(col: SelectColumn): string {
   return col.alias ? `${col.expression} AS ${col.alias}` : col.expression;
@@ -107,7 +119,51 @@ function formatLimitClauseLine(query: ParsedQuery): EffectLine | null {
   };
 }
 
-function describePostProcessLines(query: ParsedQuery): EffectLine[] {
+function describeDistinctLineJapanese(query: ParsedQuery): string {
+  if (!query.distinct) return '';
+
+  if (query.groupBy.length > 0) {
+    return 'DISTINCT — 集約後、SELECT 列の組み合わせが同じ行を1行にまとめる';
+  }
+
+  if (hasStarProjection(query.columns)) {
+    return 'DISTINCT — 行全体（すべての列）が同じものを1行にまとめる';
+  }
+
+  const cols = query.columns.map(columnLabel).join(', ');
+  return `DISTINCT — ${cols} の組み合わせが同じ行を1行にまとめる`;
+}
+
+function describePostProcessLinesJapanese(query: ParsedQuery): EffectLine[] {
+  const lines: EffectLine[] = [];
+  const distinctLine = describeDistinctLineJapanese(query);
+  if (distinctLine) lines.push({ text: distinctLine });
+  if (query.orderBy.length > 0) {
+    lines.push({
+      text: `並び順 — ${query.orderBy.map((o) => o.text).join(', ')}`,
+      sourceSpan: query.orderBy[0]?.sourceSpan,
+    });
+  }
+  if (query.offset) {
+    lines.push({
+      text: `先頭スキップ — ${query.offset} 行を飛ばしてから取得`,
+      sourceSpan: query.offsetSpan,
+    });
+  }
+  if (query.limit) {
+    lines.push({
+      text: query.offset
+        ? `件数上限 — スキップ後最大 ${query.limit} 行`
+        : `件数上限 — 最大 ${query.limit} 行`,
+      sourceSpan: query.limitSpan,
+    });
+  }
+  return lines;
+}
+
+function describePostProcessLines(query: ParsedQuery, mode: QueryEffectMode): EffectLine[] {
+  if (mode === 'japanese') return describePostProcessLinesJapanese(query);
+
   const lines: EffectLine[] = [];
   if (query.distinct) {
     lines.push({ text: 'DISTINCT' });
@@ -128,7 +184,35 @@ function formatLimitSummary(query: ParsedQuery): string {
   return '';
 }
 
-function describeAggregateLines(query: ParsedQuery): EffectLine[] {
+function describeAggregateLinesJapanese(query: ParsedQuery): EffectLine[] {
+  if (query.statementType !== 'SELECT') return [];
+
+  const aggregateCols = query.columns.filter((c) => AGGREGATE_FUNC_PATTERN.test(c.expression));
+  const countDistinctCols = query.columns.filter((c) => COUNT_DISTINCT_PATTERN.test(c.expression));
+  const lines: EffectLine[] = [];
+
+  if (query.groupBy.length > 0) {
+    lines.push({
+      text: `${query.groupBy.map((g) => g.text).join(', ')} ごとに集約 — 1グループ = 結果の1行`,
+      sourceSpan: query.groupBy[0]?.sourceSpan,
+    });
+  } else if (aggregateCols.length > 0) {
+    lines.push({ text: '集約関数のみ — 全体を1グループとして計算（結果は最大1行）' });
+  }
+
+  for (const col of countDistinctCols) {
+    lines.push({
+      text: `${columnLabel(col)} — 重複値を除いて数える（COUNT DISTINCT）`,
+      sourceSpan: col.sourceSpan,
+    });
+  }
+
+  return lines;
+}
+
+function describeAggregateLines(query: ParsedQuery, mode: QueryEffectMode): EffectLine[] {
+  if (mode === 'japanese') return describeAggregateLinesJapanese(query);
+
   if (query.statementType !== 'SELECT') return [];
 
   const lines: EffectLine[] = [];
@@ -170,6 +254,30 @@ function describeUnionCombination(query: ParsedQuery): string[] {
     'UNION / UNION ALL — 各 SELECT の結果を縦に連結（UNION は重複行を除外、UNION ALL は残す）',
   ];
 }
+
+const JOIN_SCOPE: Record<string, (left: string, right: string, condition: string) => string> = {
+  'INNER JOIN': (l, r, c) =>
+    `${l} と ${r} を INNER JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  JOIN: (l, r, c) => `${l} と ${r} を JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  'LEFT JOIN': (l, r, c) =>
+    `${l} の行をすべて残し ${r} を LEFT JOIN — 結合条件「${c}」（${r} が無くても ${l} は残る）`,
+  'RIGHT JOIN': (l, r, c) =>
+    `${r} の行をすべて残し ${l} を RIGHT JOIN — 結合条件「${c}」`,
+  'FULL JOIN': (l, r, c) => `${l} と ${r} を FULL JOIN — 結合条件「${c}」`,
+  'CROSS JOIN': (l, r) => `${l} と ${r} の直積（すべての組み合わせ）`,
+};
+
+const MULTI_SOURCE_JOIN_SCOPE: Record<string, (sources: string, target: string, condition: string) => string> = {
+  'INNER JOIN': (s, r, c) =>
+    `${s} と ${r} を INNER JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  JOIN: (s, r, c) => `${s} と ${r} を JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  'LEFT JOIN': (s, r, c) =>
+    `${s} を基点に ${r} を LEFT JOIN — 結合条件「${c}」（${r} が無い組み合わせも LEFT 側は残る）`,
+  'RIGHT JOIN': (s, r, c) =>
+    `${r} を基点に ${s} を RIGHT JOIN — 結合条件「${c}」`,
+  'FULL JOIN': (s, r, c) => `${s} と ${r} を FULL JOIN — 結合条件「${c}」`,
+  'CROSS JOIN': (s, r) => `${s} と ${r} の直積（すべての組み合わせ）`,
+};
 
 const ACTION_LABELS: Record<ParsedQuery['statementType'], { action: EffectAction; label: string; verb: string }> = {
   SELECT: { action: 'select', label: '表示', verb: '表示される' },
@@ -422,10 +530,14 @@ function formatTableNameForPresence(
 
 function buildTablePresenceGroups(
   classification: TablePresenceClassification,
+  mode: QueryEffectMode,
 ): TablePresenceGroup[] {
+  const requiredLabel = mode === 'japanese' ? PRESENCE_REQUIRED_LABEL_JA : PRESENCE_REQUIRED_LABEL;
+  const optionalLabel = mode === 'japanese' ? PRESENCE_OPTIONAL_LABEL_JA : PRESENCE_OPTIONAL_LABEL;
+
   return [
     {
-      label: PRESENCE_REQUIRED_LABEL,
+      label: requiredLabel,
       kind: 'required',
       entries: classification.required.map((t) => ({
         tableLabel: formatTableNameForPresence(t, classification, true),
@@ -433,7 +545,7 @@ function buildTablePresenceGroups(
       })),
     },
     {
-      label: PRESENCE_OPTIONAL_LABEL,
+      label: optionalLabel,
       kind: 'optional',
       entries: classification.optional.map((t) => ({
         tableLabel: formatTableNameForPresence(t, classification, false),
@@ -443,6 +555,40 @@ function buildTablePresenceGroups(
   ];
 }
 
+function describeJoinJapanese(
+  join: JoinEdge,
+  tables: TableRef[],
+  effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
+): string {
+  const sourceLabels = joinSourceLabels(join, tables);
+  const sourcesText = sourceLabels.join('、');
+  const right = tableName(join, tables, join.targetId);
+  const left = sourceLabels.length === 1 ? sourceLabels[0]! : sourcesText;
+  const joinType = formatJoinDisplayType(join);
+  const condition = join.condition;
+
+  if (effectiveInner) {
+    const preservedLabel = join.type === 'LEFT JOIN' ? left : right;
+    return formatEffectiveInnerJoinScopeLine(join, preservedLabel, effectiveInner.nullableTable, effectiveInner.reasons);
+  }
+
+  if (join.type === 'CROSS JOIN') {
+    const fn =
+      sourceLabels.length > 1
+        ? MULTI_SOURCE_JOIN_SCOPE['CROSS JOIN']
+        : JOIN_SCOPE['CROSS JOIN'];
+    return fn(left, right, condition);
+  }
+
+  if (sourceLabels.length > 1) {
+    const fn = MULTI_SOURCE_JOIN_SCOPE[joinType] ?? MULTI_SOURCE_JOIN_SCOPE.JOIN;
+    return fn(sourcesText, right, condition);
+  }
+
+  const fn = JOIN_SCOPE[joinType] ?? JOIN_SCOPE.JOIN;
+  return fn(left, right, condition);
+}
+
 function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
   const sourceLabels = joinSourceLabels(join, tables);
   const right = tableName(join, tables, join.targetId);
@@ -450,32 +596,65 @@ function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
   return `CROSS JOIN — ${left} と ${right} のすべての組み合わせ`;
 }
 
-function conditionPhrase(node: ConditionNode): string {
-  return node.label;
+function inConditionPhrase(node: ConditionNode): string {
+  const isNotIn = node.operator === 'NOT IN' || /\bNOT\s+IN\b/i.test(node.label);
+
+  if (node.nestedQuery) {
+    const prefix = isNotIn
+      ? '別の SELECT が返した値のどれとも一致しない'
+      : '別の SELECT が返した値のどれかと一致';
+    return `${prefix} — ${node.label}`;
+  }
+
+  const prefix = isNotIn ? '次の値のどれとも一致しない' : '次の値のどれかと一致';
+  return `${prefix} — ${node.label}`;
+}
+
+function conditionPhrase(node: ConditionNode, mode: QueryEffectMode): string {
+  if (mode === 'sql') return node.label;
+
+  switch (node.type) {
+    case 'exists': {
+      const isNotExists = /\bNOT\s+EXISTS\b/i.test(node.label);
+      const prefix = isNotExists ? '関連行が存在しないものだけ' : '関連行が存在するものだけ';
+      return `${prefix} — ${node.label}`;
+    }
+    case 'in':
+      return inConditionPhrase(node);
+    case 'like':
+      return `パターン一致 — ${node.label}`;
+    case 'between':
+      return `範囲内 — ${node.label}`;
+    default:
+      return node.label;
+  }
 }
 
 /** WHERE / HAVING を AND / OR / NOT の入れ子ツリーに変換 */
-export function buildConditionEffectTree(node: ConditionNode): ConditionEffectNode {
+export function buildConditionEffectTree(
+  node: ConditionNode,
+  mode: QueryEffectMode = 'sql',
+): ConditionEffectNode {
   if (node.type === 'and' && node.children?.length) {
     if (node.children.length === 1) {
-      return buildConditionEffectTree(node.children[0]!);
+      return buildConditionEffectTree(node.children[0]!, mode);
     }
     return {
       id: node.id,
       type: 'and',
       label: 'すべて満たす（AND）',
-      children: mergeSameTypeGroups(node.children.map(buildConditionEffectTree), 'and'),
+      children: mergeSameTypeGroups(node.children.map((child) => buildConditionEffectTree(child, mode)), 'and'),
     };
   }
   if (node.type === 'or' && node.children?.length) {
     if (node.children.length === 1) {
-      return buildConditionEffectTree(node.children[0]!);
+      return buildConditionEffectTree(node.children[0]!, mode);
     }
     return {
       id: node.id,
       type: 'or',
       label: 'いずれかを満たす（OR）',
-      children: mergeSameTypeGroups(node.children.map(buildConditionEffectTree), 'or'),
+      children: mergeSameTypeGroups(node.children.map((child) => buildConditionEffectTree(child, mode)), 'or'),
     };
   }
   if (node.type === 'not') {
@@ -484,13 +663,13 @@ export function buildConditionEffectTree(node: ConditionNode): ConditionEffectNo
       id: node.id,
       type: 'not',
       label: '除外（NOT）',
-      children: inner ? [buildConditionEffectTree(inner)] : [],
+      children: inner ? [buildConditionEffectTree(inner, mode)] : [],
     };
   }
   return {
     id: node.id,
     type: 'leaf',
-    text: conditionPhrase(node),
+    text: conditionPhrase(node, mode),
     sourceSpan: node.sourceSpan,
   };
 }
@@ -529,14 +708,19 @@ function effectiveInnerForJoin(
 }
 
 const SCOPE_SECTION_TITLE_JOIN = '結合するテーブル';
+const SCOPE_SECTION_TITLE_JOIN_JA = '検索範囲';
 const SCOPE_SECTION_TITLE_SINGLE = '対象テーブル';
-
-function scopeSectionTitle(query: ParsedQuery): string {
-  return query.joins.length > 0 ? SCOPE_SECTION_TITLE_JOIN : SCOPE_SECTION_TITLE_SINGLE;
-}
 const PRESENCE_REQUIRED_LABEL = '必須';
+const PRESENCE_REQUIRED_LABEL_JA = 'レコード必須';
 const PRESENCE_OPTIONAL_LABEL = '任意（外部結合）';
+const PRESENCE_OPTIONAL_LABEL_JA = 'レコード任意（外部結合）';
 const ROW_FILTER_TITLE = '行の絞り込み';
+const ROW_FILTER_TITLE_JA = '行の絞り込み（WHERE）';
+
+function scopeSectionTitle(query: ParsedQuery, mode: QueryEffectMode): string {
+  if (query.joins.length === 0) return SCOPE_SECTION_TITLE_SINGLE;
+  return mode === 'japanese' ? SCOPE_SECTION_TITLE_JOIN_JA : SCOPE_SECTION_TITLE_JOIN;
+}
 
 function effectiveInnerCauseLabel(reasons: EffectiveInnerReason[]): string {
   if (reasons.some((r) => r.kind === 'inner_join')) {
@@ -567,9 +751,9 @@ function joinFilterHeader(
   return typeLabel;
 }
 
-function buildJoinConditionEffectNode(join: JoinEdge): ConditionEffectNode {
+function buildJoinConditionEffectNode(join: JoinEdge, mode: QueryEffectMode): ConditionEffectNode {
   if (join.conditionRoot) {
-    return buildConditionEffectTree(join.conditionRoot);
+    return buildConditionEffectTree(join.conditionRoot, mode);
   }
   return {
     id: `join-cond-${join.id}`,
@@ -602,6 +786,7 @@ function attachOptionalJoinsToPresenceGroups(
   query: ParsedQuery,
   classification: TablePresenceClassification,
   optionalJoins: JoinEdge[],
+  mode: QueryEffectMode,
 ): TablePresenceGroup[] {
   return groups.map((group) => {
     if (group.kind !== 'optional') return group;
@@ -617,7 +802,8 @@ function attachOptionalJoinsToPresenceGroups(
         return {
           ...entry,
           join: {
-            root: buildJoinFilterNode(join),
+            type: formatJoinDisplayType(join),
+            condition: buildJoinConditionEffectNode(join, mode),
           },
         };
       }),
@@ -627,14 +813,15 @@ function attachOptionalJoinsToPresenceGroups(
 
 function buildJoinFilterNode(
   join: JoinEdge,
-  effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
+  effectiveInner: { nullableTable: TableRef; reasons: EffectiveInnerReason[] } | undefined,
+  mode: QueryEffectMode,
 ): ConditionEffectNode {
   return {
     id: `join-filter-${join.id}`,
     type: 'join',
     label: joinFilterHeader(join, effectiveInner),
     sourceSpan: join.sourceSpan,
-    children: [buildJoinConditionEffectNode(join)],
+    children: [buildJoinConditionEffectNode(join, mode)],
   };
 }
 
@@ -650,12 +837,13 @@ function isJoinRowFilter(
 function buildJoinFilterLeaves(
   query: ParsedQuery,
   effectiveInnerByJoin: Map<string, { reasons: EffectiveInnerReason[] }>,
+  mode: QueryEffectMode,
 ): ConditionEffectNode[] {
   return query.joins.flatMap((join) => {
     const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
     if (!isJoinRowFilter(join, effectiveInner)) return [];
     return [
-      buildJoinFilterNode(join, effectiveInner),
+      buildJoinFilterNode(join, effectiveInner, mode),
     ];
   });
 }
@@ -676,9 +864,18 @@ function joinFilterPart(joinLeaves: ConditionEffectNode[]): QueryEffectFilterPar
   };
 }
 
-function describeRowFilterSection(query: ParsedQuery): QueryEffectSection | null {
+function describeRowFilterSection(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection | null {
+  if (mode === 'japanese') {
+    if (!query.where) return null;
+    return {
+      kind: 'filter',
+      title: ROW_FILTER_TITLE_JA,
+      conditionRoot: buildConditionEffectTree(query.where, mode),
+    };
+  }
+
   const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
-  const joinLeaves = buildJoinFilterLeaves(query, effectiveInnerByJoin);
+  const joinLeaves = buildJoinFilterLeaves(query, effectiveInnerByJoin, mode);
   const filterParts: QueryEffectFilterPart[] = [];
 
   const joinPart = joinFilterPart(joinLeaves);
@@ -687,7 +884,7 @@ function describeRowFilterSection(query: ParsedQuery): QueryEffectSection | null
   if (query.where) {
     filterParts.push({
       label: 'WHERE',
-      root: buildConditionEffectTree(query.where),
+      root: buildConditionEffectTree(query.where, mode),
     });
   }
 
@@ -700,7 +897,7 @@ function describeRowFilterSection(query: ParsedQuery): QueryEffectSection | null
   };
 }
 
-function describeScope(query: ParsedQuery): QueryEffectSection | null {
+function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection | null {
   const lines: EffectLine[] = [];
   let presenceGroups: TablePresenceGroup[] | undefined;
   const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
@@ -718,6 +915,21 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
     }
     if (query.joins.length === 0) {
       lines.push({ text: `${tableLabel(query.tables[0]!)} の行` });
+    } else if (mode === 'japanese') {
+      const classification = classifyTablePresenceRequirement(query);
+      presenceGroups = buildTablePresenceGroups(classification, mode);
+
+      lines.push({
+        text: `${tableLabel(query.tables[0]!)} を起点に行の組み合わせを構成`,
+        sourceSpan: query.tables[0]?.sourceSpan,
+      });
+      for (const join of query.joins) {
+        const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
+        lines.push({
+          text: describeJoinJapanese(join, query.tables, effectiveInner),
+          sourceSpan: join.sourceSpan,
+        });
+      }
     } else {
       const classification = classifyTablePresenceRequirement(query);
       const optionalJoins = query.joins.filter((join) => {
@@ -726,10 +938,11 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
         return !isJoinRowFilter(join, effectiveInner);
       });
       presenceGroups = attachOptionalJoinsToPresenceGroups(
-        buildTablePresenceGroups(classification),
+        buildTablePresenceGroups(classification, mode),
         query,
         classification,
         optionalJoins,
+        mode,
       );
       for (const join of query.joins) {
         if (join.type === 'CROSS JOIN') {
@@ -741,25 +954,26 @@ function describeScope(query: ParsedQuery): QueryEffectSection | null {
 
   if (lines.length === 0 && !presenceGroups) return null;
 
-  return { kind: 'scope', title: scopeSectionTitle(query), lines, presenceGroups };
+  return { kind: 'scope', title: scopeSectionTitle(query, mode), lines, presenceGroups };
 }
 
 function describeFilterSection(
   node: ConditionNode | undefined,
   title: string,
+  mode: QueryEffectMode,
 ): QueryEffectSection | null {
   if (!node) return null;
   return {
     kind: 'filter',
     title,
-    conditionRoot: buildConditionEffectTree(node),
+    conditionRoot: buildConditionEffectTree(node, mode),
   };
 }
 
-function describeAggregation(query: ParsedQuery): QueryEffectSection[] {
+function describeAggregation(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection[] {
   if (query.statementType !== 'SELECT') return [];
 
-  const aggregateLines = describeAggregateLines(query);
+  const aggregateLines = describeAggregateLines(query, mode);
   if (aggregateLines.length === 0 && query.groupBy.length === 0) return [];
 
   const sections: QueryEffectSection[] = [
@@ -770,7 +984,11 @@ function describeAggregation(query: ParsedQuery): QueryEffectSection[] {
     },
   ];
 
-  const having = describeFilterSection(query.having, 'HAVING');
+  const havingTitle =
+    mode === 'japanese'
+      ? '集約後の HAVING 条件（グループ単位でさらに絞り込み）'
+      : 'HAVING';
+  const having = describeFilterSection(query.having, havingTitle, mode);
   if (having) sections.push(having);
 
   return sections;
@@ -787,8 +1005,8 @@ function describeChanges(query: ParsedQuery): QueryEffectSection | null {
   return null;
 }
 
-function describePostProcess(query: ParsedQuery): QueryEffectSection | null {
-  const lines = describePostProcessLines(query);
+function describePostProcess(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection | null {
+  const lines = describePostProcessLines(query, mode);
   return lines.length > 0 ? { kind: 'info', title: '後処理', lines } : null;
 }
 
@@ -829,25 +1047,25 @@ function buildSummary(query: ParsedQuery, meta: (typeof ACTION_LABELS)[ParsedQue
   return `${target}${filtered}行が${meta.verb}${limit}`;
 }
 
-export function buildQueryEffect(query: ParsedQuery): QueryEffect {
+export function buildQueryEffect(query: ParsedQuery, mode: QueryEffectMode = 'sql'): QueryEffect {
   const meta = ACTION_LABELS[query.statementType];
   const sections: QueryEffectSection[] = [];
 
   const target = describeOperationTarget(query);
   if (target) sections.push(target);
 
-  const scope = describeScope(query);
+  const scope = describeScope(query, mode);
   if (scope) sections.push(scope);
 
-  const where = describeRowFilterSection(query);
+  const where = describeRowFilterSection(query, mode);
   if (where) sections.push(where);
 
-  sections.push(...describeAggregation(query));
+  sections.push(...describeAggregation(query, mode));
 
   const changes = describeChanges(query);
   if (changes) sections.push(changes);
 
-  const post = describePostProcess(query);
+  const post = describePostProcess(query, mode);
   if (post) sections.push(post);
 
   return {
@@ -864,13 +1082,16 @@ export interface UnionQueryEffect {
   unionNotes: string[];
 }
 
-export function buildUnionQueryEffect(query: ParsedQuery): UnionQueryEffect | null {
+export function buildUnionQueryEffect(
+  query: ParsedQuery,
+  mode: QueryEffectMode = 'sql',
+): UnionQueryEffect | null {
   if (!hasUnion(query) || !query.unionBranches) return null;
   return {
     unionNotes: describeUnionCombination(query),
     branches: query.unionBranches.map((branch) => ({
       operator: branch.operator,
-      effect: buildQueryEffect(branch.query),
+      effect: buildQueryEffect(branch.query, mode),
     })),
   };
 }

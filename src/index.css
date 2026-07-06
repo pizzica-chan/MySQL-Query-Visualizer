@@ -1466,6 +1466,21 @@ body {
 .query-effect-presence-join {
   margin-left: 14px;
   margin-top: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-visible);
+}
+
+.query-effect-presence-join-type {
+  font-size: var(--effect-fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+  line-height: var(--effect-lh-tight);
+}
+
+.query-effect-presence-join-on .effect-condition-leaf,
+.query-effect-presence-join-on .effect-condition-group {
+  font-size: var(--effect-fs-body);
 }
 
 .query-effect-presence-tables {

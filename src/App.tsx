@@ -17,10 +17,11 @@ import { collectSubqueryRefsExcludingUnionBranches, hasUnion, type SubqueryRef }
 import type { ParsedQuery, SourceSpan } from './lib/types';
 import type { OnSourceSpanSelect } from './lib/source-link';
 
-type TabId = 'effect' | 'joins' | 'nested';
+type TabId = 'structure' | 'narrative' | 'joins' | 'nested';
 
 const BASE_TABS: { id: TabId; label: string }[] = [
-  { id: 'effect', label: '作用説明' },
+  { id: 'structure', label: 'SQL構造' },
+  { id: 'narrative', label: '作用説明' },
   { id: 'joins', label: 'JOIN 図' },
 ];
 
@@ -28,7 +29,7 @@ export default function App() {
   const [sql, setSql] = useState('');
   const [parsed, setParsed] = useState<ParsedQuery | null>(null);
   const [error, setError] = useState<string | undefined>();
-  const [activeTab, setActiveTab] = useState<TabId>('effect');
+  const [activeTab, setActiveTab] = useState<TabId>('structure');
   const [resolveAliases, setResolveAliases] = useState(false);
   const [activeSourceSpan, setActiveSourceSpan] = useState<SourceSpan | null>(null);
 
@@ -85,7 +86,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'nested' && !nestedInfo.showTab) {
-      setActiveTab('effect');
+      setActiveTab('structure');
     }
   }, [activeTab, nestedInfo.showTab]);
 
@@ -151,8 +152,16 @@ export default function App() {
               </nav>
 
               <div className="tab-content">
-                {activeTab === 'effect' && (
-                  <QueryEffectBanner query={displayQuery} resolveAliases={resolveAliases} {...sourceLinkProps} />
+                {activeTab === 'structure' && (
+                  <QueryEffectBanner
+                    query={displayQuery}
+                    variant="structure"
+                    resolveAliases={resolveAliases}
+                    {...sourceLinkProps}
+                  />
+                )}
+                {activeTab === 'narrative' && (
+                  <QueryEffectBanner query={displayQuery} variant="narrative" resolveAliases={resolveAliases} />
                 )}
                 <div
                   className={`tab-pane${activeTab === 'joins' ? '' : ' tab-pane--hidden'}`}

@@ -1,4 +1,4 @@
-import type { ConditionEffectNode, EffectLine, QueryEffectSection } from '../lib/query-effect';
+import type { ConditionEffectNode, EffectLine, QueryEffectMode, QueryEffectSection } from '../lib/query-effect';
 import { buildQueryEffect } from '../lib/query-effect';
 import type { ParsedQuery, SourceSpan } from '../lib/types';
 import type { OnSourceSpanSelect } from '../lib/source-link';
@@ -128,12 +128,15 @@ export function QueryEffectSectionView({
   section,
   query,
   sourceLink,
+  mode = 'sql',
 }: {
   section: QueryEffectSection;
   query: ParsedQuery;
   sourceLink: QueryEffectSourceLinkProps;
+  mode?: QueryEffectMode;
 }) {
   const { activeSourceSpan, onSourceSpanSelect } = sourceLink;
+  const enableSourceLink = Boolean(onSourceSpanSelect);
 
   return (
     <div className={`query-effect-section query-effect-section--${section.kind}`}>
@@ -156,22 +159,29 @@ export function QueryEffectSectionView({
                     <li key={entryIndex} className="query-effect-presence-entry">
                       <div
                         className="query-effect-presence-table"
-                        {...lineProps(
-                          { text: entry.tableLabel, sourceSpan: entry.tableSourceSpan },
-                          activeSourceSpan,
-                          onSourceSpanSelect,
-                          'query-effect-presence-table--link',
-                        )}
+                        {...(enableSourceLink
+                          ? lineProps(
+                              { text: entry.tableLabel, sourceSpan: entry.tableSourceSpan },
+                              activeSourceSpan,
+                              onSourceSpanSelect,
+                              'query-effect-presence-table--link',
+                            )
+                          : { className: 'query-effect-presence-table' })}
                       >
                         <EffectHighlightedText text={entry.tableLabel} query={query} />
                       </div>
                       {entry.join && (
                         <div className="query-effect-presence-join">
-                          <ConditionEffectTree
-                            node={entry.join.root}
-                            query={query}
-                            sourceLink={sourceLink}
-                          />
+                          <div className="query-effect-presence-join-type">
+                            <EffectHighlightedText text={entry.join.type} query={query} />
+                          </div>
+                          <div className="query-effect-presence-join-on">
+                            <ConditionEffectTree
+                              node={entry.join.condition}
+                              query={query}
+                              sourceLink={sourceLink}
+                            />
+                          </div>
                         </div>
                       )}
                     </li>
@@ -183,15 +193,22 @@ export function QueryEffectSectionView({
         </div>
       )}
       {section.lines && section.lines.length > 0 && (
-        section.kind === 'aggregate' || section.kind === 'info' ? (
-          renderMonoSqlLines(section.lines, query, activeSourceSpan, onSourceSpanSelect)
+        mode === 'sql' && (section.kind === 'aggregate' || section.kind === 'info') ? (
+          renderMonoSqlLines(
+            section.lines,
+            query,
+            enableSourceLink ? activeSourceSpan : null,
+            enableSourceLink ? onSourceSpanSelect : undefined,
+          )
         ) : (
           <ul className="query-effect-lines">
             {section.lines.map((line, index) => (
               <li
                 key={index}
                 className="query-effect-line"
-                {...lineProps(line, activeSourceSpan, onSourceSpanSelect, 'query-effect-line--link')}
+                {...(enableSourceLink
+                  ? lineProps(line, activeSourceSpan, onSourceSpanSelect, 'query-effect-line--link')
+                  : { className: 'query-effect-line' })}
               >
                 <EffectHighlightedText text={line.text} query={query} />
               </li>
@@ -216,7 +233,7 @@ export function QueryEffectSectionView({
   );
 }
 
-/** 作用説明タブと同じ JOIN / WHERE / HAVING 条件表示 */
+/** SQL構造タブと同じ JOIN / WHERE / HAVING 条件表示 */
 export function QueryEffectConditions({
   query,
   sourceLink,

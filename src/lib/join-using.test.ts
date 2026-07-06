@@ -76,7 +76,7 @@ describe('JOIN USING', () => {
       .find((s) => s.title === '結合するテーブル')
       ?.presenceGroups?.find((g) => g.kind === 'optional');
     const entry = optional?.entries.find((e) => e.tableLabel.includes('profiles'));
-    expect(entry?.join?.root.label).toBe('LEFT JOIN');
-    expect(collectLeafTexts(entry!.join!.root.children![0]!)).toEqual(['u.user_id = p.user_id']);
+    expect(entry?.join?.type).toBe('LEFT JOIN');
+    expect(collectLeafTexts(entry!.join!.condition)).toEqual(['u.user_id = p.user_id']);
   });
 });

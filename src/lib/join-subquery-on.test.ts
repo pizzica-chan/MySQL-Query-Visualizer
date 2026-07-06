@@ -131,8 +131,7 @@ describe('JOIN ON サブクエリ', () => {
         .find((s) => s.kind === 'scope')
         ?.presenceGroups?.find((g) => g.kind === 'optional')
         ?.entries.flatMap((e) => {
-          const on =
-            e.join?.root.type === 'join' ? e.join.root.children?.[0] : e.join?.root;
+          const on = e.join?.condition;
           return on ? collectLeafTexts(on) : [];
         }) ?? [];
       const scopeLines =

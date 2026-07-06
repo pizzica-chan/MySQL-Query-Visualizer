@@ -41,8 +41,8 @@ function optionalPresenceEntries(sql: string) {
   return scopeSection(sql)?.presenceGroups?.find((g) => g.kind === 'optional')?.entries ?? [];
 }
 
-function presenceJoinOnNode(join: { root: import('./query-effect').ConditionEffectNode }) {
-  return join.root.type === 'join' ? join.root.children?.[0] : join.root;
+function presenceJoinOnNode(join: { condition: import('./query-effect').ConditionEffectNode }) {
+  return join.condition;
 }
 
 function optionalJoinConditionTexts(sql: string): string[] {
@@ -109,15 +109,18 @@ describe('query-effect', () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
 
-    const effect = buildQueryEffect(result.query);
-    expect(effect.action).toBe('select');
-    expect(effect.summary).toContain('表示');
-    expect(effect.summary).toContain('100');
-    expect(effect.summary).toContain('users（u）');
-    expect(effect.summary).toContain(
+    const narrative = buildQueryEffect(result.query, 'japanese');
+    expect(narrative.action).toBe('select');
+    expect(narrative.summary).toContain('表示');
+    expect(narrative.summary).toContain('100');
+    expect(narrative.summary).toContain('users（u）');
+    expect(narrative.summary).toContain(
       `users（u） など ${result.query.tables.length} テーブルの組み合わせ`,
     );
-    expect(effect.summary).not.toContain(' AS ');
+    expect(narrative.summary).not.toContain(' AS ');
+
+    const effect = buildQueryEffect(result.query);
+    expect(effect.action).toBe('select');
 
     const scope = effect.sections.find((s) => s.kind === 'scope');
     expect(scope?.title).toBe('結合するテーブル');
@@ -166,7 +169,7 @@ describe('query-effect', () => {
         e.tableLabel.includes('categories（c）'),
       );
       expect(categoriesEntry).toBeDefined();
-      expect(categoriesEntry!.join?.root.label).toBe('LEFT JOIN');
+      expect(categoriesEntry!.join?.type).toBe('LEFT JOIN');
       expect(
         collectLeafTexts(presenceJoinOnNode(categoriesEntry!.join!)!).some((l) =>
           l.includes('p.category_id'),
@@ -176,7 +179,7 @@ describe('query-effect', () => {
 
       const lmEntry = optionalPresenceEntries(SAMPLE_SQL).find((e) => e.tableLabel.includes('line_metrics（lm）'));
       expect(lmEntry).toBeDefined();
-      expect(lmEntry!.join?.root.label).toBe('LEFT JOIN');
+      expect(lmEntry!.join?.type).toBe('LEFT JOIN');
       expect(collectLeafTexts(presenceJoinOnNode(lmEntry!.join!)!).some((l) => l.includes('lm.user_id'))).toBe(
         true,
       );
@@ -243,7 +246,7 @@ describe('query-effect', () => {
         LEFT JOIN table_b b ON b.a_id = a.id
       `;
       const entry = optionalPresenceEntries(sql).find((e) => e.tableLabel.includes('table_b'));
-      expect(entry?.join?.root.label).toBe('LEFT JOIN');
+      expect(entry?.join?.type).toBe('LEFT JOIN');
       expect(collectLeafTexts(presenceJoinOnNode(entry!.join!)!).some((l) => l.includes('b.a_id = a.id'))).toBe(
         true,
       );
@@ -257,7 +260,7 @@ describe('query-effect', () => {
         WHERE b.col = 1 OR b.id IS NULL
       `;
       const entry = optionalPresenceEntries(sql).find((e) => e.tableLabel.includes('table_b'));
-      expect(entry?.join?.root.label).toBe('LEFT JOIN');
+      expect(entry?.join?.type).toBe('LEFT JOIN');
       expect(collectLeafTexts(presenceJoinOnNode(entry!.join!)!).some((l) => l.includes('b.a_id = a.id'))).toBe(
         true,
       );
@@ -301,7 +304,7 @@ describe('query-effect', () => {
       ).toBe(true);
       expect(optionalGroup!.entries.some((e) => e.tableLabel.includes('line_metrics（lm）'))).toBe(true);
       expect(optionalGroup!.entries.some((e) => e.tableLabel.includes('categories（c）'))).toBe(true);
-      expect(optionalGroup!.entries.every((e) => e.join?.root.label === 'LEFT JOIN')).toBe(true);
+      expect(optionalGroup!.entries.every((e) => e.join?.type === 'LEFT JOIN')).toBe(true);
     });
 
     it('レコード必須・任意はエイリアス解決の有無に関わらず実テーブル名とエイリアスを併記する', () => {
@@ -339,7 +342,7 @@ describe('query-effect', () => {
       expect(scope?.presenceGroups?.length).toBe(2);
       expect(scope?.presenceGroups?.find((g) => g.kind === 'required')?.label).toBe('必須');
       expect(scope?.presenceGroups?.find((g) => g.kind === 'optional')?.label).toBe('任意（外部結合）');
-      expect(optionalPresenceEntries(SAMPLE_SQL).every((e) => e.join?.root.label === 'LEFT JOIN')).toBe(true);
+      expect(optionalPresenceEntries(SAMPLE_SQL).every((e) => e.join?.type === 'LEFT JOIN')).toBe(true);
       expect(optionalJoinConditionTexts(SAMPLE_SQL).some((l) => l.includes('p.category_id'))).toBe(true);
       expect(lineTexts(scope).some((l) => l.includes('INNER JOIN'))).toBe(false);
     });
@@ -695,6 +698,82 @@ describe('query-effect', () => {
       const texts = collectLeafTexts(buildConditionEffectTree(result.query.where!));
       expect(texts.some((t) => /^NOT EXISTS /i.test(t))).toBe(true);
       expect(texts.some((t) => /^EXISTS /i.test(t) && !/^NOT EXISTS /i.test(t))).toBe(false);
+    });
+  });
+
+  describe('japanese モード（作用説明タブ）', () => {
+    it('検索範囲に JOIN を日本語文章で説明し、結合条件セクションは出さない', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const effect = buildQueryEffect(result.query, 'japanese');
+      const scope = effect.sections.find((s) => s.kind === 'scope');
+      expect(scope?.title).toBe('検索範囲');
+      expect(lineTexts(scope).some((l) => l.includes('を起点に行の組み合わせを構成'))).toBe(true);
+      expect(lineTexts(scope).some((l) => /を INNER JOIN — 結合条件「/.test(l))).toBe(true);
+      expect(lineTexts(scope).some((l) => /を LEFT JOIN — 結合条件「/.test(l))).toBe(true);
+
+      const required = scope?.presenceGroups?.find((g) => g.kind === 'required');
+      const optional = scope?.presenceGroups?.find((g) => g.kind === 'optional');
+      expect(required?.label).toBe('レコード必須');
+      expect(optional?.label).toBe('レコード任意（外部結合）');
+      expect(optional?.entries.every((e) => !e.join)).toBe(true);
+
+      const filter = effect.sections.find((s) => s.kind === 'filter');
+      expect(filter?.title).toBe('行の絞り込み（WHERE）');
+      expect(filter?.filterParts).toBeUndefined();
+      expect(filter?.conditionRoot).toBeDefined();
+    });
+
+    it('条件・集約・後処理を自然言語で説明する', () => {
+      const result = parseMySqlQuery(
+        "SELECT dept, COUNT(*) FROM users WHERE name LIKE '%a%' GROUP BY dept ORDER BY dept LIMIT 10",
+      );
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const effect = buildQueryEffect(result.query, 'japanese');
+      const filter = effect.sections.find((s) => s.kind === 'filter');
+      expect(collectLeafTexts(filter!.conditionRoot!).some((t) => t.startsWith('パターン一致 —'))).toBe(
+        true,
+      );
+
+      const agg = effect.sections.find((s) => s.kind === 'aggregate');
+      expect(lineTexts(agg).some((l) => l.includes('ごとに集約'))).toBe(true);
+
+      const post = effect.sections.find((s) => s.title === '後処理');
+      expect(lineTexts(post).some((l) => l.includes('並び順'))).toBe(true);
+      expect(lineTexts(post).some((l) => l.includes('件数上限'))).toBe(true);
+    });
+
+    it('EXISTS / IN を日本語フレーズ付きで説明する', () => {
+      const result = parseMySqlQuery(
+        'SELECT id FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id) AND u.id IN (SELECT user_id FROM admins)',
+      );
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const tree = buildConditionEffectTree(result.query.where!, 'japanese');
+      const texts = collectLeafTexts(tree);
+      expect(texts.some((t) => t.startsWith('別の SELECT が返した値のどれかと一致 —'))).toBe(true);
+      expect(texts.some((t) => t.startsWith('関連行が存在するものだけ —'))).toBe(true);
+    });
+
+    it('IN (リテラル) と NOT IN を平易な日本語で説明する', () => {
+      const inLiteral = parseMySqlQuery("SELECT id FROM users WHERE status IN ('active', 'pending')");
+      const notInLiteral = parseMySqlQuery('SELECT id FROM users WHERE id NOT IN (1, 2, 3)');
+      expect(inLiteral.success && notInLiteral.success).toBe(true);
+      if (!inLiteral.success || !notInLiteral.success) return;
+
+      const inTexts = collectLeafTexts(
+        buildConditionEffectTree(inLiteral.query.where!, 'japanese'),
+      );
+      const notInTexts = collectLeafTexts(
+        buildConditionEffectTree(notInLiteral.query.where!, 'japanese'),
+      );
+      expect(inTexts.some((t) => t.startsWith('次の値のどれかと一致 —'))).toBe(true);
+      expect(notInTexts.some((t) => t.startsWith('次の値のどれとも一致しない —'))).toBe(true);
     });
   });
 });

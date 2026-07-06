@@ -997,6 +997,7 @@ function parseLimitAndOrder(ast: any): {
   offset?: string;
   limitSpan?: SourceSpan;
   offsetSpan?: SourceSpan;
+  limitCommaOffset?: boolean;
 } {
   const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
     text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
