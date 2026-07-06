@@ -4,8 +4,7 @@ import { QueryEffectBanner } from './components/QueryEffectPanel';
 import { SqlEditor } from './components/SqlEditor';
 import { SampleLoadButtons } from './components/SampleLoadButtons';
 import { SubqueryDetail } from './components/SubqueryDetail';
-import { WhereTree } from './components/WhereTree';
-import { UnionJoinPanel, UnionPanel, UnionWherePanel } from './components/UnionPanel';
+import { UnionJoinPanel } from './components/UnionPanel';
 import { applyAliasResolution } from './lib/alias-resolver';
 import {
   SAMPLE_SQL,
@@ -14,16 +13,15 @@ import {
   UNION_SAMPLE_SQL,
   parseMySqlQuery,
 } from './lib/parser';
-import { collectAllNestedQueries, countNestedItems, hasUnion } from './lib/query-utils';
+import { collectSubqueryRefsExcludingUnionBranches, hasUnion, type SubqueryRef } from './lib/query-utils';
 import type { ParsedQuery, SourceSpan } from './lib/types';
 import type { OnSourceSpanSelect } from './lib/source-link';
 
-type TabId = 'effect' | 'joins' | 'where' | 'nested';
+type TabId = 'effect' | 'joins' | 'nested';
 
 const BASE_TABS: { id: TabId; label: string }[] = [
   { id: 'effect', label: '作用説明' },
   { id: 'joins', label: 'JOIN 図' },
-  { id: 'where', label: 'WHERE / HAVING' },
 ];
 
 export default function App() {
@@ -49,15 +47,11 @@ export default function App() {
   );
 
   const nestedInfo = useMemo(() => {
-    if (!displayQuery) return { showTab: false, unionBranches: 0, subqueries: 0, otherNested: [] as ParsedQuery[] };
-    const { unions, subqueries } = countNestedItems(displayQuery);
-    const unionQuerySet = new Set(displayQuery.unionBranches?.map((b) => b.query) ?? []);
-    const otherNested = collectAllNestedQueries(displayQuery).filter((q) => !unionQuerySet.has(q));
+    if (!displayQuery) return { showTab: false, subqueries: [] as SubqueryRef[] };
+    const subqueries = collectSubqueryRefsExcludingUnionBranches(displayQuery);
     return {
-      showTab: unions > 1 || subqueries > 0,
-      unionBranches: unions,
+      showTab: subqueries.length > 0,
       subqueries,
-      otherNested,
     };
   }, [displayQuery]);
 
@@ -65,7 +59,7 @@ export default function App() {
     if (!nestedInfo.showTab) return BASE_TABS;
     return [
       ...BASE_TABS,
-      { id: 'nested' as const, label: 'UNION / サブクエリ' },
+      { id: 'nested' as const, label: 'サブクエリ' },
     ];
   }, [nestedInfo.showTab]);
 
@@ -157,7 +151,9 @@ export default function App() {
               </nav>
 
               <div className="tab-content">
-                {activeTab === 'effect' && <QueryEffectBanner query={displayQuery} />}
+                {activeTab === 'effect' && (
+                  <QueryEffectBanner query={displayQuery} resolveAliases={resolveAliases} {...sourceLinkProps} />
+                )}
                 <div
                   className={`tab-pane${activeTab === 'joins' ? '' : ' tab-pane--hidden'}`}
                   aria-hidden={activeTab !== 'joins'}
@@ -180,57 +176,25 @@ export default function App() {
                     />
                   )}
                 </div>
-                {activeTab === 'where' &&
-                  (hasUnion(displayQuery) && displayQuery.unionBranches ? (
-                    <UnionWherePanel
-                      branches={displayQuery.unionBranches}
-                      resolveAliases={resolveAliases}
-                      {...sourceLinkProps}
-                    />
-                  ) : (
-                    <div className="where-panel">
-                      <WhereTree
-                        root={displayQuery.where}
-                        title="WHERE"
-                        resolveAliases={resolveAliases}
-                        {...sourceLinkProps}
-                      />
-                      {displayQuery.having && (
-                        <div className="having-section">
-                          <WhereTree
-                            root={displayQuery.having}
-                            title="HAVING"
+                {activeTab === 'nested' && nestedInfo.showTab && (
+                  <div className="nested-tab">
+                    <section className="nested-section">
+                      <h3>サブクエリ ({nestedInfo.subqueries.length})</h3>
+                      <p className="nested-section-desc">
+                        WHERE / EXISTS / IN / FROM 句内のサブクエリを個別に解析しています
+                      </p>
+                      <div className="nested-subquery-list">
+                        {nestedInfo.subqueries.map(({ query, title }, index) => (
+                          <SubqueryDetail
+                            key={`${query.tables.map((t) => t.id).join('-')}-${title}-${index}`}
+                            query={query}
+                            title={title}
                             resolveAliases={resolveAliases}
                             {...sourceLinkProps}
                           />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                {activeTab === 'nested' && (
-                  <div className="nested-tab">
-                    {hasUnion(displayQuery) && displayQuery.unionBranches && (
-                      <UnionPanel
-                        branches={displayQuery.unionBranches}
-                        resolveAliases={resolveAliases}
-                      />
-                    )}
-                    {nestedInfo.otherNested.length > 0 && (
-                      <section className="nested-section">
-                        <h3>サブクエリ ({nestedInfo.otherNested.length})</h3>
-                        <p className="nested-section-desc">
-                          WHERE / HAVING / FROM 句内のサブクエリを個別に解析しています
-                        </p>
-                        {nestedInfo.otherNested.map((nested, index) => (
-                          <SubqueryDetail
-                            key={`${nested.tables.map((t) => t.id).join('-')}-${index}`}
-                            query={nested}
-                            title={`サブクエリ ${index + 1}`}
-                            resolveAliases={resolveAliases}
-                          />
                         ))}
-                      </section>
-                    )}
+                      </div>
+                    </section>
                   </div>
                 )}
               </div>

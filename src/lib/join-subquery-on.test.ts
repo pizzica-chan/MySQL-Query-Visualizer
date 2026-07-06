@@ -104,7 +104,7 @@ describe('JOIN ON サブクエリ', () => {
     const effect = buildQueryEffect(result.query);
     const filter = effect.sections.find((s) => s.kind === 'filter' && s.title === '行の絞り込み');
     const joinPart = filter?.filterParts?.find((p) => p.label === '結合条件');
-    const joinNode = joinPart ? collectJoinFilterNodes(joinPart.root)[0] : undefined;
+    const joinNode = joinPart?.root ? collectJoinFilterNodes(joinPart.root)[0] : undefined;
     expect(joinNode?.type).toBe('join');
     expect(joinNode?.label).toBe('INNER JOIN');
     const onText = collectLeafTexts(joinNode!.children![0]!).join(' ');
@@ -122,14 +122,21 @@ describe('JOIN ON サブクエリ', () => {
       const effect = buildQueryEffect(result.query);
       const filterLeaves = effect.sections.flatMap((s) => {
         if (s.kind !== 'filter' || s.title !== '行の絞り込み') return [];
-        if (s.filterParts) return s.filterParts.flatMap((p) => collectLeafTexts(p.root));
+        if (s.filterParts) {
+          return s.filterParts.flatMap((p) => collectLeafTexts(p.root));
+        }
         return s.conditionRoot ? collectLeafTexts(s.conditionRoot) : [];
       });
       const scopeOptionalJoins = effect.sections
         .find((s) => s.kind === 'scope')
         ?.presenceGroups?.find((g) => g.kind === 'optional')
-        ?.entries.flatMap((e) => (e.join ? collectLeafTexts(e.join.condition) : [])) ?? [];
-      const scopeLines = effect.sections.find((s) => s.kind === 'scope')?.lines ?? [];
+        ?.entries.flatMap((e) => {
+          const on =
+            e.join?.root.type === 'join' ? e.join.root.children?.[0] : e.join?.root;
+          return on ? collectLeafTexts(on) : [];
+        }) ?? [];
+      const scopeLines =
+        effect.sections.find((s) => s.kind === 'scope')?.lines?.map((l) => l.text) ?? [];
       const joinLines = [...filterLeaves, ...scopeOptionalJoins, ...scopeLines].filter(
         (l) => l.includes('JOIN') || l.includes('EXISTS') || l.includes(' IN ') || l.includes('結合条件'),
       );

@@ -122,6 +122,8 @@ function ConditionCard({
               title="サブクエリ詳細"
               resolveAliases={resolveAliases}
               compact
+              activeSourceSpan={activeSourceSpan}
+              onSourceSpanSelect={onSourceSpanSelect}
             />
           </div>
         )}

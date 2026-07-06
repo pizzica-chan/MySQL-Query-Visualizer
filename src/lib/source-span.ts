@@ -21,7 +21,7 @@ export function spansEqual(a: SourceSpan | null | undefined, b: SourceSpan | nul
 }
 
 export function columnEntrySourceSpan(col: any): SourceSpan | undefined {
-  const exprSpan = toSourceSpan(col?.expr?.loc);
+  const exprSpan = toSourceSpan(col?.expr?.loc) ?? toSourceSpan(col?.loc);
   if (!exprSpan) return undefined;
   if (!col?.as) return exprSpan;
   return { ...exprSpan, end: exprSpan.end };

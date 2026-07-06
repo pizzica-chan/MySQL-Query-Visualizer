@@ -58,7 +58,7 @@ describe('JOIN USING', () => {
     const effect = buildQueryEffect(result.query);
     const filter = effect.sections.find((s) => s.title === '行の絞り込み');
     const joinPart = filter?.filterParts?.find((p) => p.label === '結合条件');
-    const joinNode = joinPart ? collectJoinFilterNodes(joinPart.root)[0] : undefined;
+    const joinNode = joinPart?.root ? collectJoinFilterNodes(joinPart.root)[0] : undefined;
     expect(joinNode?.label).toBe('INNER JOIN');
     expect(collectLeafTexts(joinNode!.children![0]!)).toEqual(['u.user_id = o.user_id']);
   });
@@ -76,7 +76,7 @@ describe('JOIN USING', () => {
       .find((s) => s.title === '結合するテーブル')
       ?.presenceGroups?.find((g) => g.kind === 'optional');
     const entry = optional?.entries.find((e) => e.tableLabel.includes('profiles'));
-    expect(entry?.join?.type).toBe('LEFT JOIN');
-    expect(collectLeafTexts(entry!.join!.condition)).toEqual(['u.user_id = p.user_id']);
+    expect(entry?.join?.root.label).toBe('LEFT JOIN');
+    expect(collectLeafTexts(entry!.join!.root.children![0]!)).toEqual(['u.user_id = p.user_id']);
   });
 });

@@ -16,6 +16,12 @@ export type JoinType =
   | 'CROSS JOIN'
   | 'JOIN';
 
+export interface CteRef {
+  name: string;
+  query: ParsedQuery;
+  sourceSpan?: SourceSpan;
+}
+
 export interface TableRef {
   id: string;
   schema?: string;
@@ -34,6 +40,8 @@ export interface UnionBranch {
   /** 先頭ブランチは undefined */
   operator?: string;
   query: ParsedQuery;
+  /** 元 SQL 内のこの SELECT ブランチ全体 */
+  sourceSpan?: SourceSpan;
 }
 
 export interface JoinEdge {
@@ -51,6 +59,8 @@ export interface JoinEdge {
   layoutConditionRoot?: ConditionNode;
   /** ON 条件の位置 */
   sourceSpan?: SourceSpan;
+  /** NATURAL JOIN（同名前列で結合） */
+  isNatural?: boolean;
 }
 
 export type ConditionNodeType =
@@ -103,6 +113,8 @@ export interface DeleteTarget {
 export interface ParsedQuery {
   rawSql: string;
   statementType: 'SELECT' | 'UPDATE' | 'DELETE';
+  /** 元 SQL 内のこの SELECT（サブクエリ・UNION ブランチ等）の範囲 */
+  sourceSpan?: SourceSpan;
   tables: TableRef[];
   joins: JoinEdge[];
   where?: ConditionNode;
@@ -116,9 +128,13 @@ export interface ParsedQuery {
   limitSpan?: SourceSpan;
   offset?: string;
   offsetSpan?: SourceSpan;
+  /** LIMIT offset, count のカンマ形式か（LIMIT n OFFSET m との区別） */
+  limitCommaOffset?: boolean;
   distinct: boolean;
   /** UNION / UNION ALL 等の各ブランチ（2本以上のとき） */
   unionBranches?: UnionBranch[];
+  /** WITH 句で定義された CTE */
+  ctes?: CteRef[];
 }
 
 export interface ParseError {

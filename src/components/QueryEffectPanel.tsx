@@ -1,129 +1,40 @@
-import type { ConditionEffectNode, QueryEffectSection } from '../lib/query-effect';
+import type { QueryEffectSection } from '../lib/query-effect';
 import { buildQueryEffect, buildUnionQueryEffect } from '../lib/query-effect';
 import type { ParsedQuery } from '../lib/types';
 import { EffectHighlightedText } from './EffectHighlightedText';
+import {
+  QueryEffectSectionView,
+  type QueryEffectSourceLinkProps,
+} from './QueryEffectViews';
 
-function ConditionEffectTree({
-  node,
+interface SourceLinkProps extends QueryEffectSourceLinkProps {}
+
+function EffectSection({
+  section,
   query,
+  sourceLink,
 }: {
-  node: ConditionEffectNode;
+  section: QueryEffectSection;
   query: ParsedQuery;
+  sourceLink: SourceLinkProps;
 }) {
-  if (node.type === 'join') {
-    return (
-      <div className="effect-join-filter">
-        <div className="effect-join-filter-header">
-          <EffectHighlightedText text={node.label ?? ''} query={query} />
-        </div>
-        <div className="effect-join-filter-body">
-          {node.children?.map((child) => (
-            <ConditionEffectTree key={child.id} node={child} query={query} />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (node.type === 'leaf') {
-    return (
-      <div className="effect-condition-leaf">
-        <EffectHighlightedText text={node.text ?? ''} query={query} />
-      </div>
-    );
-  }
-
-  return (
-    <div className={`effect-condition-group effect-condition-group--${node.type}`}>
-      <div className="effect-condition-group-label">{node.label}</div>
-      <div className="effect-condition-group-body">
-        {node.children?.map((child, index) => (
-          <div key={child.id} className="effect-condition-group-item">
-            {index > 0 && node.type !== 'not' && (
-              <div className={`effect-condition-op effect-condition-op--${node.type}`}>
-                {node.type.toUpperCase()}
-              </div>
-            )}
-            <ConditionEffectTree node={child} query={query} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <QueryEffectSectionView section={section} query={query} sourceLink={sourceLink} />;
 }
 
-function EffectSection({ section, query }: { section: QueryEffectSection; query: ParsedQuery }) {
-  return (
-    <div className={`query-effect-section query-effect-section--${section.kind}`}>
-      {section.title && <h4 className="query-effect-section-title">{section.title}</h4>}
-      {section.presenceGroups && section.presenceGroups.length > 0 && (
-        <div className="query-effect-presence">
-          {section.presenceGroups.map((group, index) => (
-            <div
-              key={`${group.kind}-${index}`}
-              className={`query-effect-presence-group query-effect-presence-group--${group.kind}`}
-            >
-              <div className="query-effect-presence-label">{group.label}</div>
-              <ul className="query-effect-presence-entries">
-                {group.entries.length === 0 ? (
-                  <li className="query-effect-presence-entry query-effect-presence-entry--empty">
-                    なし
-                  </li>
-                ) : (
-                  group.entries.map((entry, entryIndex) => (
-                    <li key={entryIndex} className="query-effect-presence-entry">
-                      <div className="query-effect-presence-table">
-                        <EffectHighlightedText text={entry.tableLabel} query={query} />
-                      </div>
-                      {entry.join && (
-                        <div className="query-effect-presence-join">
-                          <div className="query-effect-presence-join-type">
-                            <EffectHighlightedText text={entry.join.type} query={query} />
-                          </div>
-                          <div className="query-effect-presence-join-on">
-                            <ConditionEffectTree node={entry.join.condition} query={query} />
-                          </div>
-                        </div>
-                      )}
-                    </li>
-                  ))
-                )}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
-      {section.lines && section.lines.length > 0 && (
-        <ul className="query-effect-lines">
-          {section.lines.map((line, index) => (
-            <li key={index} className="query-effect-line">
-              <EffectHighlightedText text={line} query={query} />
-            </li>
-          ))}
-        </ul>
-      )}
-      {section.filterParts && section.filterParts.length > 0 && (
-        <div className="query-effect-filter-parts">
-          {section.filterParts.map((part, index) => (
-            <div key={`${part.label}-${index}`} className="query-effect-filter-part">
-              <div className="query-effect-filter-part-label">{part.label}</div>
-              <ConditionEffectTree node={part.root} query={query} />
-            </div>
-          ))}
-        </div>
-      )}
-      {section.conditionRoot && <ConditionEffectTree node={section.conditionRoot} query={query} />}
-    </div>
-  );
-}
-
-interface QueryEffectPanelProps {
+interface QueryEffectPanelProps extends SourceLinkProps {
   query: ParsedQuery;
   branchIndex?: number;
 }
 
-export function QueryEffectPanel({ query, branchIndex }: QueryEffectPanelProps) {
+export function QueryEffectPanel({
+  query,
+  branchIndex,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
+  resolveAliases = false,
+}: QueryEffectPanelProps) {
   const effect = buildQueryEffect(query);
+  const sourceLink = { activeSourceSpan, onSourceSpanSelect, resolveAliases };
 
   return (
     <section className={`query-effect query-effect--${effect.action}`}>
@@ -141,7 +52,12 @@ export function QueryEffectPanel({ query, branchIndex }: QueryEffectPanelProps) 
       {effect.sections.length > 0 && (
         <div className="query-effect-sections">
           {effect.sections.map((section, index) => (
-            <EffectSection key={`${section.kind}-${index}`} section={section} query={query} />
+            <EffectSection
+              key={`${section.kind}-${index}`}
+              section={section}
+              query={query}
+              sourceLink={sourceLink}
+            />
           ))}
         </div>
       )}
@@ -149,12 +65,18 @@ export function QueryEffectPanel({ query, branchIndex }: QueryEffectPanelProps) 
   );
 }
 
-interface QueryEffectBannerProps {
+interface QueryEffectBannerProps extends SourceLinkProps {
   query: ParsedQuery;
 }
 
-export function QueryEffectBanner({ query }: QueryEffectBannerProps) {
+export function QueryEffectBanner({
+  query,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
+  resolveAliases = false,
+}: QueryEffectBannerProps) {
   const unionEffect = buildUnionQueryEffect(query);
+  const sourceLinkProps = { activeSourceSpan, onSourceSpanSelect, resolveAliases };
 
   if (unionEffect && query.unionBranches) {
     return (
@@ -179,7 +101,11 @@ export function QueryEffectBanner({ query }: QueryEffectBannerProps) {
             {index > 0 && branch.operator && (
               <div className="union-connector">{branch.operator}</div>
             )}
-            <QueryEffectPanel query={query.unionBranches![index]!.query} branchIndex={index} />
+            <QueryEffectPanel
+              query={query.unionBranches![index]!.query}
+              branchIndex={index}
+              {...sourceLinkProps}
+            />
           </div>
         ))}
       </div>
@@ -193,9 +119,11 @@ export function QueryEffectBanner({ query }: QueryEffectBannerProps) {
     <div className="query-effect-banner">
       <div className="query-effect-banner-header">
         <h2 className="query-effect-banner-title">作用説明</h2>
-        <p className="query-effect-banner-desc">この SQL で{actionWord}される行の条件</p>
+        <p className="query-effect-banner-desc">
+          この SQL で{actionWord}される行の条件
+        </p>
       </div>
-      <QueryEffectPanel query={query} />
+      <QueryEffectPanel query={query} {...sourceLinkProps} />
     </div>
   );
 }

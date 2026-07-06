@@ -123,16 +123,50 @@ describe('parseMySqlQuery', () => {
       expect(result.query.unionBranches).toHaveLength(3);
       expect(result.query.unionBranches?.[1]?.operator).toBe('UNION ALL');
       expect(result.query.unionBranches?.[2]?.operator).toBe('UNION');
-      expect(tableNames(result.query).join()).toBe('users');
+      expect(tableNames(result.query).join()).toBe('users,orders,order_items,products');
+      expect(result.query.unionBranches?.[0]?.query.joins.length).toBeGreaterThanOrEqual(3);
       expect(result.query.unionBranches?.[1]?.query.tables[0]?.table).toBe('archived_users');
+      expect(result.query.unionBranches?.[1]?.query.joins.length).toBeGreaterThanOrEqual(1);
       expect(result.query.unionBranches?.[2]?.query.tables[0]?.table).toBe('guest_users');
+      expect(result.query.unionBranches?.[2]?.query.joins.length).toBeGreaterThanOrEqual(1);
 
       const branch2Where = result.query.unionBranches?.[2]?.query.where;
       const types = collectConditionTypes(branch2Where);
       expect(types).toContain('exists');
+      expect(types).toContain('in');
 
       expect(() => assertParseInvariants(result.query, 'UNION_SAMPLE_SQL')).not.toThrow();
+
+      for (const branch of result.query.unionBranches ?? []) {
+        expect(branch.sourceSpan?.start).toBeGreaterThanOrEqual(0);
+        expect(branch.sourceSpan?.end).toBeGreaterThan(branch.sourceSpan!.start);
+        expect(UNION_SAMPLE_SQL.slice(branch.sourceSpan!.start, branch.sourceSpan!.end)).toMatch(
+          /SELECT/i,
+        );
+      }
     });
+  });
+
+  it('IN / EXISTS 内サブクエリに sourceSpan を付与する', () => {
+    const sql =
+      "SELECT id FROM users u WHERE u.id IN (SELECT user_id FROM orders WHERE total > 100)";
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const inNode = result.query.where?.children?.[0] ?? result.query.where;
+    expect(inNode?.type).toBe('in');
+    const nested = inNode?.nestedQuery;
+    expect(nested?.sourceSpan).toBeDefined();
+    expect(sql.slice(nested!.sourceSpan!.start, nested!.sourceSpan!.end)).toMatch(/SELECT/i);
+
+    const existsResult = parseMySqlQuery(
+      'SELECT id FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)',
+    );
+    expect(existsResult.success).toBe(true);
+    if (!existsResult.success) return;
+    const existsNode = existsResult.query.where;
+    expect(existsNode?.nestedQuery?.sourceSpan).toBeDefined();
   });
 
   describe.each(ALL_CATEGORIES)('category: %s', (category) => {

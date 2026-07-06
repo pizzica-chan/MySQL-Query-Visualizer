@@ -3,12 +3,14 @@ import {
   collectAllNestedQueries,
   collectSubqueriesFromCondition,
   countNestedItems,
+  collectSubqueriesExcludingUnionBranches,
+  collectSubqueryRefsExcludingUnionBranches,
   formatUnionBranches,
   getUpdateTargetTables,
   hasUnion,
   isUpdateTargetTable,
 } from './query-utils';
-import { parseMySqlQuery, UNION_SAMPLE_SQL, UPDATE_SAMPLE_SQL } from './parser';
+import { parseMySqlQuery, SAMPLE_SQL, UNION_SAMPLE_SQL, UPDATE_SAMPLE_SQL } from './parser';
 import type { ConditionNode, ParsedQuery } from './types';
 
 function makeMinimalQuery(overrides: Partial<ParsedQuery> = {}): ParsedQuery {
@@ -124,6 +126,63 @@ describe('query-utils', () => {
         },
       });
       expect(collectAllNestedQueries(root)).toHaveLength(1);
+    });
+  });
+
+  describe('collectSubqueriesExcludingUnionBranches', () => {
+    it('collectSubqueriesExcludingUnionBranches はブランチ内のネストのみ返す', () => {
+      const result = parseMySqlQuery(UNION_SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const subonly = collectSubqueriesExcludingUnionBranches(result.query);
+      expect(subonly.length).toBeGreaterThanOrEqual(4);
+      expect(subonly.some((q) => q.tables.some((t) => t.table === 'audit_log'))).toBe(true);
+      expect(subonly.some((q) => q.tables.some((t) => t.table === 'converted_guests'))).toBe(true);
+    });
+
+    it('UNION ブランチ本体は除外し IN/EXISTS 等のみ返す', () => {
+      const result = parseMySqlQuery(UNION_SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const all = collectAllNestedQueries(result.query);
+      const subonly = collectSubqueriesExcludingUnionBranches(result.query);
+      expect(subonly.length).toBeLessThan(all.length);
+      expect(subonly.every((q) => !(result.query.unionBranches ?? []).some((b) => b.query === q))).toBe(
+        true,
+      );
+    });
+
+    it('UNION のみのクエリでは空配列', () => {
+      const result = parseMySqlQuery(
+        'SELECT id FROM users UNION SELECT id FROM archived_users',
+      );
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      expect(collectSubqueriesExcludingUnionBranches(result.query)).toEqual([]);
+    });
+
+    it('派生テーブルは別名をタイトルにする', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const refs = collectSubqueryRefsExcludingUnionBranches(result.query);
+      expect(refs.some((r) => r.title === 'hot')).toBe(true);
+      expect(refs.some((r) => r.title === 'avg_items')).toBe(true);
+    });
+
+    it('WHERE の IN / EXISTS は条件式をタイトルにする', () => {
+      const result = parseMySqlQuery(SAMPLE_SQL);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const refs = collectSubqueryRefsExcludingUnionBranches(result.query);
+      expect(refs.some((r) => r.title === 'p.category_id IN')).toBe(true);
+      expect(refs.some((r) => r.title === 'EXISTS')).toBe(true);
+      expect(refs.some((r) => r.title === 'u.id NOT IN')).toBe(true);
     });
   });
 

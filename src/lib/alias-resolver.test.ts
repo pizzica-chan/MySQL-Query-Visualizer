@@ -121,7 +121,11 @@ describe('alias-resolver', () => {
     expect(branch2Labels.some((l) => l.includes('guest_users.'))).toBe(true);
 
     const nested = collectAllNestedQueries(resolved);
-    const ordersSub = nested.find((q) => q.tables.some((t) => t.table === 'orders'));
+    const ordersSub = nested.find(
+      (q) =>
+        q.tables.some((t) => t.table === 'orders') &&
+        q.where?.label.includes('user_id'),
+    );
     expect(ordersSub?.where?.label).toContain('orders.');
   });
 

@@ -1,13 +1,19 @@
 import { JoinDiagram } from './JoinDiagram';
-import { QuerySummary } from './QuerySummary';
-import { WhereTree } from './WhereTree';
-import type { ParsedQuery } from '../lib/types';
+import { QueryEffectConditions } from './QueryEffectViews';
+import type { ParsedQuery, SourceSpan } from '../lib/types';
+import type { OnSourceSpanSelect } from '../lib/source-link';
+import { sourceSelectableProps } from '../lib/source-link';
+import { buildQueryEffect } from '../lib/query-effect';
 
 interface SubqueryDetailProps {
   query: ParsedQuery;
   title: string;
   resolveAliases: boolean;
   compact?: boolean;
+  activeSourceSpan?: SourceSpan | null;
+  onSourceSpanSelect?: OnSourceSpanSelect;
+  /** ブランチ全体など query.sourceSpan より優先する範囲 */
+  containerSourceSpan?: SourceSpan;
 }
 
 export function SubqueryDetail({
@@ -15,9 +21,30 @@ export function SubqueryDetail({
   title,
   resolveAliases,
   compact = false,
+  activeSourceSpan = null,
+  onSourceSpanSelect,
+  containerSourceSpan,
 }: SubqueryDetailProps) {
+  const effect = buildQueryEffect(query);
+  const hasConditions = effect.sections.some(
+    (s) =>
+      s.kind === 'scope' ||
+      (s.kind === 'filter' && s.title === '行の絞り込み') ||
+      (s.kind === 'filter' && s.title?.includes('HAVING')),
+  );
+  const sourceLink = { activeSourceSpan, onSourceSpanSelect, resolveAliases };
+  const boxSpan = containerSourceSpan ?? query.sourceSpan;
+  const boxProps = onSourceSpanSelect
+    ? sourceSelectableProps(
+        boxSpan,
+        activeSourceSpan,
+        onSourceSpanSelect,
+        `subquery-detail${compact ? ' subquery-detail--compact' : ''} subquery-detail--link`,
+      )
+    : { className: `subquery-detail${compact ? ' subquery-detail--compact' : ''}` };
+
   return (
-    <div className={`subquery-detail${compact ? ' subquery-detail--compact' : ''}`}>
+    <div {...boxProps}>
       <div className="subquery-detail-header">
         <h4>{title}</h4>
         <span className="subquery-detail-meta">
@@ -28,25 +55,26 @@ export function SubqueryDetail({
 
       {query.tables.length > 0 && (
         <div className="subquery-detail-section">
+          <h5 className="subquery-detail-section-title">JOIN 図</h5>
           <JoinDiagram
             tables={query.tables}
             joins={query.joins}
             resolveAliases={resolveAliases}
             compact
             query={query}
+            activeSourceSpan={activeSourceSpan}
+            onSourceSpanSelect={onSourceSpanSelect}
+            isActive
           />
         </div>
       )}
 
-      {query.where && (
-        <div className="subquery-detail-section">
-          <WhereTree root={query.where} title="WHERE" nested />
-        </div>
-      )}
-
-      {!compact && (
-        <div className="subquery-detail-section">
-          <QuerySummary query={query} resolveAliases={resolveAliases} compact />
+      {hasConditions && (
+        <div className="subquery-detail-section subquery-detail-section--conditions">
+          {!compact && (
+            <p className="subquery-detail-section-desc">JOIN / WHERE / HAVING 条件</p>
+          )}
+          <QueryEffectConditions query={query} sourceLink={sourceLink} />
         </div>
       )}
     </div>

@@ -9,6 +9,7 @@ import {
 } from './source-span';
 import type {
   ConditionNode,
+  CteRef,
   JoinEdge,
   JoinType,
   ParseResult,
@@ -241,6 +242,72 @@ function normalizeJoinType(join: string | undefined): JoinType {
   if (upper.includes('CROSS')) return 'CROSS JOIN';
   if (upper === 'JOIN') return 'JOIN';
   return 'INNER JOIN';
+}
+
+/** JOIN 種別の表示用文字列（NATURAL JOIN 対応） */
+export function formatJoinDisplayType(join: Pick<JoinEdge, 'type' | 'isNatural'>): string {
+  if (!join.isNatural) return join.type;
+  const base = join.type === 'JOIN' ? 'INNER JOIN' : join.type;
+  return `NATURAL ${base}`;
+}
+
+function preprocessSqlForParser(sql: string): { sql: string; naturalJoinMarkers: boolean[] } {
+  const naturalJoinMarkers: boolean[] = [];
+  const processed = sql.replace(
+    /\bNATURAL\s+((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+)?JOIN\b/gi,
+    (_match, joinTypePart: string | undefined) => {
+      naturalJoinMarkers.push(true);
+      const type = joinTypePart?.trim().toUpperCase() || 'INNER';
+      return `${type} JOIN`;
+    },
+  );
+  return { sql: processed, naturalJoinMarkers };
+}
+
+function parseWithClause(withClauses: any[] | null | undefined): CteRef[] {
+  if (!withClauses?.length) return [];
+
+  return withClauses.map((entry) => {
+    const name = entry.name?.value ?? String(entry.name ?? 'cte');
+    const innerAst = entry.stmt?.ast;
+    const query =
+      innerAst?.type === 'select'
+        ? buildSelectParsed(innerAst)
+        : buildSelectParsed({ type: 'select', columns: ['*'], from: [] });
+    return {
+      name,
+      query,
+      sourceSpan: toSourceSpan(entry.loc),
+    };
+  });
+}
+
+function attachCteDefinitions(tables: TableRef[], ctes: CteRef[]): TableRef[] {
+  if (!ctes.length) return tables;
+
+  const byName = new Map(ctes.map((c) => [c.name, c]));
+  return tables.map((table) => {
+    const cte = byName.get(table.table) ?? (table.alias ? byName.get(table.alias) : undefined);
+    if (!cte) return table;
+
+    return {
+      ...table,
+      isDerived: true,
+      derivedQuery: cte.query,
+      displayName: `${cte.name}（CTE）`,
+      table: cte.name,
+      alias: table.alias && table.alias !== table.table ? table.alias : cte.name,
+    };
+  });
+}
+
+function applyCtesToQuery(query: ParsedQuery, ctes: CteRef[]): ParsedQuery {
+  if (!ctes.length) return query;
+  return {
+    ...query,
+    ctes,
+    tables: attachCteDefinitions(query.tables, ctes),
+  };
 }
 
 function parseComparison(node: any): ConditionNode {
@@ -548,13 +615,14 @@ function buildTableRef(entry: any, index: number): TableRef {
   if (entry.expr?.ast?.type === 'select') {
     const alias = entry.as ?? entry.alias ?? `derived_${index}`;
     const derivedQuery = buildSelectParsed(entry.expr.ast);
+    const span = toSourceSpan(entry.expr?.loc) ?? derivedQuery.sourceSpan;
     return {
       id: nextId('tbl'),
       table: alias,
       alias,
       displayName: `${alias} (派生テーブル)`,
       isDerived: true,
-      derivedQuery,
+      derivedQuery: span ? { ...derivedQuery, sourceSpan: span } : derivedQuery,
       sourceSpan,
     };
   }
@@ -684,9 +752,13 @@ function parseJoinConditionFromEntry(
   return parseJoinCondition(entry.on);
 }
 
-function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] } {
+function parseFromClause(
+  from: any[],
+  naturalJoinMarkers: boolean[] = [],
+): { tables: TableRef[]; joins: JoinEdge[] } {
   const tables: TableRef[] = [];
   const joins: JoinEdge[] = [];
+  let naturalIndex = 0;
 
   if (!from || from.length === 0) return { tables, joins };
 
@@ -697,8 +769,13 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
     if (index === 0) return;
 
     const joinType = normalizeJoinType(entry.join);
-    const prevTable = tables[index - 1];
-    const { condition, parts, conditionRoot } = parseJoinConditionFromEntry(entry, prevTable, tableRef);
+    const prevTable = tables[index - 1]!;
+    const isNatural = naturalJoinMarkers[naturalIndex++] ?? false;
+    let { condition, parts, conditionRoot } = parseJoinConditionFromEntry(entry, prevTable, tableRef);
+
+    if (isNatural && condition === '(no condition)') {
+      condition = 'NATURAL JOIN';
+    }
 
     joins.push({
       id: nextId('join'),
@@ -708,15 +785,20 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
       condition,
       conditionParts: parts,
       conditionRoot,
-      sourceSpan: toSourceSpan(entry.on?.loc),
+      isNatural: isNatural || undefined,
+      sourceSpan: toSourceSpan(entry.on?.loc ?? entry.loc),
     });
   });
 
   return { tables, joins };
 }
 
-function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
-  const { tables, joins } = parseFromClause(ast.from);
+function buildSelectParsed(
+  ast: any,
+  rawSql?: string,
+  naturalJoinMarkers: boolean[] = [],
+): ParsedQuery {
+  const { tables, joins } = parseFromClause(ast.from, naturalJoinMarkers);
 
   let where = parseConditionTree(ast.where);
   if (where) where = enrichConditionTree(where);
@@ -734,10 +816,11 @@ function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
     sourceSpan: orderByEntrySourceSpan(o),
   }));
 
-  const { limit, offset, limitSpan, offsetSpan } = parseLimitOffset(ast);
+  const { limit, offset, limitSpan, offsetSpan, limitCommaOffset } = parseLimitOffset(ast);
 
   return {
     rawSql: '',
+    sourceSpan: toSourceSpan(ast?.loc),
     statementType: 'SELECT',
     tables,
     joins,
@@ -750,21 +833,32 @@ function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
     limitSpan,
     offset,
     offsetSpan,
+    limitCommaOffset,
     distinct: Boolean(ast.distinct),
   };
 }
 
-function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
+function parseSelectQuery(ast: any, rawSql: string, naturalJoinMarkers: boolean[] = []): ParsedQuery {
+  const ctes = parseWithClause(ast.with);
   const branches = collectUnionBranches(ast);
-  const main = buildSelectParsed(branches[0].ast, rawSql);
+  let main = applyCtesToQuery(buildSelectParsed(branches[0].ast, rawSql, naturalJoinMarkers), ctes);
   main.rawSql = rawSql;
 
   if (branches.length > 1) {
-    main.unionBranches = branches.map((branch, index) => ({
-      id: nextId('union'),
-      operator: index === 0 ? undefined : branch.unionOp,
-      query: { ...buildSelectParsed(branch.ast, rawSql), rawSql: '' },
-    }));
+    main.unionBranches = branches.map((branch, index) => {
+      const branchQuery = applyCtesToQuery(buildSelectParsed(branch.ast, rawSql), ctes);
+      const sourceSpan = toSourceSpan(branch.ast?.loc);
+      return {
+        id: nextId('union'),
+        operator: index === 0 ? undefined : branch.unionOp,
+        sourceSpan,
+        query: {
+          ...branchQuery,
+          rawSql: '',
+          sourceSpan: sourceSpan ?? branchQuery.sourceSpan,
+        },
+      };
+    });
   }
 
   return main;
@@ -798,7 +892,7 @@ function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
     sourceSpan: orderByEntrySourceSpan(o),
   }));
 
-  const { limit, offset, limitSpan, offsetSpan } = parseLimitOffset(ast);
+  const { limit, offset, limitSpan, offsetSpan, limitCommaOffset } = parseLimitOffset(ast);
 
   return {
     rawSql,
@@ -814,6 +908,7 @@ function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
     limitSpan,
     offset,
     offsetSpan,
+    limitCommaOffset,
     distinct: false,
   };
 }
@@ -847,6 +942,7 @@ function parseLimitClause(limitAst: any): {
   offset?: string;
   limitSpan?: SourceSpan;
   offsetSpan?: SourceSpan;
+  limitCommaOffset?: boolean;
 } {
   if (!limitAst) return {};
 
@@ -871,6 +967,7 @@ function parseLimitClause(limitAst: any): {
       offset: first,
       limitSpan: secondSpan,
       offsetSpan: firstSpan,
+      limitCommaOffset: true,
     };
   }
 
@@ -879,6 +976,7 @@ function parseLimitClause(limitAst: any): {
     offset: second,
     limitSpan: firstSpan,
     offsetSpan: secondSpan,
+    limitCommaOffset: false,
   };
 }
 
@@ -887,6 +985,7 @@ function parseLimitOffset(ast: any): {
   offset?: string;
   limitSpan?: SourceSpan;
   offsetSpan?: SourceSpan;
+  limitCommaOffset?: boolean;
 } {
   if (!ast.limit) return {};
   return parseLimitClause(ast.limit);
@@ -913,7 +1012,7 @@ function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
   let where = parseConditionTree(ast.where);
   if (where) where = enrichConditionTree(where);
 
-  const { orderBy, limit, offset, limitSpan, offsetSpan } = parseLimitAndOrder(ast);
+  const { orderBy, limit, offset, limitSpan, offsetSpan, limitCommaOffset } = parseLimitAndOrder(ast);
 
   return {
     rawSql,
@@ -929,6 +1028,7 @@ function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
     limitSpan,
     offset,
     offsetSpan,
+    limitCommaOffset,
     distinct: false,
   };
 }
@@ -942,7 +1042,8 @@ export function parseMySqlQuery(sql: string): ParseResult {
   }
 
   try {
-    const ast = parser.astify(trimmed, {
+    const { sql: preprocessed, naturalJoinMarkers } = preprocessSqlForParser(trimmed);
+    const ast = parser.astify(preprocessed, {
       database: 'MySQL',
       parseOptions: { includeLocations: true },
     });
@@ -954,7 +1055,7 @@ export function parseMySqlQuery(sql: string): ParseResult {
     }
 
     if (first.type === 'select') {
-      return { success: true, query: parseSelectQuery(first, trimmed) };
+      return { success: true, query: parseSelectQuery(first, trimmed, naturalJoinMarkers) };
     }
 
     if (first.type === 'update') {
@@ -1005,12 +1106,25 @@ WHERE u.status = 'active'
     o.total_amount > 1000
     OR u.email LIKE '%@example.com'
   )
-  AND p.category_id IN (SELECT id FROM categories WHERE active = 1)
+  AND p.category_id IN (
+    SELECT c2.id FROM categories c2
+    WHERE c2.active = 1
+      AND EXISTS (
+        SELECT 1 FROM category_stats cs
+        WHERE cs.category_id = c2.id AND cs.product_cnt > 0
+      )
+  )
   AND oi.quantity BETWEEN 1 AND 10
   AND EXISTS (
-    SELECT 1 FROM payments pay WHERE pay.order_id = o.id AND pay.status = 'paid'
+    SELECT 1 FROM payments pay
+    INNER JOIN payment_methods pm ON pm.id = pay.method_id
+    WHERE pay.order_id = o.id AND pay.status = 'paid' AND pm.enabled = 1
   )
-  AND u.id NOT IN (SELECT user_id FROM banned_users)
+  AND u.id NOT IN (
+    SELECT bu.user_id FROM banned_users bu
+    WHERE bu.banned_at >= '2023-01-01'
+      OR bu.reason IN (SELECT code FROM ban_reasons WHERE severity = 'high')
+  )
 GROUP BY u.id, u.name, u.email, o.order_no, o.total_amount, p.product_name, c.category_name, lm.metric_score, hot.order_cnt
 HAVING SUM(oi.quantity) > (
   SELECT AVG(item_cnt) FROM (
@@ -1052,23 +1166,71 @@ WHERE u.status = 'deleted'
 ORDER BY o.created_at ASC
 LIMIT 200;`;
 
-export const UNION_SAMPLE_SQL = `SELECT id, name, email, 'active' AS source
-FROM users
-WHERE status = 'active' AND created_at >= '2024-01-01'
+export const UNION_SAMPLE_SQL = `SELECT
+  u.id,
+  u.name,
+  u.email,
+  o.order_no,
+  o.total_amount,
+  'active' AS source
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+LEFT JOIN order_items oi ON oi.order_id = o.id
+INNER JOIN products p ON p.id = oi.product_id
+WHERE u.status = 'active'
+  AND o.created_at >= '2024-01-01'
+  AND o.total_amount > (
+    SELECT AVG(total_amount) FROM orders WHERE status = 'completed'
+  )
+  AND EXISTS (
+    SELECT 1 FROM payments pay
+    INNER JOIN payment_methods pm ON pm.id = pay.method_id
+    WHERE pay.order_id = o.id AND pay.status = 'paid' AND pm.enabled = 1
+  )
+GROUP BY u.id, u.name, u.email, o.order_no, o.total_amount
+HAVING COUNT(oi.id) > 0
 
 UNION ALL
 
-SELECT id, name, email, 'archived' AS source
-FROM archived_users
-WHERE archived_at IS NOT NULL
+SELECT
+  au.id,
+  au.name,
+  au.email,
+  NULL AS order_no,
+  0 AS total_amount,
+  'archived' AS source
+FROM archived_users au
+LEFT JOIN user_profiles up ON up.user_id = au.id
+INNER JOIN (
+  SELECT user_id, MAX(archived_at) AS last_archived
+  FROM audit_log
+  WHERE action = 'archive'
+  GROUP BY user_id
+) al ON al.user_id = au.id
+WHERE au.archived_at IS NOT NULL
+  AND au.id IN (
+    SELECT user_id FROM audit_log
+    WHERE action = 'archive' AND details IS NOT NULL
+  )
 
 UNION
 
-SELECT id, name, email, 'guest' AS source
+SELECT
+  g.id,
+  g.name,
+  g.email,
+  NULL AS order_no,
+  0 AS total_amount,
+  'guest' AS source
 FROM guest_users g
+LEFT JOIN guest_sessions gs ON gs.guest_id = g.id
 WHERE g.trial_ends_at < NOW()
+  AND gs.last_seen_at < DATE_SUB(NOW(), INTERVAL 30 DAY)
   AND NOT EXISTS (
     SELECT 1 FROM orders o WHERE o.user_id = g.id
+  )
+  AND g.id NOT IN (
+    SELECT guest_id FROM converted_guests WHERE converted_at IS NOT NULL
   );`;
 
 export { exprToString };

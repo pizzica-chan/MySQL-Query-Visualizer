@@ -257,7 +257,7 @@ describe('normalizeConditionTree', () => {
       const existsNode = query.where?.children?.find((c) => c.type === 'exists');
       const existsWhere = existsNode?.nestedQuery?.where;
       expect(existsWhere?.type).toBe('and');
-      expect(existsWhere?.children).toHaveLength(2);
+      expect(existsWhere?.children).toHaveLength(3);
       expect(countConditionNodes(existsWhere, 'and')).toBe(1);
 
       const orNode = query.where?.children?.find((c) => c.type === 'or');

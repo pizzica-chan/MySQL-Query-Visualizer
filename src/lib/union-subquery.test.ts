@@ -30,9 +30,11 @@ describe('UNION / サブクエリ', () => {
 
     const branches = result.query.unionBranches ?? [];
     const tableSets = branches.map((b) => b.query.tables.map((t) => t.table).join(','));
-    expect(tableSets[0]).toBe('users');
-    expect(tableSets[1]).toBe('archived_users');
-    expect(tableSets[2]).toBe('guest_users');
+    expect(tableSets[0]).toBe('users,orders,order_items,products');
+    expect(tableSets[1]).toContain('archived_users');
+    expect(tableSets[2]).toContain('guest_users');
+    expect(branches[0]?.query.joins.length).toBeGreaterThanOrEqual(3);
+    expect(branches[1]?.query.tables.some((t) => t.isDerived)).toBe(true);
     expect(new Set(branches.map((b) => b.id)).size).toBe(3);
   });
 

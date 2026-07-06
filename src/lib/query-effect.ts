@@ -1,4 +1,5 @@
-import type { ConditionNode, JoinEdge, ParsedQuery, SelectColumn, SetClause, TableRef } from './types';
+import type { ConditionNode, JoinEdge, ParsedQuery, SelectColumn, SetClause, SourceSpan, TableRef } from './types';
+import { formatJoinDisplayType } from './parser';
 import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
@@ -18,16 +19,18 @@ export interface ConditionEffectNode {
   type: ConditionEffectType;
   label?: string;
   text?: string;
+  sourceSpan?: SourceSpan;
   children?: ConditionEffectNode[];
 }
 
 export interface TablePresenceJoin {
-  type: string;
-  condition: ConditionEffectNode;
+  /** 行の絞り込み「結合条件」と同じ join ノード（種別ヘッダー + ON 句） */
+  root: ConditionEffectNode;
 }
 
 export interface TablePresenceEntry {
   tableLabel: string;
+  tableSourceSpan?: SourceSpan;
   join?: TablePresenceJoin;
 }
 
@@ -35,6 +38,15 @@ export interface TablePresenceGroup {
   label: string;
   kind: 'required' | 'optional';
   entries: TablePresenceEntry[];
+}
+
+export interface EffectLine {
+  text: string;
+  sourceSpan?: SourceSpan;
+  /** 集約セクションの GROUP BY 見出し（クリック不可・ラベル表示） */
+  aggregateLabel?: boolean;
+  /** 集約セクションで GROUP BY 配下の列としてインデント表示 */
+  aggregateIndent?: boolean;
 }
 
 export interface QueryEffectFilterPart {
@@ -45,7 +57,7 @@ export interface QueryEffectFilterPart {
 export interface QueryEffectSection {
   kind: EffectLineKind;
   title?: string;
-  lines?: string[];
+  lines?: EffectLine[];
   presenceGroups?: TablePresenceGroup[];
   /** 行の絞り込み: 結合条件と WHERE を分けて表示 */
   filterParts?: QueryEffectFilterPart[];
@@ -62,43 +74,48 @@ export interface QueryEffect {
 
 const AGGREGATE_FUNC_PATTERN =
   /\b(COUNT|SUM|AVG|MIN|MAX|GROUP_CONCAT|BIT_AND|BIT_OR|STD|STDDEV|VARIANCE)\s*\(/i;
-const COUNT_DISTINCT_PATTERN = /\bCOUNT\s*\(\s*DISTINCT\b/i;
 
-function columnLabel(col: SelectColumn): string {
-  return col.alias ?? col.expression;
+function formatSelectColumnSql(col: SelectColumn): string {
+  return col.alias ? `${col.expression} AS ${col.alias}` : col.expression;
 }
 
-function hasStarProjection(columns: SelectColumn[]): boolean {
-  return columns.some((c) => c.expression === '*' || /\.\*$/.test(c.expression));
+function formatOrderByClause(query: ParsedQuery): EffectLine | null {
+  if (query.orderBy.length === 0) return null;
+  return {
+    text: `ORDER BY ${query.orderBy.map((o) => o.text).join(', ')}`,
+    sourceSpan: query.orderBy[0]?.sourceSpan,
+  };
 }
 
-function describeDistinctLine(query: ParsedQuery): string {
-  if (!query.distinct) return '';
+function formatLimitClauseLine(query: ParsedQuery): EffectLine | null {
+  if (!query.limit && !query.offset) return null;
 
-  if (query.groupBy.length > 0) {
-    return 'DISTINCT — 集約後、SELECT 列の組み合わせが同じ行を1行にまとめる';
+  let text: string;
+  if (query.limitCommaOffset && query.offset != null && query.limit != null) {
+    text = `LIMIT ${query.offset}, ${query.limit}`;
+  } else if (query.offset != null && query.limit != null) {
+    text = `LIMIT ${query.limit} OFFSET ${query.offset}`;
+  } else if (query.limit != null) {
+    text = `LIMIT ${query.limit}`;
+  } else {
+    text = `OFFSET ${query.offset}`;
   }
 
-  if (hasStarProjection(query.columns)) {
-    return 'DISTINCT — 行全体（すべての列）が同じものを1行にまとめる';
-  }
-
-  const cols = query.columns.map(columnLabel).join(', ');
-  return `DISTINCT — ${cols} の組み合わせが同じ行を1行にまとめる`;
+  return {
+    text,
+    sourceSpan: query.limitSpan ?? query.offsetSpan,
+  };
 }
 
-function describeLimitOffsetLines(query: ParsedQuery): string[] {
-  const lines: string[] = [];
-  if (query.offset) {
-    lines.push(`先頭スキップ — ${query.offset} 行を飛ばしてから取得`);
+function describePostProcessLines(query: ParsedQuery): EffectLine[] {
+  const lines: EffectLine[] = [];
+  if (query.distinct) {
+    lines.push({ text: 'DISTINCT' });
   }
-  if (query.limit) {
-    lines.push(
-      query.offset
-        ? `件数上限 — スキップ後最大 ${query.limit} 行`
-        : `件数上限 — 最大 ${query.limit} 行`,
-    );
-  }
+  const orderBy = formatOrderByClause(query);
+  if (orderBy) lines.push(orderBy);
+  const limit = formatLimitClauseLine(query);
+  if (limit) lines.push(limit);
   return lines;
 }
 
@@ -111,21 +128,24 @@ function formatLimitSummary(query: ParsedQuery): string {
   return '';
 }
 
-function describeAggregateColumns(query: ParsedQuery): string[] {
+function describeAggregateLines(query: ParsedQuery): EffectLine[] {
   if (query.statementType !== 'SELECT') return [];
 
-  const aggregateCols = query.columns.filter((c) => AGGREGATE_FUNC_PATTERN.test(c.expression));
-  const countDistinctCols = query.columns.filter((c) => COUNT_DISTINCT_PATTERN.test(c.expression));
-  const lines: string[] = [];
+  const lines: EffectLine[] = [];
 
   if (query.groupBy.length > 0) {
-    lines.push(`${query.groupBy.map((g) => g.text).join(', ')} ごとに集約 — 1グループ = 結果の1行`);
-  } else if (aggregateCols.length > 0) {
-    lines.push('集約関数のみ — 全体を1グループとして計算（結果は最大1行）');
+    lines.push({ text: 'GROUP BY', aggregateLabel: true });
+    for (const g of query.groupBy) {
+      lines.push({ text: g.text, sourceSpan: g.sourceSpan, aggregateIndent: true });
+    }
   }
 
-  for (const col of countDistinctCols) {
-    lines.push(`${columnLabel(col)} — 重複値を除いて数える（COUNT DISTINCT）`);
+  const aggregateCols = query.columns.filter((c) => AGGREGATE_FUNC_PATTERN.test(c.expression));
+  for (const col of aggregateCols) {
+    lines.push({
+      text: formatSelectColumnSql(col),
+      sourceSpan: col.sourceSpan,
+    });
   }
 
   return lines;
@@ -255,7 +275,10 @@ function describeOperationTarget(query: ParsedQuery): QueryEffectSection | null 
     return {
       kind: 'target',
       title: '表示対象',
-      lines: query.columns.map((col) => formatSelectColumnLine(col, query.tables)),
+      lines: query.columns.map((col) => ({
+        text: formatSelectColumnLine(col, query.tables),
+        sourceSpan: col.sourceSpan,
+      })),
     };
   }
 
@@ -264,7 +287,7 @@ function describeOperationTarget(query: ParsedQuery): QueryEffectSection | null 
     return {
       kind: 'target',
       title: '更新対象',
-      lines: query.setClauses.map((set) => formatSetClauseLine(set, query.tables)),
+      lines: query.setClauses.map((set) => ({ text: formatSetClauseLine(set, query.tables) })),
     };
   }
 
@@ -275,7 +298,7 @@ function describeOperationTarget(query: ParsedQuery): QueryEffectSection | null 
     return {
       kind: 'target',
       title: '削除対象',
-      lines: tables.map((t) => tablePrimaryName(t)),
+      lines: tables.map((t) => ({ text: tablePrimaryName(t), sourceSpan: t.sourceSpan })),
     };
   }
 
@@ -283,6 +306,7 @@ function describeOperationTarget(query: ParsedQuery): QueryEffectSection | null 
 }
 
 function tableLabel(table: TableRef): string {
+  if (table.displayName.includes('（CTE）')) return table.displayName;
   if (table.isDerived) {
     return derivedTableLabelAlreadyPresent(table.displayName)
       ? table.displayName
@@ -405,6 +429,7 @@ function buildTablePresenceGroups(
       kind: 'required',
       entries: classification.required.map((t) => ({
         tableLabel: formatTableNameForPresence(t, classification, true),
+        tableSourceSpan: t.sourceSpan,
       })),
     },
     {
@@ -412,6 +437,7 @@ function buildTablePresenceGroups(
       kind: 'optional',
       entries: classification.optional.map((t) => ({
         tableLabel: formatTableNameForPresence(t, classification, false),
+        tableSourceSpan: t.sourceSpan,
       })),
     },
   ];
@@ -425,25 +451,7 @@ function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
 }
 
 function conditionPhrase(node: ConditionNode): string {
-  switch (node.type) {
-    case 'exists': {
-      const isNotExists = /\bNOT\s+EXISTS\b/i.test(node.label);
-      const prefix = isNotExists ? '関連行が存在しないものだけ' : '関連行が存在するものだけ';
-      return `${prefix} — ${node.label}`;
-    }
-    case 'in':
-      return node.nestedQuery ? `リスト / サブクエリの結果に含まれる — ${node.label}` : node.label;
-    case 'like':
-      return `パターン一致 — ${node.label}`;
-    case 'between':
-      return `範囲内 — ${node.label}`;
-    case 'is_null':
-      return node.label;
-    case 'subquery':
-      return node.label;
-    default:
-      return node.label;
-  }
+  return node.label;
 }
 
 /** WHERE / HAVING を AND / OR / NOT の入れ子ツリーに変換 */
@@ -483,6 +491,7 @@ export function buildConditionEffectTree(node: ConditionNode): ConditionEffectNo
     id: node.id,
     type: 'leaf',
     text: conditionPhrase(node),
+    sourceSpan: node.sourceSpan,
   };
 }
 
@@ -519,7 +528,12 @@ function effectiveInnerForJoin(
   return { nullableTable, reasons: analysis.reasons };
 }
 
-const SCOPE_SECTION_TITLE = '結合するテーブル';
+const SCOPE_SECTION_TITLE_JOIN = '結合するテーブル';
+const SCOPE_SECTION_TITLE_SINGLE = '対象テーブル';
+
+function scopeSectionTitle(query: ParsedQuery): string {
+  return query.joins.length > 0 ? SCOPE_SECTION_TITLE_JOIN : SCOPE_SECTION_TITLE_SINGLE;
+}
 const PRESENCE_REQUIRED_LABEL = '必須';
 const PRESENCE_OPTIONAL_LABEL = '任意（外部結合）';
 const ROW_FILTER_TITLE = '行の絞り込み';
@@ -546,7 +560,11 @@ function joinFilterHeader(
   if (effectiveInner) {
     return effectiveInnerFilterTag(join, effectiveInner.reasons);
   }
-  return isInnerJoinType(join.type) ? 'INNER JOIN' : join.type;
+  const typeLabel = formatJoinDisplayType(join);
+  if (!join.isNatural && isInnerJoinType(join.type)) {
+    return 'INNER JOIN';
+  }
+  return typeLabel;
 }
 
 function buildJoinConditionEffectNode(join: JoinEdge): ConditionEffectNode {
@@ -557,6 +575,7 @@ function buildJoinConditionEffectNode(join: JoinEdge): ConditionEffectNode {
     id: `join-cond-${join.id}`,
     type: 'leaf',
     text: join.condition,
+    sourceSpan: join.sourceSpan,
   };
 }
 
@@ -598,8 +617,7 @@ function attachOptionalJoinsToPresenceGroups(
         return {
           ...entry,
           join: {
-            type: join.type,
-            condition: buildJoinConditionEffectNode(join),
+            root: buildJoinFilterNode(join),
           },
         };
       }),
@@ -615,6 +633,7 @@ function buildJoinFilterNode(
     id: `join-filter-${join.id}`,
     type: 'join',
     label: joinFilterHeader(join, effectiveInner),
+    sourceSpan: join.sourceSpan,
     children: [buildJoinConditionEffectNode(join)],
   };
 }
@@ -682,37 +701,47 @@ function describeRowFilterSection(query: ParsedQuery): QueryEffectSection | null
 }
 
 function describeScope(query: ParsedQuery): QueryEffectSection | null {
-  const lines: string[] = [];
+  const lines: EffectLine[] = [];
   let presenceGroups: TablePresenceGroup[] | undefined;
   const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
 
   if (query.tables.length === 0) {
-    lines.push('対象テーブルが指定されていません');
-  } else if (query.joins.length === 0) {
-    lines.push(`${tableLabel(query.tables[0]!)} の行`);
+    lines.push({ text: '対象テーブルが指定されていません' });
   } else {
-    const classification = classifyTablePresenceRequirement(query);
-    const optionalJoins = query.joins.filter((join) => {
-      if (join.type === 'CROSS JOIN') return false;
-      const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
-      return !isJoinRowFilter(join, effectiveInner);
-    });
-    presenceGroups = attachOptionalJoinsToPresenceGroups(
-      buildTablePresenceGroups(classification),
-      query,
-      classification,
-      optionalJoins,
-    );
-    for (const join of query.joins) {
-      if (join.type === 'CROSS JOIN') {
-        lines.push(crossJoinPhrase(join, query.tables));
+    if (query.ctes?.length) {
+      for (const cte of query.ctes) {
+        lines.push({
+          text: `${cte.name}（CTE）— WITH で定義された一時結果セット`,
+          sourceSpan: cte.sourceSpan,
+        });
+      }
+    }
+    if (query.joins.length === 0) {
+      lines.push({ text: `${tableLabel(query.tables[0]!)} の行` });
+    } else {
+      const classification = classifyTablePresenceRequirement(query);
+      const optionalJoins = query.joins.filter((join) => {
+        if (join.type === 'CROSS JOIN') return false;
+        const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
+        return !isJoinRowFilter(join, effectiveInner);
+      });
+      presenceGroups = attachOptionalJoinsToPresenceGroups(
+        buildTablePresenceGroups(classification),
+        query,
+        classification,
+        optionalJoins,
+      );
+      for (const join of query.joins) {
+        if (join.type === 'CROSS JOIN') {
+          lines.push({ text: crossJoinPhrase(join, query.tables) });
+        }
       }
     }
   }
 
   if (lines.length === 0 && !presenceGroups) return null;
 
-  return { kind: 'scope', title: SCOPE_SECTION_TITLE, lines, presenceGroups };
+  return { kind: 'scope', title: scopeSectionTitle(query), lines, presenceGroups };
 }
 
 function describeFilterSection(
@@ -730,7 +759,7 @@ function describeFilterSection(
 function describeAggregation(query: ParsedQuery): QueryEffectSection[] {
   if (query.statementType !== 'SELECT') return [];
 
-  const aggregateLines = describeAggregateColumns(query);
+  const aggregateLines = describeAggregateLines(query);
   if (aggregateLines.length === 0 && query.groupBy.length === 0) return [];
 
   const sections: QueryEffectSection[] = [
@@ -741,10 +770,7 @@ function describeAggregation(query: ParsedQuery): QueryEffectSection[] {
     },
   ];
 
-  const having = describeFilterSection(
-    query.having,
-    '集約後の HAVING 条件（グループ単位でさらに絞り込み）',
-  );
+  const having = describeFilterSection(query.having, 'HAVING');
   if (having) sections.push(having);
 
   return sections;
@@ -755,20 +781,14 @@ function describeChanges(query: ParsedQuery): QueryEffectSection | null {
     return {
       kind: 'change',
       title: '更新内容',
-      lines: query.setClauses.map((s) => s.label),
+      lines: query.setClauses.map((s) => ({ text: s.label })),
     };
   }
   return null;
 }
 
 function describePostProcess(query: ParsedQuery): QueryEffectSection | null {
-  const lines: string[] = [];
-  const distinctLine = describeDistinctLine(query);
-  if (distinctLine) lines.push(distinctLine);
-  if (query.orderBy.length > 0) {
-    lines.push(`並び順 — ${query.orderBy.map((o) => o.text).join(', ')}`);
-  }
-  lines.push(...describeLimitOffsetLines(query));
+  const lines = describePostProcessLines(query);
   return lines.length > 0 ? { kind: 'info', title: '後処理', lines } : null;
 }
 

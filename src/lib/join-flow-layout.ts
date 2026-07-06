@@ -1,6 +1,7 @@
 import type { Edge, Node } from '@xyflow/react';
 import { MarkerType } from '@xyflow/react';
 import { effectiveInnerAnalysisByJoinId } from './join-effective-inner';
+import { formatJoinDisplayType } from './parser';
 import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
 import {
@@ -94,7 +95,7 @@ export function computeJoinEdgeLabelOffset(
 
 /** 図上の JOIN 種別ラベル（ON 条件は別ボックス — JoinFlowEdge） */
 export function formatJoinEdgeLabel(join: JoinEdge, effectiveInner: boolean): string {
-  const lines: string[] = [join.type];
+  const lines: string[] = [formatJoinDisplayType(join)];
   if (effectiveInner) lines.push('≈INNER');
   return lines.join('\n');
 }
@@ -254,7 +255,7 @@ export function buildJoinFlowLayout(
         interactionWidth: 24,
         data: {
           condition: j.condition,
-          joinType: j.type,
+          joinType: formatJoinDisplayType(j),
           effectiveInner: isPrimary ? effectiveInner : false,
           compact,
           labelOffsetFlip: joinIndex % 2 === 0 ? 1 : -1,
