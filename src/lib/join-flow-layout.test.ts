@@ -187,6 +187,27 @@ describe('join-flow-layout', () => {
     expect(a.nodes.map((n) => n.id)).toEqual(b.nodes.map((n) => n.id));
   });
 
+  it('layoutKey は ID が同じでも JOIN 種別の変更を検知する', () => {
+    const baseKey = computeJoinLayoutKey(sampleTables, sampleJoins, false);
+    const leftJoin = { ...sampleJoins[0]!, type: 'LEFT JOIN' as const };
+    const leftKey = computeJoinLayoutKey(sampleTables, [leftJoin, ...sampleJoins.slice(1)], false);
+    expect(leftKey).not.toBe(baseKey);
+  });
+
+  it('layoutKey は ID が同じでも ON 条件の変更を検知する', () => {
+    const baseKey = computeJoinLayoutKey(sampleTables, sampleJoins, false);
+    const changed = { ...sampleJoins[0]!, condition: 'o.user_id = u.other_id' };
+    const changedKey = computeJoinLayoutKey(sampleTables, [changed, ...sampleJoins.slice(1)], false);
+    expect(changedKey).not.toBe(baseKey);
+  });
+
+  it('layoutKey は ID が同じでも NATURAL JOIN フラグの変更を検知する', () => {
+    const baseKey = computeJoinLayoutKey(sampleTables, sampleJoins, false);
+    const natural = { ...sampleJoins[0]!, isNatural: true };
+    const naturalKey = computeJoinLayoutKey(sampleTables, [natural, ...sampleJoins.slice(1)], false);
+    expect(naturalKey).not.toBe(baseKey);
+  });
+
   describe('実質 INNER JOIN のエッジ表示', () => {
     it('computeJoinLayoutKey は query 指定時に effectiveInner 状態を反映する', () => {
       const result = parseMySqlQuery(SAMPLE_SQL);

@@ -110,6 +110,14 @@ export interface JoinFlowNodeData extends Record<string, unknown> {
   sourceSpan?: SourceSpan;
 }
 
+function tableLayoutSignature(t: TableRef): string {
+  return [t.id, t.table, t.schema ?? '', t.alias ?? '', t.isDerived ? '1' : '0'].join('\0');
+}
+
+function joinLayoutSignature(j: JoinEdge): string {
+  return [j.id, j.type, j.sourceId, j.targetId, j.condition, j.isNatural ? '1' : '0'].join('\0');
+}
+
 /** JOIN 図のレイアウト変更検知用 — useEffect の依存はこれだけに限定する */
 export function computeJoinLayoutKey(
   tables: TableRef[],
@@ -121,7 +129,9 @@ export function computeJoinLayoutKey(
   const effectiveInnerKey = query
     ? [...effectiveInnerAnalysisByJoinId(query).keys()].sort().join(',')
     : '';
-  return `${tables.map((t) => t.id).join('|')}:${joins.map((j) => j.id).join('|')}:${resolveAliases}:${effectiveInnerKey}:${compact}`;
+  const tablesKey = tables.map(tableLayoutSignature).join('|');
+  const joinsKey = joins.map(joinLayoutSignature).join('|');
+  return `${tablesKey}:${joinsKey}:${resolveAliases}:${effectiveInnerKey}:${compact}`;
 }
 
 export function minimapNodeColor(node: Node): string {
