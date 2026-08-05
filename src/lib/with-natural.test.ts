@@ -104,4 +104,75 @@ describe('NATURAL JOIN', () => {
     expect(joinNode?.label).toBe('NATURAL INNER JOIN');
     expect(collectLeafTexts(joinNode!.children![0]!)).toEqual(['NATURAL JOIN']);
   });
+
+  it('通常 JOIN の後の NATURAL JOIN だけに isNatural が付く', () => {
+    const sql = `
+      SELECT *
+      FROM a_table a
+      INNER JOIN b_table b ON a.id = b.id
+      NATURAL JOIN c_table c
+      LEFT JOIN d_table d ON c.id = d.id
+    `;
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.query.joins.map((j) => ({ type: j.type, isNatural: Boolean(j.isNatural) }))).toEqual([
+      { type: 'INNER JOIN', isNatural: false },
+      { type: 'INNER JOIN', isNatural: true },
+      { type: 'LEFT JOIN', isNatural: false },
+    ]);
+    expect(formatJoinDisplayType(result.query.joins[1]!)).toBe('NATURAL INNER JOIN');
+  });
+
+  it('連続 NATURAL JOIN はそれぞれにフラグが付く', () => {
+    const sql = `
+      SELECT * FROM a_table
+      NATURAL JOIN b_table
+      NATURAL LEFT JOIN c_table
+    `;
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.query.joins.every((j) => j.isNatural)).toBe(true);
+    expect(formatJoinDisplayType(result.query.joins[0]!)).toBe('NATURAL INNER JOIN');
+    expect(formatJoinDisplayType(result.query.joins[1]!)).toBe('NATURAL LEFT JOIN');
+  });
+
+  it('派生テーブル内の NATURAL JOIN は内側だけに付き外側には付かない', () => {
+    const sql = `
+      SELECT *
+      FROM a_table a
+      INNER JOIN (
+        SELECT * FROM x_table x NATURAL JOIN y_table y
+      ) b ON a.id = b.id
+      JOIN c_table c ON a.id = c.id
+    `;
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.query.joins.map((j) => Boolean(j.isNatural))).toEqual([false, false]);
+
+    const derived = result.query.tables.find((t) => t.alias === 'b');
+    expect(derived?.isDerived).toBe(true);
+    expect(derived?.derivedQuery?.joins).toHaveLength(1);
+    expect(derived?.derivedQuery?.joins[0]?.isNatural).toBe(true);
+  });
+
+  it('CTE 内の NATURAL JOIN も検出する', () => {
+    const sql = `
+      WITH cte AS (
+        SELECT * FROM users u NATURAL JOIN orders o
+      )
+      SELECT * FROM cte
+    `;
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.query.ctes?.[0]?.query.joins[0]?.isNatural).toBe(true);
+    expect(result.query.joins).toHaveLength(0);
+  });
 });

@@ -25,6 +25,10 @@ import type {
 const parser = new Parser();
 
 let nodeCounter = 0;
+/** 前処理後 SQL 上で NATURAL 由来の JOIN キーワード開始オフセット */
+let naturalJoinStarts: number[] = [];
+let processedSqlForNatural = '';
+
 function nextId(prefix: string): string {
   nodeCounter += 1;
   return `${prefix}-${nodeCounter}`;
@@ -32,6 +36,8 @@ function nextId(prefix: string): string {
 
 function resetIds(): void {
   nodeCounter = 0;
+  naturalJoinStarts = [];
+  processedSqlForNatural = '';
 }
 
 function formatIdentifier(name: string | undefined): string {
@@ -251,17 +257,49 @@ export function formatJoinDisplayType(join: Pick<JoinEdge, 'type' | 'isNatural'>
   return `NATURAL ${base}`;
 }
 
-function preprocessSqlForParser(sql: string): { sql: string; naturalJoinMarkers: boolean[] } {
-  const naturalJoinMarkers: boolean[] = [];
-  const processed = sql.replace(
-    /\bNATURAL\s+((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+)?JOIN\b/gi,
-    (_match, joinTypePart: string | undefined) => {
-      naturalJoinMarkers.push(true);
-      const type = joinTypePart?.trim().toUpperCase() || 'INNER';
-      return `${type} JOIN`;
-    },
-  );
-  return { sql: processed, naturalJoinMarkers };
+/** node-sql-parser は NATURAL 非対応のため剥がし、位置で後から復元する */
+function preprocessSqlForParser(sql: string): { sql: string; naturalJoinStarts: number[] } {
+  const starts: number[] = [];
+  let processed = '';
+  let lastIndex = 0;
+  const re = /\bNATURAL\s+((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+)?JOIN\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(sql)) !== null) {
+    processed += sql.slice(lastIndex, match.index);
+    const type = match[1]?.trim().toUpperCase() || 'INNER';
+    const replacement = `${type} JOIN`;
+    starts.push(processed.length);
+    processed += replacement;
+    lastIndex = match.index + match[0].length;
+  }
+  processed += sql.slice(lastIndex);
+  return { sql: processed, naturalJoinStarts: starts };
+}
+
+function fromEntryRegionEnd(entry: any): number {
+  return entry?.on?.loc?.end?.offset ?? entry?.loc?.end?.offset ?? 0;
+}
+
+function fromEntryTableStart(entry: any): number | null {
+  const offset = entry?.loc?.start?.offset;
+  return typeof offset === 'number' ? offset : null;
+}
+
+/** 同一 FROM 内で、このテーブルを導入する最初の JOIN が NATURAL 由来か */
+function isNaturalJoinEntry(entry: any, prevEntry: any | null): boolean {
+  if (naturalJoinStarts.length === 0 || !processedSqlForNatural) return false;
+  const tableStart = fromEntryTableStart(entry);
+  if (tableStart == null) return false;
+
+  const regionStart = prevEntry ? fromEntryRegionEnd(prevEntry) : 0;
+  if (tableStart <= regionStart) return false;
+
+  const slice = processedSqlForNatural.slice(regionStart, tableStart);
+  const re = /\b(?:INNER|LEFT|RIGHT|FULL|CROSS)\s+JOIN\b/gi;
+  const first = re.exec(slice);
+  if (!first) return false;
+
+  return naturalJoinStarts.includes(regionStart + first.index);
 }
 
 function parseWithClause(withClauses: any[] | null | undefined): CteRef[] {
@@ -752,13 +790,9 @@ function parseJoinConditionFromEntry(
   return parseJoinCondition(entry.on);
 }
 
-function parseFromClause(
-  from: any[],
-  naturalJoinMarkers: boolean[] = [],
-): { tables: TableRef[]; joins: JoinEdge[] } {
+function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] } {
   const tables: TableRef[] = [];
   const joins: JoinEdge[] = [];
-  let naturalIndex = 0;
 
   if (!from || from.length === 0) return { tables, joins };
 
@@ -770,7 +804,8 @@ function parseFromClause(
 
     const joinType = normalizeJoinType(entry.join);
     const prevTable = tables[index - 1]!;
-    const isNatural = naturalJoinMarkers[naturalIndex++] ?? false;
+    const prevEntry = from[index - 1];
+    const isNatural = isNaturalJoinEntry(entry, prevEntry);
     let { condition, parts, conditionRoot } = parseJoinConditionFromEntry(entry, prevTable, tableRef);
 
     if (isNatural && condition === '(no condition)') {
@@ -793,12 +828,8 @@ function parseFromClause(
   return { tables, joins };
 }
 
-function buildSelectParsed(
-  ast: any,
-  rawSql?: string,
-  naturalJoinMarkers: boolean[] = [],
-): ParsedQuery {
-  const { tables, joins } = parseFromClause(ast.from, naturalJoinMarkers);
+function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
+  const { tables, joins } = parseFromClause(ast.from);
 
   let where = parseConditionTree(ast.where);
   if (where) where = enrichConditionTree(where);
@@ -838,10 +869,10 @@ function buildSelectParsed(
   };
 }
 
-function parseSelectQuery(ast: any, rawSql: string, naturalJoinMarkers: boolean[] = []): ParsedQuery {
+function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
   const ctes = parseWithClause(ast.with);
   const branches = collectUnionBranches(ast);
-  let main = applyCtesToQuery(buildSelectParsed(branches[0].ast, rawSql, naturalJoinMarkers), ctes);
+  let main = applyCtesToQuery(buildSelectParsed(branches[0].ast, rawSql), ctes);
   main.rawSql = rawSql;
 
   if (branches.length > 1) {
@@ -1043,7 +1074,9 @@ export function parseMySqlQuery(sql: string): ParseResult {
   }
 
   try {
-    const { sql: preprocessed, naturalJoinMarkers } = preprocessSqlForParser(trimmed);
+    const { sql: preprocessed, naturalJoinStarts: starts } = preprocessSqlForParser(trimmed);
+    naturalJoinStarts = starts;
+    processedSqlForNatural = preprocessed;
     const ast = parser.astify(preprocessed, {
       database: 'MySQL',
       parseOptions: { includeLocations: true },
@@ -1056,7 +1089,7 @@ export function parseMySqlQuery(sql: string): ParseResult {
     }
 
     if (first.type === 'select') {
-      return { success: true, query: parseSelectQuery(first, trimmed, naturalJoinMarkers) };
+      return { success: true, query: parseSelectQuery(first, trimmed) };
     }
 
     if (first.type === 'update') {
