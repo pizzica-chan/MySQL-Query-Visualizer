@@ -4,6 +4,7 @@ import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerJoinScopeLine,
+  type EffectiveInnerAnalysis,
   type EffectiveInnerReason,
 } from './join-effective-inner';
 import { resolveJoinLayoutSources } from './join-graph-layout';
@@ -455,6 +456,78 @@ export interface TablePresenceClassification {
   effectiveInnerTableIds: Set<string>;
 }
 
+function tableIndexInFrom(query: ParsedQuery, tableId: string): number {
+  return query.tables.findIndex((t) => t.id === tableId);
+}
+
+/** tableId の行が結果に出るとき、一緒に存在しなければならない上流テーブル */
+function expandPreservedUpstreamTables(
+  query: ParsedQuery,
+  tableId: string,
+  effectiveInnerTableIds: Set<string>,
+  visited = new Set<string>(),
+): Set<string> {
+  const upstream = new Set<string>();
+  if (visited.has(tableId)) return upstream;
+  visited.add(tableId);
+
+  for (const join of query.joins) {
+    if (join.targetId !== tableId) continue;
+
+    const mustPreserveSources =
+      isInnerJoinType(join.type) ||
+      (join.type === 'LEFT JOIN' && effectiveInnerTableIds.has(tableId));
+
+    if (!mustPreserveSources) continue;
+
+    const sourceIds = new Set<string>(resolveJoinLayoutSources(join, query.tables));
+    if (join.sourceId && join.sourceId !== tableId) {
+      sourceIds.add(join.sourceId);
+    }
+
+    for (const sourceId of sourceIds) {
+      if (sourceId === tableId) continue;
+      upstream.add(sourceId);
+      for (const nested of expandPreservedUpstreamTables(
+        query,
+        sourceId,
+        effectiveInnerTableIds,
+        visited,
+      )) {
+        upstream.add(nested);
+      }
+    }
+  }
+
+  return upstream;
+}
+
+function markRightJoinLeftSideOptional(
+  query: ParsedQuery,
+  join: JoinEdge,
+  requiredIds: Set<string>,
+  optionalIds: Set<string>,
+  effectiveInnerTableIds: Set<string>,
+): void {
+  const targetIdx = tableIndexInFrom(query, join.targetId);
+  if (targetIdx < 0) return;
+
+  const keepRequired = new Set<string>();
+  for (const tableId of effectiveInnerTableIds) {
+    keepRequired.add(tableId);
+    for (const upstream of expandPreservedUpstreamTables(query, tableId, effectiveInnerTableIds)) {
+      keepRequired.add(upstream);
+    }
+  }
+
+  for (const table of query.tables) {
+    if (tableIndexInFrom(query, table.id) >= targetIdx) continue;
+    if (keepRequired.has(table.id)) continue;
+    optionalIds.add(table.id);
+    requiredIds.delete(table.id);
+  }
+}
+
 /** JOIN 種別と実質 INNER から、結果行にレコードが必須か任意かを分類 */
 export function classifyTablePresenceRequirement(query: ParsedQuery): TablePresenceClassification {
   const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
@@ -487,12 +560,33 @@ export function classifyTablePresenceRequirement(query: ParsedQuery): TablePrese
       }
     } else if (join.type === 'RIGHT JOIN') {
       requiredIds.add(join.targetId);
-      if (effectiveInner) {
-        requiredIds.add(join.sourceId);
-        optionalIds.delete(join.sourceId);
-        effectiveInnerTableIds.add(join.sourceId);
+      optionalIds.delete(join.targetId);
+      if (effectiveInner && analysis) {
+        const rejectedIds = analysis.nullableTableIds;
+        const seedIds = new Set<string>([...sourceIds, ...rejectedIds]);
+        for (const id of rejectedIds) {
+          effectiveInnerTableIds.add(id);
+        }
+        for (const id of seedIds) {
+          requiredIds.add(id);
+          optionalIds.delete(id);
+          for (const upstream of expandPreservedUpstreamTables(
+            query,
+            id,
+            effectiveInnerTableIds,
+          )) {
+            requiredIds.add(upstream);
+            optionalIds.delete(upstream);
+          }
+        }
       } else {
-        optionalIds.add(join.sourceId);
+        markRightJoinLeftSideOptional(
+          query,
+          join,
+          requiredIds,
+          optionalIds,
+          effectiveInnerTableIds,
+        );
       }
     } else if (join.type === 'FULL JOIN') {
       optionalIds.add(join.targetId);
@@ -695,12 +789,14 @@ export function collectJoinFilterNodes(root: ConditionEffectNode): ConditionEffe
 function effectiveInnerForJoin(
   join: JoinEdge,
   query: ParsedQuery,
-  effectiveInnerByJoin: Map<string, { reasons: EffectiveInnerReason[] }>,
+  effectiveInnerByJoin: Map<string, EffectiveInnerAnalysis>,
 ): { nullableTable: TableRef; reasons: EffectiveInnerReason[] } | undefined {
   const analysis = effectiveInnerByJoin.get(join.id);
   if (!analysis || analysis.reasons.length === 0) return undefined;
 
-  const nullableId = join.type === 'LEFT JOIN' ? join.targetId : join.sourceId;
+  const nullableId =
+    analysis.nullableTableIds[0] ??
+    (join.type === 'LEFT JOIN' ? join.targetId : join.sourceId);
   const nullableTable = query.tables.find((t) => t.id === nullableId);
   if (!nullableTable) return undefined;
 
@@ -836,7 +932,7 @@ function isJoinRowFilter(
 
 function buildJoinFilterLeaves(
   query: ParsedQuery,
-  effectiveInnerByJoin: Map<string, { reasons: EffectiveInnerReason[] }>,
+  effectiveInnerByJoin: Map<string, EffectiveInnerAnalysis>,
   mode: QueryEffectMode,
 ): ConditionEffectNode[] {
   return query.joins.flatMap((join) => {

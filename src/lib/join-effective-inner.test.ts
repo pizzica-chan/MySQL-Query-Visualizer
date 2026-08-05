@@ -89,6 +89,26 @@ describe('join-effective-inner', () => {
         expect(analysis?.reasons.some((r) => r.kind === 'inner_join' && r.label.includes('table_d'))).toBe(
           true,
         );
+        expect(analysis?.nullableTableIds).toEqual([
+          query.tables.find((t) => t.alias === 'a' || t.table === 'table_a')!.id,
+        ]);
+      });
+
+      it('LEFT JOIN 後の RIGHT JOIN で左側の非 sourceId への WHERE も検出する', () => {
+        const query = parseSql(`
+          SELECT *
+          FROM a_table
+          LEFT JOIN b_table ON a_table.id = b_table.id
+          RIGHT JOIN c_table ON a_table.id = c_table.id
+          WHERE a_table.id IS NOT NULL
+        `);
+        const rightJoin = query.joins.find((j) => j.type === 'RIGHT JOIN')!;
+        const analysis = analysisForJoin(query, rightJoin.id);
+        const aId = query.tables.find((t) => t.table === 'a_table')!.id;
+        expect(analysis?.reasons.some((r) => r.kind === 'where' && r.label.includes('a_table.id'))).toBe(
+          true,
+        );
+        expect(analysis?.nullableTableIds).toEqual([aId]);
       });
     });
 

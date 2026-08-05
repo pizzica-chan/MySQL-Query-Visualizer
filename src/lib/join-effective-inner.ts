@@ -9,6 +9,8 @@ export interface EffectiveInnerReason {
 export interface EffectiveInnerAnalysis {
   joinId: string;
   reasons: EffectiveInnerReason[];
+  /** 実質 INNER 判定の根拠となった nullable 側テーブル id（RIGHT JOIN は左側の複数可） */
+  nullableTableIds: string[];
 }
 
 const NULL_REJECTING_CONDITION_TYPES = new Set<ConditionNode['type']>([
@@ -47,10 +49,22 @@ function isOuterJoinWithNullableSide(type: JoinType): boolean {
   return type === 'LEFT JOIN' || type === 'RIGHT JOIN';
 }
 
-function nullableTableId(join: JoinEdge): string | null {
-  if (join.type === 'LEFT JOIN') return join.targetId;
-  if (join.type === 'RIGHT JOIN') return join.sourceId;
-  return null;
+function tableIndexInFrom(tables: TableRef[], tableId: string): number {
+  return tables.findIndex((t) => t.id === tableId);
+}
+
+/** 外部結合で NULL 埋めされうる側のテーブル（RIGHT JOIN はターゲットより左の全体） */
+function nullableSideTables(join: JoinEdge, tables: TableRef[]): TableRef[] {
+  if (join.type === 'LEFT JOIN') {
+    const target = tables.find((t) => t.id === join.targetId);
+    return target ? [target] : [];
+  }
+  if (join.type === 'RIGHT JOIN') {
+    const targetIdx = tableIndexInFrom(tables, join.targetId);
+    if (targetIdx < 0) return [];
+    return tables.filter((_, i) => i < targetIdx);
+  }
+  return [];
 }
 
 function tableDisplayLabel(table: TableRef): string {
@@ -147,26 +161,43 @@ function dedupeReasons(reasons: EffectiveInnerReason[]): EffectiveInnerReason[] 
   });
 }
 
+function reasonsForNullableTable(
+  query: ParsedQuery,
+  joinIndex: number,
+  nullableTable: TableRef,
+): EffectiveInnerReason[] {
+  return dedupeReasons([
+    ...findSubsequentInnerJoinReasons(query.joins, query.tables, joinIndex, nullableTable),
+    ...collectConditionReasons(query.where, 'where', nullableTable, false),
+    ...collectConditionReasons(query.having, 'having', nullableTable, false),
+  ]);
+}
+
 export function analyzeEffectiveInnerJoins(query: ParsedQuery): EffectiveInnerAnalysis[] {
   const results: EffectiveInnerAnalysis[] = [];
 
   query.joins.forEach((join, joinIndex) => {
     if (!isOuterJoinWithNullableSide(join.type)) return;
 
-    const nullableId = nullableTableId(join);
-    if (!nullableId) return;
+    const sideTables = nullableSideTables(join, query.tables);
+    if (sideTables.length === 0) return;
 
-    const nullableTable = query.tables.find((t) => t.id === nullableId);
-    if (!nullableTable) return;
+    const reasons: EffectiveInnerReason[] = [];
+    const nullableTableIds: string[] = [];
 
-    const reasons = dedupeReasons([
-      ...findSubsequentInnerJoinReasons(query.joins, query.tables, joinIndex, nullableTable),
-      ...collectConditionReasons(query.where, 'where', nullableTable, false),
-      ...collectConditionReasons(query.having, 'having', nullableTable, false),
-    ]);
+    for (const nullableTable of sideTables) {
+      const tableReasons = reasonsForNullableTable(query, joinIndex, nullableTable);
+      if (tableReasons.length === 0) continue;
+      nullableTableIds.push(nullableTable.id);
+      reasons.push(...tableReasons);
+    }
 
     if (reasons.length > 0) {
-      results.push({ joinId: join.id, reasons });
+      results.push({
+        joinId: join.id,
+        reasons: dedupeReasons(reasons),
+        nullableTableIds,
+      });
     }
   });
 

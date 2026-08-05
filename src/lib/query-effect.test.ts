@@ -373,6 +373,101 @@ describe('query-effect', () => {
       expect(required.map((t) => t.alias).sort()).toEqual(['a', 'b']);
       expect(optional).toHaveLength(0);
     });
+
+    it('LEFT JOIN の後に RIGHT JOIN すると左側チェーンは任意になる', () => {
+      const result = parseMySqlQuery(`
+        SELECT *
+        FROM a_table
+        LEFT JOIN b_table ON a_table.id = b_table.id
+        RIGHT JOIN c_table ON b_table.id = c_table.id
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.table).sort()).toEqual(['c_table']);
+      expect(optional.map((t) => t.table).sort()).toEqual(['a_table', 'b_table']);
+    });
+
+    it('RIGHT JOIN 後の WHERE 実質 INNER でも左側の必須テーブルは維持する', () => {
+      const result = parseMySqlQuery(`
+        SELECT *
+        FROM a_table
+        LEFT JOIN b_table ON a_table.id = b_table.id
+        RIGHT JOIN c_table ON b_table.id = c_table.id
+        WHERE b_table.id IS NOT NULL
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.table).sort()).toEqual(['a_table', 'b_table', 'c_table']);
+      expect(optional).toHaveLength(0);
+    });
+
+    it('WHERE が RIGHT JOIN の sourceId 以外の左側を参照しても必須を維持する', () => {
+      const result = parseMySqlQuery(`
+        SELECT *
+        FROM a_table
+        LEFT JOIN b_table ON a_table.id = b_table.id
+        RIGHT JOIN c_table ON a_table.id = c_table.id
+        WHERE a_table.id IS NOT NULL
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional, effectiveInnerTableIds } = classifyTablePresenceRequirement(
+        result.query,
+      );
+      expect(required.map((t) => t.table).sort()).toEqual(['a_table', 'c_table']);
+      expect(optional.map((t) => t.table)).toEqual(['b_table']);
+      expect(
+        effectiveInnerTableIds.has(result.query.tables.find((t) => t.table === 'a_table')!.id),
+      ).toBe(true);
+    });
+
+    it('WHERE が左側の非 sourceId を参照し ON が中間表経由でも必須チェーンを復元する', () => {
+      const result = parseMySqlQuery(`
+        SELECT *
+        FROM a_table
+        LEFT JOIN b_table ON a_table.id = b_table.id
+        RIGHT JOIN c_table ON b_table.id = c_table.id
+        WHERE a_table.id IS NOT NULL
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.table).sort()).toEqual(['a_table', 'b_table', 'c_table']);
+      expect(optional).toHaveLength(0);
+    });
+
+    it('INNER JOIN 後の RIGHT JOIN（WHERE なし）では右側のみ必須になる', () => {
+      const result = parseMySqlQuery(`
+        SELECT *
+        FROM a_table
+        INNER JOIN b_table ON a_table.id = b_table.id
+        RIGHT JOIN c_table ON b_table.id = c_table.id
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.table)).toEqual(['c_table']);
+      expect(optional.map((t) => t.table).sort()).toEqual(['a_table', 'b_table']);
+    });
+
+    it('RIGHT JOIN のみでは右テーブルが必須・左テーブルが任意になる', () => {
+      const result = parseMySqlQuery(`
+        SELECT * FROM a_table RIGHT JOIN b_table ON a_table.id = b_table.id
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.table)).toEqual(['b_table']);
+      expect(optional.map((t) => t.table)).toEqual(['a_table']);
+    });
   });
 
   it('UPDATE サンプルで更新対象と SET を含む', () => {
