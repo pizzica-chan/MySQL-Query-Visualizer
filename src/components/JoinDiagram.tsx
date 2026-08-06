@@ -24,6 +24,7 @@ import {
   toggleJoinDiagramFocus,
   type JoinDiagramFocus,
 } from '../lib/join-diagram-focus';
+import { planJoinDiagramFit } from '../lib/join-diagram-fit';
 import {
   JOIN_EDGE_COLORS,
   JOIN_MINIMAP_COMPACT_SIZE,
@@ -149,23 +150,35 @@ function JoinDiagramFlow({
     setJoinFocus(null);
   }, [layoutKey]);
 
-  const reactFlowRef = useRef<{ fitView: (options?: { padding?: number }) => Promise<boolean> } | null>(
-    null,
-  );
+  const reactFlowRef = useRef<{
+    fitView: (options?: { padding?: number }) => Promise<boolean>;
+  } | null>(null);
+  const fitStateRef = useRef({ lastFitLayoutKey: null as string | null, needsFitOnShow: true });
 
   const fitDiagramView = useCallback(() => {
-    requestAnimationFrame(() => {
-      void reactFlowRef.current?.fitView({ padding: 0.3 });
-    });
+    const attemptFit = (attempt: number) => {
+      requestAnimationFrame(() => {
+        const instance = reactFlowRef.current;
+        if (!instance) {
+          if (attempt < 12) attemptFit(attempt + 1);
+          return;
+        }
+        void instance.fitView({ padding: 0.3 }).then((didFit) => {
+          // display:none 解除直後は width/height が 0 で失敗することがある
+          if (!didFit && attempt < 12) attemptFit(attempt + 1);
+        });
+      });
+    };
+    attemptFit(0);
   }, []);
 
-  const lastFitLayoutKey = useRef<string | null>(null);
-
   useEffect(() => {
-    if (!isActive) return;
-    if (lastFitLayoutKey.current === layoutKey) return;
-    lastFitLayoutKey.current = layoutKey;
-    fitDiagramView();
+    const plan = planJoinDiagramFit(isActive, layoutKey, fitStateRef.current);
+    fitStateRef.current = {
+      lastFitLayoutKey: plan.lastFitLayoutKey,
+      needsFitOnShow: plan.needsFitOnShow,
+    };
+    if (plan.shouldFit) fitDiagramView();
   }, [layoutKey, isActive, fitDiagramView]);
 
   const handleInit = useCallback(
