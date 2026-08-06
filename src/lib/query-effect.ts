@@ -460,46 +460,20 @@ function tableIndexInFrom(query: ParsedQuery, tableId: string): number {
   return query.tables.findIndex((t) => t.id === tableId);
 }
 
-/** tableId の行が結果に出るとき、一緒に存在しなければならない上流テーブル（実質 INNER 側の保持用） */
-function expandPreservedUpstreamTables(
+function markRightJoinLeftSideOptional(
   query: ParsedQuery,
-  tableId: string,
-  effectiveInnerTableIds: Set<string>,
-  visited = new Set<string>(),
-): Set<string> {
-  const upstream = new Set<string>();
-  if (visited.has(tableId)) return upstream;
-  visited.add(tableId);
+  join: JoinEdge,
+  requiredIds: Set<string>,
+  optionalIds: Set<string>,
+): void {
+  const targetIdx = tableIndexInFrom(query, join.targetId);
+  if (targetIdx < 0) return;
 
-  for (const join of query.joins) {
-    if (join.targetId !== tableId) continue;
-
-    const mustPreserveSources =
-      isInnerJoinType(join.type) ||
-      (join.type === 'LEFT JOIN' && effectiveInnerTableIds.has(tableId));
-
-    if (!mustPreserveSources) continue;
-
-    const sourceIds = new Set<string>(resolveJoinLayoutSources(join, query.tables));
-    if (join.sourceId && join.sourceId !== tableId) {
-      sourceIds.add(join.sourceId);
-    }
-
-    for (const sourceId of sourceIds) {
-      if (sourceId === tableId) continue;
-      upstream.add(sourceId);
-      for (const nested of expandPreservedUpstreamTables(
-        query,
-        sourceId,
-        effectiveInnerTableIds,
-        visited,
-      )) {
-        upstream.add(nested);
-      }
-    }
+  for (const table of query.tables) {
+    if (tableIndexInFrom(query, table.id) >= targetIdx) continue;
+    optionalIds.add(table.id);
+    requiredIds.delete(table.id);
   }
-
-  return upstream;
 }
 
 /**
@@ -534,32 +508,6 @@ function expandRequiredUpstreamTables(
   }
 
   return upstream;
-}
-
-function markRightJoinLeftSideOptional(
-  query: ParsedQuery,
-  join: JoinEdge,
-  requiredIds: Set<string>,
-  optionalIds: Set<string>,
-  effectiveInnerTableIds: Set<string>,
-): void {
-  const targetIdx = tableIndexInFrom(query, join.targetId);
-  if (targetIdx < 0) return;
-
-  const keepRequired = new Set<string>();
-  for (const tableId of effectiveInnerTableIds) {
-    keepRequired.add(tableId);
-    for (const upstream of expandPreservedUpstreamTables(query, tableId, effectiveInnerTableIds)) {
-      keepRequired.add(upstream);
-    }
-  }
-
-  for (const table of query.tables) {
-    if (tableIndexInFrom(query, table.id) >= targetIdx) continue;
-    if (keepRequired.has(table.id)) continue;
-    optionalIds.add(table.id);
-    requiredIds.delete(table.id);
-  }
 }
 
 /** JOIN 種別と実質 INNER から、結果行にレコードが必須か任意かを分類 */
@@ -610,13 +558,7 @@ export function classifyTablePresenceRequirement(query: ParsedQuery): TablePrese
           }
         }
       } else {
-        markRightJoinLeftSideOptional(
-          query,
-          join,
-          requiredIds,
-          optionalIds,
-          effectiveInnerTableIds,
-        );
+        markRightJoinLeftSideOptional(query, join, requiredIds, optionalIds);
       }
     } else if (join.type === 'FULL JOIN') {
       optionalIds.add(join.targetId);

@@ -474,6 +474,27 @@ describe('query-effect', () => {
       expect(optional.map((t) => t.table).sort()).toEqual(['a_table', 'b_table']);
     });
 
+    it('LEFT→INNER 後の RIGHT JOIN（WHERE なし）でも左側はすべて任意になる', () => {
+      const result = parseMySqlQuery(`
+        SELECT *
+        FROM a_table
+        LEFT JOIN b_table ON a_table.id = b_table.id
+        INNER JOIN c_table ON b_table.id = c_table.id
+        RIGHT JOIN d_table ON c_table.id = d_table.id
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional, effectiveInnerTableIds } = classifyTablePresenceRequirement(
+        result.query,
+      );
+      expect(required.map((t) => t.table)).toEqual(['d_table']);
+      expect(optional.map((t) => t.table).sort()).toEqual(['a_table', 'b_table', 'c_table']);
+      expect(
+        effectiveInnerTableIds.has(result.query.tables.find((t) => t.table === 'b_table')!.id),
+      ).toBe(true);
+    });
+
     it('RIGHT JOIN のみでは右テーブルが必須・左テーブルが任意になる', () => {
       const result = parseMySqlQuery(`
         SELECT * FROM a_table RIGHT JOIN b_table ON a_table.id = b_table.id
