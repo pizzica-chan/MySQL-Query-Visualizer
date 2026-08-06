@@ -442,6 +442,23 @@ describe('query-effect', () => {
       expect(optional).toHaveLength(0);
     });
 
+    it('RIGHT JOIN の ON が中間表経由で LEFT JOIN チェーンを遡って必須にする', () => {
+      const result = parseMySqlQuery(`
+        SELECT *
+        FROM a_table
+        LEFT JOIN b_table ON a_table.id = b_table.id
+        LEFT JOIN c_table ON b_table.id = c_table.id
+        RIGHT JOIN d_table ON c_table.id = d_table.id
+        WHERE a_table.id IS NOT NULL
+      `);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const { required, optional } = classifyTablePresenceRequirement(result.query);
+      expect(required.map((t) => t.table).sort()).toEqual(['a_table', 'b_table', 'c_table', 'd_table']);
+      expect(optional).toHaveLength(0);
+    });
+
     it('INNER JOIN 後の RIGHT JOIN（WHERE なし）では右側のみ必須になる', () => {
       const result = parseMySqlQuery(`
         SELECT *

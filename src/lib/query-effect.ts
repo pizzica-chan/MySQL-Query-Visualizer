@@ -460,7 +460,7 @@ function tableIndexInFrom(query: ParsedQuery, tableId: string): number {
   return query.tables.findIndex((t) => t.id === tableId);
 }
 
-/** tableId の行が結果に出るとき、一緒に存在しなければならない上流テーブル */
+/** tableId の行が結果に出るとき、一緒に存在しなければならない上流テーブル（実質 INNER 側の保持用） */
 function expandPreservedUpstreamTables(
   query: ParsedQuery,
   tableId: string,
@@ -494,6 +494,40 @@ function expandPreservedUpstreamTables(
         effectiveInnerTableIds,
         visited,
       )) {
+        upstream.add(nested);
+      }
+    }
+  }
+
+  return upstream;
+}
+
+/**
+ * 必須テーブルから INNER / LEFT JOIN 経由の上流を辿る。
+ * RIGHT JOIN 実質 INNER 時の seed 復元専用 — ON が中間表を経由する場合に b 等を落とさない。
+ */
+function expandRequiredUpstreamTables(
+  query: ParsedQuery,
+  tableId: string,
+  visited = new Set<string>(),
+): Set<string> {
+  const upstream = new Set<string>();
+  if (visited.has(tableId)) return upstream;
+  visited.add(tableId);
+
+  for (const join of query.joins) {
+    if (join.targetId !== tableId) continue;
+    if (!isInnerJoinType(join.type) && join.type !== 'LEFT JOIN') continue;
+
+    const sourceIds = new Set<string>(resolveJoinLayoutSources(join, query.tables));
+    if (join.sourceId && join.sourceId !== tableId) {
+      sourceIds.add(join.sourceId);
+    }
+
+    for (const sourceId of sourceIds) {
+      if (sourceId === tableId) continue;
+      upstream.add(sourceId);
+      for (const nested of expandRequiredUpstreamTables(query, sourceId, visited)) {
         upstream.add(nested);
       }
     }
@@ -570,11 +604,7 @@ export function classifyTablePresenceRequirement(query: ParsedQuery): TablePrese
         for (const id of seedIds) {
           requiredIds.add(id);
           optionalIds.delete(id);
-          for (const upstream of expandPreservedUpstreamTables(
-            query,
-            id,
-            effectiveInnerTableIds,
-          )) {
+          for (const upstream of expandRequiredUpstreamTables(query, id)) {
             requiredIds.add(upstream);
             optionalIds.delete(upstream);
           }
