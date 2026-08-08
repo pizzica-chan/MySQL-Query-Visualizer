@@ -548,4 +548,283 @@ INNER JOIN mydb.orders o ON o.user_id = u.id`);
     expect(diff.equalForResultSet).toBe(false);
     expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(false);
   });
+
+  it('LEFT JOIN + WHERE（右表列）と INNER JOIN は結果セット同等とみなす', () => {
+    const leftSql = mustParse(`SELECT u.id, u.name, o.id AS order_id, o.total
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE o.status = 'paid' AND o.total >= 1000`);
+    const innerSql = mustParse(`SELECT u.id, u.name, o.id AS order_id, o.total
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE o.status = 'paid' AND o.total >= 1000`);
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.matchedViaEffectiveInner).toBe(true);
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('same');
+    expect(summary.effectiveInnerNote).toContain('実質 INNER JOIN');
+    expect(diff.reviewHints).toHaveLength(0);
+  });
+
+  it('CTE 内の LEFT JOIN + WHERE（右表列）と INNER JOIN も結果セット同等とみなす', () => {
+    const leftSql = mustParse(`WITH paid AS (
+  SELECT u.id, o.total
+  FROM users u
+  LEFT JOIN orders o ON u.id = o.user_id
+  WHERE o.status = 'paid'
+)
+SELECT id, total FROM paid`);
+    const innerSql = mustParse(`WITH paid AS (
+  SELECT u.id, o.total
+  FROM users u
+  INNER JOIN orders o ON u.id = o.user_id
+  WHERE o.status = 'paid'
+)
+SELECT id, total FROM paid`);
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.matchedViaEffectiveInner).toBe(true);
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('same');
+    expect(summary.effectiveInnerNote).toContain('実質 INNER JOIN');
+  });
+
+  it('派生テーブル内の LEFT JOIN + WHERE（右表列）と INNER JOIN も結果セット同等とみなす', () => {
+    const leftSql = mustParse(`SELECT p.id, p.total
+FROM (
+  SELECT u.id, o.total
+  FROM users u
+  LEFT JOIN orders o ON u.id = o.user_id
+  WHERE o.status = 'paid'
+) p`);
+    const innerSql = mustParse(`SELECT p.id, p.total
+FROM (
+  SELECT u.id, o.total
+  FROM users u
+  INNER JOIN orders o ON u.id = o.user_id
+  WHERE o.status = 'paid'
+) p`);
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.matchedViaEffectiveInner).toBe(true);
+    expect(buildResultDiffSummary(diff).effectiveInnerNote).toContain('実質 INNER JOIN');
+  });
+
+  it('RIGHT JOIN + WHERE（左表列）と INNER JOIN は結果セット同等とみなす', () => {
+    const rightSql = mustParse(`SELECT u.id, o.id AS order_id
+FROM users u
+RIGHT JOIN orders o ON u.id = o.user_id
+WHERE u.active = 1`);
+    const innerSql = mustParse(`SELECT u.id, o.id AS order_id
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE u.active = 1`);
+    const diff = compareQueryResults(rightSql, innerSql);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.matchedViaEffectiveInner).toBe(true);
+    expect(buildResultDiffSummary(diff).effectiveInnerNote).toContain('実質 INNER JOIN');
+  });
+
+  it('LEFT JOIN のみと INNER JOIN は同等とみなさない', () => {
+    const leftSql = mustParse(
+      'SELECT u.id, o.id AS order_id FROM users u LEFT JOIN orders o ON u.id = o.user_id',
+    );
+    const innerSql = mustParse(
+      'SELECT u.id, o.id AS order_id FROM users u INNER JOIN orders o ON u.id = o.user_id',
+    );
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.matchedViaEffectiveInner).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('LEFT JOIN + WHERE（右表 IS NULL）と INNER JOIN は同等とみなさない', () => {
+    const leftSql = mustParse(
+      'SELECT u.id FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE o.id IS NULL',
+    );
+    const innerSql = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id',
+    );
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(false);
+  });
+
+  it('LEFT JOIN + WHERE IFNULL（右表）と INNER JOIN は同等とみなさない', () => {
+    const leftSql = mustParse(`SELECT u.id, o.total
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE IFNULL(o.total, 0) = 0`);
+    const innerSql = mustParse(`SELECT u.id, o.total
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE IFNULL(o.total, 0) = 0`);
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.matchedViaEffectiveInner).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('LEFT JOIN + WHERE COALESCE（右表）と INNER JOIN は同等とみなさない', () => {
+    const leftSql = mustParse(`SELECT u.id, o.total
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE COALESCE(o.total, 0) = 0`);
+    const innerSql = mustParse(`SELECT u.id, o.total
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE COALESCE(o.total, 0) = 0`);
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.matchedViaEffectiveInner).toBe(false);
+  });
+
+  it('LIMIT あり・ORDER BY なしで JOIN 記述順だけ違うと要確認', () => {
+    const a = mustParse(`SELECT o.id, u.name, p.amount
+FROM orders o
+INNER JOIN users u ON o.user_id = u.id
+INNER JOIN payments p ON p.order_id = o.id
+WHERE o.status = 'paid'
+LIMIT 10`);
+    const b = mustParse(`SELECT o.id, u.name, p.amount
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+INNER JOIN payments p ON p.order_id = o.id
+WHERE o.status = 'paid'
+LIMIT 10`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'limit-without-order')).toBe(true);
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('review-needed');
+    expect(summary.title).toMatch(/LIMIT あり/);
+    expect(summary.resultSet.label).toBe('要確認');
+    expect(summary.limitWithoutOrderWarning).toMatch(/問題ないと判断せず/);
+    expect(summary.body).toMatch(/カテゴリ一覧には出ない/);
+  });
+
+  it('実質 INNER 正規化後に JOIN 記述順だけ違う + LIMIT（ORDER BY なし）も要確認', () => {
+    const a = mustParse(`SELECT o.id, u.name
+FROM orders o
+LEFT JOIN users u ON o.user_id = u.id
+WHERE u.active = 1
+LIMIT 10`);
+    const b = mustParse(`SELECT o.id, u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE u.active = 1
+LIMIT 10`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'limit-without-order')).toBe(true);
+    const hint = diff.reviewHints.find((h) => h.id === 'limit-without-order');
+    expect(hint?.message).toMatch(/JOIN の記述順/);
+    expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
+    expect(buildResultDiffSummary(diff).body).not.toMatch(/構文上の差分はありません/);
+  });
+
+  it('LIMIT あり・ORDER BY なしでも JOIN 記述順が同じなら構文同等だが要確認', () => {
+    const sql = `SELECT o.id FROM orders o INNER JOIN users u ON o.user_id = u.id LIMIT 10`;
+    const a = mustParse(sql);
+    const b = mustParse(sql);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.reviewHints.some((h) => h.id === 'limit-without-order')).toBe(true);
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('review-needed');
+    expect(summary.resultSet.label).toBe('要確認');
+    expect(summary.resultSet.status).toBe('uncertain');
+    expect(summary.limitWithoutOrderWarning).toMatch(/問題ないと判断せず/);
+    expect(summary.body).toMatch(/構文上の差分はありません/);
+  });
+
+  it('ORDER BY なしの LIMIT + OFFSET も要確認（OFFSET 経路）', () => {
+    const sql = 'SELECT id FROM users LIMIT 10 OFFSET 5';
+    const a = mustParse(sql);
+    const b = mustParse(sql);
+    const diff = compareQueryResults(a, b);
+    expect(diff.limitWithoutOrderActive).toBe(true);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.reviewHints.some((h) => h.id === 'limit-without-order')).toBe(true);
+    expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
+  });
+
+  it('ORDER BY なしで JOIN 記述順だけ違い + OFFSET ありも要確認', () => {
+    const a = mustParse(`SELECT o.id, u.name
+FROM orders o
+INNER JOIN users u ON o.user_id = u.id
+LIMIT 10 OFFSET 5`);
+    const b = mustParse(`SELECT o.id, u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+LIMIT 10 OFFSET 5`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.limitWithoutOrderActive).toBe(true);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'limit-without-order')).toBe(true);
+    expect(buildResultDiffSummary(diff).body).toMatch(/JOIN の記述順/);
+  });
+
+  it('LIMIT なしの JOIN 記述順入れ替えは従来どおり同等', () => {
+    const a = mustParse(`SELECT o.id, u.name
+FROM orders o
+INNER JOIN users u ON o.user_id = u.id
+WHERE o.status = 'paid'`);
+    const b = mustParse(`SELECT o.id, u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE o.status = 'paid'`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.reviewHints).toHaveLength(0);
+    expect(buildResultDiffSummary(diff).tone).toBe('same');
+  });
+
+  it('JOIN 記述順差があっても LIMIT 値が違うと JOIN 順ヒントは出さない', () => {
+    const a = mustParse(`SELECT o.id, u.name
+FROM orders o
+INNER JOIN users u ON o.user_id = u.id
+LIMIT 10`);
+    const b = mustParse(`SELECT o.id, u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+LIMIT 20`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'limit-without-order')).toBe(false);
+    expect(diff.categories.find((c) => c.id === 'limit')?.status).toBe('different');
+  });
+
+  it('片側だけ ORDER BY がある JOIN 記述順差では JOIN 順ヒントは出さない', () => {
+    const a = mustParse(`SELECT o.id, u.name
+FROM orders o
+INNER JOIN users u ON o.user_id = u.id
+LIMIT 10`);
+    const b = mustParse(`SELECT o.id, u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+ORDER BY o.id
+LIMIT 10`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.reviewHints.some((h) => h.id === 'limit-without-order')).toBe(false);
+    expect(diff.categories.find((c) => c.id === 'orderBy')?.status).toBe('different');
+  });
+
+  it('HAVING 単独の実質 INNER（常に真になりうる条件）では INNER と同等扱いにしない', () => {
+    const leftSql = mustParse(`SELECT a.id, COUNT(b.id) AS cnt
+FROM table_a a
+LEFT JOIN table_b b ON b.a_id = a.id
+GROUP BY a.id
+HAVING COUNT(b.id) >= 0`);
+    const innerSql = mustParse(`SELECT a.id, COUNT(b.id) AS cnt
+FROM table_a a
+INNER JOIN table_b b ON b.a_id = a.id
+GROUP BY a.id
+HAVING COUNT(b.id) >= 0`);
+    const diff = compareQueryResults(leftSql, innerSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.matchedViaEffectiveInner).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).not.toBe('same');
+    expect(buildResultDiffSummary(diff).effectiveInnerNote).toBeUndefined();
+  });
 });

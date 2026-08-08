@@ -90,12 +90,113 @@ function isNullPreservingCondition(node: ConditionNode): boolean {
   return upper.includes(' IS NULL') && !upper.includes(' IS NOT NULL');
 }
 
+/** IFNULL / COALESCE / NVL の引数範囲（開き括弧の直後〜閉じ括弧直前） */
+function findNullCoalescingArgSpans(expr: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  const re = /\b(?:ifnull|coalesce|nvl)\s*\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(expr)) !== null) {
+    const openParen = match.index + match[0].length - 1;
+    let depth = 1;
+    let i = openParen + 1;
+    let inSingle = false;
+    let inDouble = false;
+    let inBacktick = false;
+    while (i < expr.length && depth > 0) {
+      const ch = expr[i]!;
+      if (inSingle) {
+        if (ch === "'" && expr[i + 1] === "'") {
+          i += 2;
+          continue;
+        }
+        if (ch === "'") inSingle = false;
+        i++;
+        continue;
+      }
+      if (inDouble) {
+        if (ch === '"' && expr[i + 1] === '"') {
+          i += 2;
+          continue;
+        }
+        if (ch === '"') inDouble = false;
+        i++;
+        continue;
+      }
+      if (inBacktick) {
+        if (ch === '`') inBacktick = false;
+        i++;
+        continue;
+      }
+      if (ch === "'") {
+        inSingle = true;
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = true;
+        i++;
+        continue;
+      }
+      if (ch === '`') {
+        inBacktick = true;
+        i++;
+        continue;
+      }
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      i++;
+    }
+    if (depth === 0) {
+      spans.push({ start: openParen + 1, end: i - 1 });
+    }
+  }
+  return spans;
+}
+
+function tableRefStartPositions(expr: string, table: TableRef): number[] {
+  const positions: number[] = [];
+  for (const id of tableIdentifiers(table)) {
+    const pattern = new RegExp(`\\b${escapeRegex(id)}\\.`, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(expr)) !== null) {
+      positions.push(match.index);
+    }
+  }
+  return positions;
+}
+
+/**
+ * nullable 側への参照がすべて IFNULL / COALESCE / NVL の引数内にあるか。
+ * 例: IFNULL(o.total, 0) = 0 は未結合行（NULL→0）が残りうるため実質 INNER にしない。
+ */
+function expressionOnlyReferencesTableViaNullCoalescing(
+  expr: string,
+  table: TableRef,
+): boolean {
+  if (!expressionReferencesTable(expr, table)) return false;
+  const spans = findNullCoalescingArgSpans(expr);
+  if (spans.length === 0) return false;
+  const refs = tableRefStartPositions(expr, table);
+  if (refs.length === 0) return false;
+  return refs.every((pos) => spans.some((span) => pos >= span.start && pos < span.end));
+}
+
 function isNullRejectingLeaf(node: ConditionNode, nullableTable: TableRef): boolean {
   if (isNullPreservingCondition(node)) return false;
   if (!NULL_REJECTING_CONDITION_TYPES.has(node.type)) return false;
 
-  const expr = node.left ?? node.label;
-  return expressionReferencesTable(expr, nullableTable) || expressionReferencesTable(node.label, nullableTable);
+  const exprs = [node.left, node.label].filter((e): e is string => !!e);
+  if (!exprs.some((e) => expressionReferencesTable(e, nullableTable))) return false;
+
+  // 参照が NULL 置換関数の引数にしか無いときは未結合行を残しうる（過検出回避）
+  const coalescedOnly = exprs.every(
+    (e) =>
+      !expressionReferencesTable(e, nullableTable) ||
+      expressionOnlyReferencesTableViaNullCoalescing(e, nullableTable),
+  );
+  if (coalescedOnly) return false;
+
+  return true;
 }
 
 function collectConditionReasons(
@@ -231,4 +332,61 @@ export function effectiveInnerAnalysisByJoinId(
   query: ParsedQuery,
 ): Map<string, EffectiveInnerAnalysis> {
   return new Map(analyzeEffectiveInnerJoins(query).map((analysis) => [analysis.joinId, analysis]));
+}
+
+export interface NormalizeEffectiveInnerOptions {
+  /**
+   * HAVING 理由を正規化判定から除外する。
+   * 結果セット比較向け: 集約条件（例: COUNT(右表列) >= 0）の過検出で INNER 同等と誤らないため。
+   */
+  ignoreHavingReasons?: boolean;
+}
+
+function analysesForNormalization(
+  query: ParsedQuery,
+  options?: NormalizeEffectiveInnerOptions,
+): EffectiveInnerAnalysis[] {
+  const analyses = analyzeEffectiveInnerJoins(query);
+  if (!options?.ignoreHavingReasons) return analyses;
+  return analyses
+    .map((analysis) => ({
+      ...analysis,
+      reasons: analysis.reasons.filter((reason) => reason.kind !== 'having'),
+    }))
+    .filter((analysis) => analysis.reasons.length > 0);
+}
+
+/** 実質 INNER JOIN と判定された外部結合を INNER JOIN として比較用に正規化する（CTE・派生・UNION 内も再帰） */
+export function normalizeEffectiveInnerJoins(
+  query: ParsedQuery,
+  options?: NormalizeEffectiveInnerOptions,
+): ParsedQuery {
+  const effectiveByJoinId = new Map(
+    analysesForNormalization(query, options).map((analysis) => [analysis.joinId, analysis]),
+  );
+  return {
+    ...query,
+    joins:
+      effectiveByJoinId.size === 0
+        ? query.joins
+        : query.joins.map((join) =>
+            effectiveByJoinId.has(join.id) ? { ...join, type: 'INNER JOIN' } : join,
+          ),
+    tables: query.tables.map((table) =>
+      table.derivedQuery
+        ? {
+            ...table,
+            derivedQuery: normalizeEffectiveInnerJoins(table.derivedQuery, options),
+          }
+        : table,
+    ),
+    ctes: query.ctes?.map((cte) => ({
+      ...cte,
+      query: normalizeEffectiveInnerJoins(cte.query, options),
+    })),
+    unionBranches: query.unionBranches?.map((branch) => ({
+      ...branch,
+      query: normalizeEffectiveInnerJoins(branch.query, options),
+    })),
+  };
 }

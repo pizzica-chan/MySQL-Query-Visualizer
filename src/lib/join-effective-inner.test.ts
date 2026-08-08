@@ -10,6 +10,7 @@ import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerCausePhrase,
   formatEffectiveInnerJoinScopeLine,
+  normalizeEffectiveInnerJoins,
 } from './join-effective-inner';
 
 function parseSql(sql: string): ParsedQuery {
@@ -188,6 +189,42 @@ describe('join-effective-inner', () => {
         expect(analyzeEffectiveInnerJoins(query)).toHaveLength(0);
       });
 
+      it('IFNULL / COALESCE で包んだ nullable 参照だけでは検出しない', () => {
+        const ifnull = parseSql(`
+          SELECT * FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          WHERE IFNULL(b.total, 0) = 0
+        `);
+        const coalesce = parseSql(`
+          SELECT * FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          WHERE COALESCE(b.total, 0) = 0
+        `);
+        expect(analyzeEffectiveInnerJoins(ifnull)).toHaveLength(0);
+        expect(analyzeEffectiveInnerJoins(coalesce)).toHaveLength(0);
+      });
+
+      it('IFNULL と同時に裸の nullable 参照があれば where 理由を付ける', () => {
+        const query = parseSql(`
+          SELECT * FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          WHERE IFNULL(b.total, 0) = 0 AND b.id = 1
+        `);
+        const analysis = analysisForJoin(query, leftJoinByCondition(query, 'b.a_id')!.id);
+        expect(analysis?.reasons.some((r) => r.kind === 'where' && r.label.includes('b.id'))).toBe(true);
+        expect(analysis?.reasons.some((r) => r.label.includes('IFNULL'))).toBe(false);
+      });
+
+      it('IFNULL の外側に裸の nullable 参照があれば検出する', () => {
+        const query = parseSql(`
+          SELECT * FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          WHERE IFNULL(b.total, 0) = b.other
+        `);
+        const analysis = analysisForJoin(query, leftJoinByCondition(query, 'b.a_id')!.id);
+        expect(analysis?.reasons.some((r) => r.kind === 'where')).toBe(true);
+      });
+
       it('UPDATE サンプルで WHERE の nullable 参照を検出する', () => {
         const query = parseSql(UPDATE_SAMPLE_SQL);
         const analyses = analyzeEffectiveInnerJoins(query);
@@ -260,6 +297,83 @@ describe('join-effective-inner', () => {
         expect(map.size).toBe(1);
         expect(map.get(oiJoin.id)?.reasons.length).toBeGreaterThan(0);
         expect(map.has(leftJoinByCondition(query, 'p.category_id')!.id)).toBe(false);
+      });
+    });
+
+    describe('normalizeEffectiveInnerJoins', () => {
+      it('実質 INNER JOIN の LEFT JOIN を INNER JOIN に正規化する', () => {
+        const query = parseSql(`
+          SELECT * FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          WHERE b.col = 1
+        `);
+        const normalized = normalizeEffectiveInnerJoins(query);
+        expect(normalized.joins.find((j) => j.condition.includes('b.a_id'))?.type).toBe('INNER JOIN');
+      });
+
+      it('実質 INNER JOIN でない LEFT JOIN はそのまま残す', () => {
+        const query = parseSql(`
+          SELECT * FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+        `);
+        const normalized = normalizeEffectiveInnerJoins(query);
+        expect(normalized.joins[0]?.type).toBe('LEFT JOIN');
+      });
+
+      it('CTE 内の実質 INNER JOIN も再帰的に正規化する', () => {
+        const query = parseSql(`
+          WITH paid AS (
+            SELECT u.id, o.total
+            FROM users u
+            LEFT JOIN orders o ON u.id = o.user_id
+            WHERE o.status = 'paid'
+          )
+          SELECT id FROM paid
+        `);
+        const normalized = normalizeEffectiveInnerJoins(query);
+        expect(normalized.ctes?.[0]?.query.joins[0]?.type).toBe('INNER JOIN');
+      });
+
+      it('派生テーブル内の実質 INNER JOIN も再帰的に正規化する', () => {
+        const query = parseSql(`
+          SELECT p.id
+          FROM (
+            SELECT u.id
+            FROM users u
+            LEFT JOIN orders o ON u.id = o.user_id
+            WHERE o.status = 'paid'
+          ) p
+        `);
+        const derived = normalizeEffectiveInnerJoins(query).tables.find((t) => t.isDerived);
+        expect(derived?.derivedQuery?.joins[0]?.type).toBe('INNER JOIN');
+      });
+
+      it('ignoreHavingReasons では HAVING 単独理由の LEFT JOIN を正規化しない', () => {
+        const query = parseSql(`
+          SELECT a.id, COUNT(b.id) AS cnt
+          FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          GROUP BY a.id
+          HAVING COUNT(b.id) >= 0
+        `);
+        const withHaving = normalizeEffectiveInnerJoins(query);
+        expect(withHaving.joins[0]?.type).toBe('INNER JOIN');
+
+        const withoutHaving = normalizeEffectiveInnerJoins(query, { ignoreHavingReasons: true });
+        expect(withoutHaving.joins[0]?.type).toBe('LEFT JOIN');
+      });
+
+      it('ignoreHavingReasons でも WHERE 理由があれば正規化する', () => {
+        const query = parseSql(`
+          SELECT a.id, COUNT(b.id) AS cnt
+          FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          WHERE b.col = 1
+          GROUP BY a.id
+          HAVING COUNT(b.id) >= 0
+        `);
+        const normalized = normalizeEffectiveInnerJoins(query, { ignoreHavingReasons: true });
+        expect(normalized.joins[0]?.type).toBe('INNER JOIN');
       });
     });
   });

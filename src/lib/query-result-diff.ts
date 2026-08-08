@@ -1,4 +1,5 @@
 import { applyAliasResolution } from './alias-resolver';
+import { normalizeEffectiveInnerJoins } from './join-effective-inner';
 import type {
   ConditionNode,
   CteRef,
@@ -47,10 +48,14 @@ export interface QueryResultDiff {
   categories: DiffCategoryResult[];
   /** 構文差分はあるが、よくある安全リファクタの可能性を示す補助ヒント（結果推定は変えない） */
   reviewHints: ReviewHint[];
+  /** 実質 INNER JOIN 正規化により結果セット同等とみなした */
+  matchedViaEffectiveInner: boolean;
+  /** LIMIT / OFFSET ありかつ ORDER BY なし（いずれかまたは両方のクエリ） */
+  limitWithoutOrderActive: boolean;
 }
 
 export interface ReviewHint {
-  id: 'exists-vs-distinct-join' | 'where-to-on';
+  id: 'exists-vs-distinct-join' | 'where-to-on' | 'limit-without-order';
   title: string;
   message: string;
 }
@@ -58,10 +63,18 @@ export interface ReviewHint {
 export interface ResultDiffSummary {
   /** サマリー枠の色 */
   tone: 'same' | 'order-only' | 'review-needed' | 'different';
-  resultSet: { status: 'same' | 'different'; label: string };
+  /** サマリー見出し */
+  title: string;
+  resultSet: { status: 'same' | 'different' | 'uncertain'; label: string };
   order: { status: 'same' | 'different' | 'not-specified'; label: string };
   /** LIMIT+ORDER BY など、サマリーだけでは分かりにくいときの補足 */
   note?: string;
+  /** 実質 INNER JOIN により同等とみなしたときの軽い補足 */
+  effectiveInnerNote?: string;
+  /** LIMIT あり・ORDER BY なしのときの注意（目立つ警告） */
+  limitWithoutOrderWarning?: string;
+  /** サマリー本文 */
+  body: string;
   /** 要確認ヒント（黄トーン時など） */
   hints: ReviewHint[];
 }
@@ -92,11 +105,31 @@ export function orderAffectsResultSet(categories: DiffCategoryResult[]): boolean
   return orderDiffers && hasLimitOrOffset;
 }
 
+function buildSummaryBody(
+  diff: QueryResultDiff,
+  tone: ResultDiffSummary['tone'],
+  limitWithoutOrderCaution: boolean,
+): string {
+  if (limitWithoutOrderCaution) {
+    if (diff.equalForResultSet) {
+      return '構文上の差分はありませんが、ORDER BY がないため LIMIT / OFFSET で返る行は保証されません。';
+    }
+    return 'JOIN の記述順などの構文差は、下のカテゴリ一覧には出ない場合があります。ORDER BY がない LIMIT の返る行は実行依存です。';
+  }
+  if (tone === 'review-needed') {
+    return '構文上は差分があります。下のヒントに当てはまるリファクタの可能性がありますが、結果が同じことは保証しません。';
+  }
+  return '結果セットは出力列・結合・条件など行の集合に影響する差分、並び順は ORDER BY の差分です。';
+}
+
 /** 2 段サマリー（結果セット / 並び順）＋要確認ヒント */
 export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary {
   const orderCategory = diff.categories.find((c) => c.id === 'orderBy');
   const orderDiffers = orderCategory?.status === 'different';
   const hints = diff.reviewHints ?? [];
+  const nonOrderDifferent = diff.categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
+  const hasExplicitResultSetDiff = nonOrderDifferent.length > 0;
+  const limitWithoutOrderCaution = diff.limitWithoutOrderActive && !hasExplicitResultSetDiff;
 
   let order: ResultDiffSummary['order'];
   if (!orderCategory) {
@@ -107,9 +140,21 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     order = { status: 'same', label: '同じ' };
   }
 
-  const resultSetStatus = diff.equalForResultSet ? 'same' : 'different';
+  const resultSetStatus: ResultDiffSummary['resultSet']['status'] = limitWithoutOrderCaution
+    ? 'uncertain'
+    : diff.equalForResultSet
+      ? 'same'
+      : 'different';
+  const resultSetLabel = limitWithoutOrderCaution
+    ? '要確認'
+    : diff.equalForResultSet
+      ? '同じ'
+      : '異なる';
+
   let tone: ResultDiffSummary['tone'];
-  if (diff.equalForResultSet) {
+  if (limitWithoutOrderCaution) {
+    tone = 'review-needed';
+  } else if (diff.equalForResultSet) {
     tone = diff.equalIncludingOrder ? 'same' : 'order-only';
   } else if (hints.length > 0) {
     tone = 'review-needed';
@@ -117,20 +162,40 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     tone = 'different';
   }
 
-  const otherDiffs = diff.categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
-  const note =
-    orderAffectsResultSet(diff.categories) && otherDiffs.length === 0
-      ? 'LIMIT / OFFSET があるため、ORDER BY の違いは返る行の集合にも影響し得ます。'
-      : undefined;
+  const title = limitWithoutOrderCaution
+    ? '要確認（LIMIT あり・ORDER BY なし）'
+    : tone === 'review-needed'
+      ? '要確認（構文差分あり）'
+      : '比較結果';
+
+  const otherDiffs = nonOrderDifferent;
+  let note: string | undefined;
+  if (orderAffectsResultSet(diff.categories) && otherDiffs.length === 0) {
+    note = 'LIMIT / OFFSET があるため、ORDER BY の違いは返る行の集合にも影響し得ます。';
+  }
+
+  const effectiveInnerNote = diff.matchedViaEffectiveInner
+    ? 'JOIN 種別は異なりますが、WHERE 等により実質 INNER JOIN 相当で、結果セットは同じと推定しています。'
+    : undefined;
+
+  const limitWithoutOrderWarning = diff.limitWithoutOrderActive
+    ? 'ORDER BY がない状態で LIMIT / OFFSET があります。構文差分がなくても、返る行は実行計画や結合順に依存して変わり得ます。問題ないと判断せず、実データで確認してください。'
+    : undefined;
+
+  const body = buildSummaryBody(diff, tone, limitWithoutOrderCaution);
 
   return {
     tone,
+    title,
     resultSet: {
       status: resultSetStatus,
-      label: resultSetStatus === 'same' ? '同じ' : '異なる',
+      label: resultSetLabel,
     },
     order,
     note,
+    effectiveInnerNote,
+    limitWithoutOrderWarning,
+    body,
     hints,
   };
 }
@@ -171,6 +236,11 @@ function resolveForDiff(query: ParsedQuery): ParsedQuery {
       query: resolveForDiff(cte.query),
     })),
   };
+}
+
+/** エイリアス解決後、実質 INNER JOIN の外部結合を INNER として揃える（HAVING 単独は過検出回避のため除外） */
+function resolveForResultSetDiff(query: ParsedQuery): ParsedQuery {
+  return normalizeEffectiveInnerJoins(resolveForDiff(query), { ignoreHavingReasons: true });
 }
 
 function tableKey(table: TableRef): string {
@@ -941,6 +1011,104 @@ export function detectReviewHints(
   return hints;
 }
 
+function joinSignatureList(query: ParsedQuery): string {
+  const idMap = buildTableIdMap(query.tables);
+  const nameMap = buildTableNameMap(query.tables);
+  return query.joins.map((j) => joinSignature(j, idMap, nameMap)).sort().join('\0');
+}
+
+/** JOIN の記述順・結合方向を含むシグネチャ */
+function orderedJoinChainSignature(query: ParsedQuery): string {
+  const idMap = buildTableIdMap(query.tables);
+  return query.joins
+    .map((join) => {
+      const source = idMap.get(join.sourceId) ?? join.sourceId;
+      const target = idMap.get(join.targetId) ?? join.targetId;
+      const condition = normalizeJoinConditionText(join);
+      const type = normalizeExpr(join.type);
+      const normalizedType = type === 'join' ? 'inner join' : type;
+      return [normalizedType, source, target, condition].join('|');
+    })
+    .join('\0');
+}
+
+export function hasLimitWithoutOrder(query: ParsedQuery): boolean {
+  return !!(query.limit || query.offset) && query.orderBy.length === 0;
+}
+
+const LIMIT_WITHOUT_ORDER_HINT: ReviewHint = {
+  id: 'limit-without-order',
+  title: 'LIMIT あり・ORDER BY なし',
+  message:
+    'JOIN の記述順が違います（カテゴリ比較では差分に出ません）。LIMIT 前の行集合は同じとみなされやすい一方、ORDER BY がないため LIMIT で返る行は実行依存で変わり得ます。実データでの確認を推奨します。',
+};
+
+const LIMIT_WITHOUT_ORDER_IDENTICAL_HINT: ReviewHint = {
+  id: 'limit-without-order',
+  title: 'LIMIT あり・ORDER BY なし',
+  message:
+    '構文上の差分はありませんが、ORDER BY がないため LIMIT / OFFSET で返る行は保証されません。実行のたびに変わり得るため、実データでの確認を推奨します。',
+};
+
+/**
+ * 結果セット比較に使う正規化後クエリで JOIN 記述順差分を見る。
+ * raw だと LEFT→実質 INNER のペアで JOIN 署名が不一致になり、ヒントを取りこぼす。
+ * LIMIT / OFFSET 値や ORDER BY の差があるときは JOIN 順ヒントを出さない（誤案内防止）。
+ */
+function detectLimitWithoutOrderHint(
+  normalizedA: ParsedQuery,
+  normalizedB: ParsedQuery,
+): ReviewHint | null {
+  // 両側とも LIMIT/OFFSET あり・ORDER BY なしのときだけ JOIN 順を問題にする
+  if (!hasLimitWithoutOrder(normalizedA) || !hasLimitWithoutOrder(normalizedB)) return null;
+  if (limitSignature(normalizedA) !== limitSignature(normalizedB)) return null;
+  if (joinSignatureList(normalizedA) !== joinSignatureList(normalizedB)) return null;
+  if (orderedJoinChainSignature(normalizedA) === orderedJoinChainSignature(normalizedB)) {
+    return null;
+  }
+  return LIMIT_WITHOUT_ORDER_HINT;
+}
+
+/**
+ * JOIN 署名の再帰フィンガープリント（CTE・派生・UNION 内含む）。
+ * クエリ全体ではなく JOIN だけを見ることで、将来ほかの正規化が入っても誤表示しにくくする。
+ */
+function joinGraphFingerprint(query: ParsedQuery): string {
+  const idMap = buildTableIdMap(query.tables);
+  const nameMap = buildTableNameMap(query.tables);
+  const topLevel = query.joins
+    .map((join) => joinSignature(join, idMap, nameMap))
+    .sort()
+    .join('\0');
+  const nested: string[] = [];
+  for (const table of query.tables) {
+    if (!table.derivedQuery) continue;
+    nested.push(
+      `derived:${normalizeExpr(table.alias ?? table.displayName)}:${joinGraphFingerprint(table.derivedQuery)}`,
+    );
+  }
+  for (const cte of query.ctes ?? []) {
+    nested.push(`cte:${normalizeExpr(cte.name)}:${joinGraphFingerprint(cte.query)}`);
+  }
+  for (const [index, branch] of (query.unionBranches ?? []).entries()) {
+    nested.push(`union:${index}:${joinGraphFingerprint(branch.query)}`);
+  }
+  return `${topLevel}##${nested.sort().join('\0')}`;
+}
+
+/** 正規化前は JOIN 種別が異なるが、実質 INNER JOIN として同等になったか（CTE・派生内含む） */
+function detectMatchedViaEffectiveInner(
+  rawA: ParsedQuery,
+  rawB: ParsedQuery,
+  normalizedA: ParsedQuery,
+  normalizedB: ParsedQuery,
+  equalForResultSet: boolean,
+): boolean {
+  if (!equalForResultSet) return false;
+  if (joinGraphFingerprint(rawA) === joinGraphFingerprint(rawB)) return false;
+  return joinGraphFingerprint(normalizedA) === joinGraphFingerprint(normalizedB);
+}
+
 /**
  * 2つの ParsedQuery を比較し、実行結果に影響しうる構文差分を返す。
  * 実データは使わず、エイリアス解決後の構造比較による推定。
@@ -949,18 +1117,25 @@ export function compareQueryResults(
   queryA: ParsedQuery,
   queryB: ParsedQuery,
 ): QueryResultDiff {
-  const a = resolveForDiff(queryA);
-  const b = resolveForDiff(queryB);
+  const rawA = resolveForDiff(queryA);
+  const rawB = resolveForDiff(queryB);
+  const a = resolveForResultSetDiff(queryA);
+  const b = resolveForResultSetDiff(queryB);
 
   const categories = compareTopLevel(a, b);
   const orderCategory = categories.find((c) => c.id === 'orderBy');
   const nonOrderDiffs = categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
   const orderDiffers = orderCategory?.status === 'different';
   const limitAffectsSet = orderAffectsResultSet(categories);
+  const limitWithoutOrderActive = hasLimitWithoutOrder(a) || hasLimitWithoutOrder(b);
+  const limitWithoutOrderHint = detectLimitWithoutOrderHint(a, b);
 
   // LIMIT/OFFSET があるとき ORDER BY 差分は行集合そのものを変え得る
-  const equalForResultSet = nonOrderDiffs.length === 0 && !limitAffectsSet;
-  const equalIncludingOrder = nonOrderDiffs.length === 0 && !orderDiffers;
+  let equalForResultSet = nonOrderDiffs.length === 0 && !limitAffectsSet;
+  if (limitWithoutOrderHint) {
+    equalForResultSet = false;
+  }
+  const equalIncludingOrder = nonOrderDiffs.length === 0 && !orderDiffers && !limitWithoutOrderHint;
 
   if (limitAffectsSet && orderCategory && !orderCategory.details.some((d) => d.includes('LIMIT'))) {
     orderCategory.details.push(
@@ -968,19 +1143,46 @@ export function compareQueryResults(
     );
   }
 
-  const reviewHints = equalForResultSet ? [] : detectReviewHints(queryA, queryB, { a, b });
+  let reviewHints = equalForResultSet
+    ? []
+    : detectReviewHints(queryA, queryB, {
+        a: rawA,
+        b: rawB,
+      });
+
+  if (limitWithoutOrderHint) {
+    reviewHints = [
+      ...reviewHints.filter((h) => h.id !== 'limit-without-order'),
+      limitWithoutOrderHint,
+    ];
+  } else if (limitWithoutOrderActive && equalForResultSet) {
+    reviewHints = [
+      ...reviewHints.filter((h) => h.id !== 'limit-without-order'),
+      LIMIT_WITHOUT_ORDER_IDENTICAL_HINT,
+    ];
+  }
+
+  const matchedViaEffectiveInner = detectMatchedViaEffectiveInner(
+    rawA,
+    rawB,
+    a,
+    b,
+    equalForResultSet,
+  );
 
   return {
     equalForResultSet,
     equalIncludingOrder,
     categories,
     reviewHints,
+    matchedViaEffectiveInner,
+    limitWithoutOrderActive,
   };
 }
 
 /** テスト・デバッグ用: ORDER BY を除くシグネチャ */
 export function resultSetSignature(query: ParsedQuery): string {
-  return querySignature(resolveForDiff(query));
+  return querySignature(resolveForResultSetDiff(query));
 }
 
 /** テスト・デバッグ用: ORDER BY シグネチャ */

@@ -117,9 +117,7 @@ export function QueryResultDiffPanel({
       </p>
 
       <div className={`result-diff-summary result-diff-summary--${summary.tone}`} role="status">
-        <h2 className="result-diff-summary-title">
-          {summary.tone === 'review-needed' ? '要確認（構文差分あり）' : '比較結果'}
-        </h2>
+        <h2 className="result-diff-summary-title">{summary.title}</h2>
         <dl className="result-diff-summary-rows">
           <div className="result-diff-summary-row">
             <dt className="result-diff-summary-row-label">結果セット</dt>
@@ -139,11 +137,17 @@ export function QueryResultDiffPanel({
           </div>
         </dl>
         <p className="result-diff-summary-body">
-          {summary.tone === 'review-needed'
-            ? '構文上は差分があります。下のヒントに当てはまるリファクタの可能性がありますが、結果が同じことは保証しません。'
-            : '結果セットは出力列・結合・条件など行の集合に影響する差分、並び順は ORDER BY の差分です。'}
+          {summary.body}
           {summary.note ? ` ${summary.note}` : ''}
         </p>
+        {summary.effectiveInnerNote && (
+          <p className="result-diff-effective-inner-note">{summary.effectiveInnerNote}</p>
+        )}
+        {summary.limitWithoutOrderWarning && (
+          <p className="result-diff-limit-warning" role="alert">
+            <strong>注意:</strong> {summary.limitWithoutOrderWarning}
+          </p>
+        )}
       </div>
 
       {summary.hints.length > 0 && (

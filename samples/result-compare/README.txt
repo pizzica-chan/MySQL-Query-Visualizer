@@ -17,6 +17,7 @@ SQL前後比較モード用の手動テスト用サンプル（アプリから�
   04-where-and-swap         … WHERE の AND 順序入れ替え
   08-join-reorder-refactor  … 4 表の結合順リファクタ
   10-comma-to-inner-join    … カンマ結合 → 明示 INNER JOIN
+  12-left-join-effective-inner   … LEFT JOIN + WHERE（右表列）→ INNER JOIN 相当
 
   --- 並び順のみ（黄 / order-only） ---
   03-order-by-only          … ORDER BY のみ変更
@@ -24,6 +25,7 @@ SQL前後比較モード用の手動テスト用サンプル（アプリから�
   --- 2. 構文差分あり・意味は同等になりやすい（黄 / 要確認ヒント） ---
   07-subquery-to-join       … 相関 EXISTS → JOIN + DISTINCT
   09-where-to-on            … WHERE 絞り込みを ON へ移動（INNER）
+  13-join-order-limit-no-order-by … INNER JOIN 順入れ替え + LIMIT（ORDER BY なし）
 
   --- 3. 結果が変わる（赤） ---
   05-join-condition-bug          … JOIN 条件のミス

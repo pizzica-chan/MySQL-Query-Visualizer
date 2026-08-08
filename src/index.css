@@ -664,6 +664,10 @@ body {
   color: #d47a7a;
 }
 
+.result-diff-summary-row-value--uncertain {
+  color: var(--warning);
+}
+
 .result-diff-summary-row-value--not-specified {
   color: var(--text-dim);
   font-weight: 500;
@@ -679,6 +683,30 @@ body {
   font-size: 0.85rem;
   color: var(--text-muted);
   line-height: 1.55;
+}
+
+.result-diff-effective-inner-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(125, 184, 138, 0.25);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.result-diff-limit-warning {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(212, 176, 106, 0.5);
+  border-radius: var(--radius);
+  background: rgba(212, 176, 106, 0.12);
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.result-diff-limit-warning strong {
+  color: var(--warning);
 }
 
 .result-diff-hint-list {

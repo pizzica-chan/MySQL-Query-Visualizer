@@ -1,0 +1,7 @@
+期待: 結果セット同じ（緑）
+パターン: LEFT JOIN なのに WHERE で右表（NULL になりうる側）の列を直接絞る
+理由: o.status / o.total など右表列への等価条件は、LEFT JOIN で付与された NULL 行を除外する。
+      そのため実質 INNER JOIN と同じ行集合になりやすい。
+after: INNER JOIN への書き換えは、このケースでは意図を明確にし結果も同じ。
+補足: アプリは実質 INNER JOIN と判定し、JOIN 種別の差分は結果セット比較では無視する。
+表示: サマリー下部に「実質 INNER JOIN 相当」の軽い補足が出る。
