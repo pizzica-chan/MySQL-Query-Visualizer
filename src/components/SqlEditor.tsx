@@ -6,12 +6,18 @@ import { SampleLoadButtons } from './SampleLoadButtons';
 interface SqlEditorProps {
   value: string;
   onChange: (value: string) => void;
-  onLoadSample: () => void;
-  onLoadUpdateSample: () => void;
-  onLoadDeleteSample: () => void;
-  onLoadUnionSample: () => void;
+  onLoadSample?: () => void;
+  onLoadUpdateSample?: () => void;
+  onLoadDeleteSample?: () => void;
+  onLoadUnionSample?: () => void;
   error?: string;
   focusSpan?: SourceSpan | null;
+  /** エディタ上部のラベル（比較モード用） */
+  label?: string;
+  /** サンプル読込ボタンを表示するか（デフォルト true） */
+  showSamples?: boolean;
+  /** 比較モードの上下配置向けに余白を詰める */
+  compact?: boolean;
 }
 
 export function SqlEditor({
@@ -23,6 +29,9 @@ export function SqlEditor({
   onLoadUnionSample,
   error,
   focusSpan = null,
+  label,
+  showSamples = true,
+  compact = false,
 }: SqlEditorProps) {
   const highlightRef = useRef<HTMLPreElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -50,16 +59,28 @@ export function SqlEditor({
     syncScroll(textarea);
   }, [focusSpan, value, syncScroll]);
 
+  const canShowSamples =
+    showSamples &&
+    onLoadSample &&
+    onLoadUpdateSample &&
+    onLoadDeleteSample &&
+    onLoadUnionSample;
+
   return (
-    <div className="sql-editor">
-      <div className="sql-editor-toolbar">
-        <SampleLoadButtons
-          onSelect={onLoadSample}
-          onUpdate={onLoadUpdateSample}
-          onUnion={onLoadUnionSample}
-          onDelete={onLoadDeleteSample}
-        />
-      </div>
+    <div className={`sql-editor${compact ? ' sql-editor--compact' : ''}`}>
+      {(label || canShowSamples) && (
+        <div className="sql-editor-toolbar">
+          {label ? <span className="sql-editor-label">{label}</span> : <span />}
+          {canShowSamples && (
+            <SampleLoadButtons
+              onSelect={onLoadSample}
+              onUpdate={onLoadUpdateSample}
+              onUnion={onLoadUnionSample}
+              onDelete={onLoadDeleteSample}
+            />
+          )}
+        </div>
+      )}
       <div className={`sql-editor-body${error ? ' sql-editor-body--error' : ''}`}>
         <pre ref={highlightRef} className="sql-highlight-layer" aria-hidden="true">
           <code dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
@@ -72,6 +93,7 @@ export function SqlEditor({
           onScroll={(e) => syncScroll(e.currentTarget)}
           placeholder="SELECT / UPDATE / DELETE ..."
           spellCheck={false}
+          aria-label={label}
         />
       </div>
       {error && (

@@ -1,0 +1,7 @@
+SELECT
+  u.id,
+  u.name,
+  o.id AS order_id
+FROM users u
+INNER JOIN orders o ON u.id = o.customer_id
+WHERE u.active = 1;
