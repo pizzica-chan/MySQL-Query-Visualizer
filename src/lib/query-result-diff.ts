@@ -39,20 +39,31 @@ export interface QueryResultDiff {
   /**
    * 行の集合として同じと推定できるか。
    * ORDER BY のみの差分は通常ここに含めないが、LIMIT/OFFSET がある場合は含める。
+   * 構文カテゴリに差分がなければ true（意味等価の証明ではない）。
    */
   equalForResultSet: boolean;
   /** ORDER BY を含めて同じと推定できるか */
   equalIncludingOrder: boolean;
   categories: DiffCategoryResult[];
+  /** 構文差分はあるが、よくある安全リファクタの可能性を示す補助ヒント（結果推定は変えない） */
+  reviewHints: ReviewHint[];
+}
+
+export interface ReviewHint {
+  id: 'exists-vs-distinct-join' | 'where-to-on';
+  title: string;
+  message: string;
 }
 
 export interface ResultDiffSummary {
   /** サマリー枠の色 */
-  tone: 'same' | 'order-only' | 'different';
+  tone: 'same' | 'order-only' | 'review-needed' | 'different';
   resultSet: { status: 'same' | 'different'; label: string };
   order: { status: 'same' | 'different' | 'not-specified'; label: string };
   /** LIMIT+ORDER BY など、サマリーだけでは分かりにくいときの補足 */
   note?: string;
+  /** 要確認ヒント（黄トーン時など） */
+  hints: ReviewHint[];
 }
 
 export interface PartitionedDiffCategories {
@@ -81,10 +92,11 @@ export function orderAffectsResultSet(categories: DiffCategoryResult[]): boolean
   return orderDiffers && hasLimitOrOffset;
 }
 
-/** 2 段サマリー（結果セット / 並び順） */
+/** 2 段サマリー（結果セット / 並び順）＋要確認ヒント */
 export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary {
   const orderCategory = diff.categories.find((c) => c.id === 'orderBy');
   const orderDiffers = orderCategory?.status === 'different';
+  const hints = diff.reviewHints ?? [];
 
   let order: ResultDiffSummary['order'];
   if (!orderCategory) {
@@ -96,11 +108,14 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
   }
 
   const resultSetStatus = diff.equalForResultSet ? 'same' : 'different';
-  const tone: ResultDiffSummary['tone'] = !diff.equalForResultSet
-    ? 'different'
-    : !diff.equalIncludingOrder
-      ? 'order-only'
-      : 'same';
+  let tone: ResultDiffSummary['tone'];
+  if (diff.equalForResultSet) {
+    tone = diff.equalIncludingOrder ? 'same' : 'order-only';
+  } else if (hints.length > 0) {
+    tone = 'review-needed';
+  } else {
+    tone = 'different';
+  }
 
   const otherDiffs = diff.categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
   const note =
@@ -116,6 +131,7 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     },
     order,
     note,
+    hints,
   };
 }
 
@@ -136,10 +152,14 @@ const CATEGORY_LABELS: Record<DiffCategoryId, string> = {
   deleteTargets: '削除対象',
 };
 
-/** 比較用に空白を潰し、大文字小文字を揃える */
+function stripIdentifierQuotes(text: string): string {
+  return text.replace(/`([^`]+)`/g, '$1');
+}
+
+/** 比較用に空白を潰し、大文字小文字を揃え、識別子のバッククォートを除去する */
 export function normalizeExpr(text: string | undefined | null): string {
   if (!text) return '';
-  return text.replace(/\s+/g, ' ').trim().toLowerCase();
+  return stripIdentifierQuotes(text.replace(/\s+/g, ' ').trim().toLowerCase());
 }
 
 function resolveForDiff(query: ParsedQuery): ParsedQuery {
@@ -294,7 +314,8 @@ function isCommutativeJoinType(type: JoinType | string): boolean {
   return t === 'inner join' || t === 'join' || t === 'cross join';
 }
 
-function joinSignature(
+/** ON 条件テキストを除いた結合構造（種別・結合端点） */
+function joinStructureSignature(
   join: JoinEdge,
   idMap: Map<string, string>,
   nameMap: Map<string, string>,
@@ -302,35 +323,42 @@ function joinSignature(
   const source = idMap.get(join.sourceId) ?? join.sourceId;
   const target = idMap.get(join.targetId) ?? join.targetId;
   const natural = join.isNatural ? 'natural' : '';
-  const condition = normalizeJoinConditionText(join);
   const rawType = normalizeExpr(join.type);
 
-  // INNER / CROSS は結合順入れ替えで結果集合が変わらないため無向。
-  // RIGHT JOIN A→B は LEFT JOIN B→A と等価なので LEFT に正規化する。
-  // LEFT / FULL は保全側があるため向きを保持する。
   if (isCommutativeJoinType(join.type)) {
     const fromCondition = endpointsFromJoinCondition(join.condition, nameMap);
     const endpoints =
       fromCondition.length >= 2
         ? fromCondition.join('~')
         : [source, target].sort().join('~');
-    return [rawType === 'join' ? 'inner join' : rawType, natural, endpoints, condition]
-      .filter(Boolean)
-      .join('|');
+    return [rawType === 'join' ? 'inner join' : rawType, natural, endpoints].filter(Boolean).join('|');
   }
 
   if (rawType === 'right join') {
-    return ['left join', natural, `${target}->${source}`, condition].filter(Boolean).join('|');
+    return ['left join', natural, `${target}->${source}`].filter(Boolean).join('|');
   }
 
   if (rawType === 'full join') {
-    // 2 表 FULL は可換
-    return ['full join', natural, [source, target].sort().join('~'), condition]
-      .filter(Boolean)
-      .join('|');
+    return ['full join', natural, [source, target].sort().join('~')].filter(Boolean).join('|');
   }
 
-  return [rawType, natural, `${source}->${target}`, condition].filter(Boolean).join('|');
+  return [rawType, natural, `${source}->${target}`].filter(Boolean).join('|');
+}
+
+function joinStructureSignatures(query: ParsedQuery): string[] {
+  const idMap = buildTableIdMap(query.tables);
+  const nameMap = buildTableNameMap(query.tables);
+  return query.joins.map((j) => joinStructureSignature(j, idMap, nameMap)).sort();
+}
+
+function joinSignature(
+  join: JoinEdge,
+  idMap: Map<string, string>,
+  nameMap: Map<string, string>,
+): string {
+  const structure = joinStructureSignature(join, idMap, nameMap);
+  const condition = normalizeJoinConditionText(join);
+  return condition ? `${structure}|${condition}` : structure;
 }
 
 function setClauseSignature(set: SetClause): string {
@@ -576,6 +604,343 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
   return all.filter((c) => hasContent[c.id] || c.status === 'different');
 }
 
+function physicalTableKey(table: TableRef): string {
+  if (table.isDerived) return `derived:${normalizeExpr(table.alias ?? table.displayName)}`;
+  return normalizeExpr(table.schema ? `${table.schema}.${table.table}` : table.table);
+}
+
+function isNotExistsNode(node: ConditionNode): boolean {
+  if (node.type !== 'exists') return false;
+  return normalizeExpr(node.label).startsWith('not exists');
+}
+
+function collectExistsNodes(
+  node: ConditionNode | undefined,
+  out: ConditionNode[] = [],
+  underNot = false,
+): ConditionNode[] {
+  if (!node) return out;
+  if (node.type === 'exists') {
+    if (!underNot && !isNotExistsNode(node)) out.push(node);
+    return out;
+  }
+  if (node.type === 'not') {
+    for (const child of node.children ?? []) collectExistsNodes(child, out, true);
+    return out;
+  }
+  for (const child of node.children ?? []) collectExistsNodes(child, out, underNot);
+  return out;
+}
+
+function collectComparisonPreds(node: ConditionNode | undefined, out: string[] = []): string[] {
+  if (!node) return out;
+  if (node.type === 'comparison' || node.type === 'like' || node.type === 'in' || node.type === 'between' || node.type === 'is_null') {
+    const left = normalizeExpr(node.left);
+    const right = normalizeExpr(node.right);
+    const op = normalizeExpr(node.operator) || node.type;
+    if (op === '=' || op === '<=>') {
+      out.push([left, right].sort().join(` ${op} `));
+    } else {
+      out.push(normalizeExpr(node.label) || `${left}|${op}|${right}`);
+    }
+  }
+  for (const child of node.children ?? []) collectComparisonPreds(child, out);
+  return out;
+}
+
+/**
+ * ヒント用: 述語 bag は AND/OR を潰すため、OR/NOT を含む木では使わない。
+ * EXISTS 等の葉はそのまま許容し、接続子だけを見る。
+ */
+function isAndOnlyConnectors(node: ConditionNode | undefined): boolean {
+  if (!node) return true;
+  if (node.type === 'or' || node.type === 'not') return false;
+  if (node.type === 'and') {
+    return (node.children ?? []).every(isAndOnlyConnectors);
+  }
+  return true;
+}
+
+function joinsHaveAndOnlyOn(joins: JoinEdge[]): boolean {
+  return joins.every((join) => {
+    if (join.conditionRoot) return isAndOnlyConnectors(join.conditionRoot);
+    // conditionRoot が無い生文字列に OR が見えるときは保守的に拒否
+    if (join.condition && /\bor\b/i.test(join.condition)) return false;
+    return true;
+  });
+}
+
+function collectJoinOnPreds(joins: JoinEdge[], out: string[] = []): string[] {
+  for (const join of joins) {
+    if (!isCommutativeJoinType(join.type)) continue;
+    if (join.conditionRoot) {
+      collectComparisonPreds(join.conditionRoot, out);
+    } else if (join.conditionParts) {
+      const left = normalizeExpr(join.conditionParts.left);
+      const right = normalizeExpr(join.conditionParts.right);
+      const op = normalizeExpr(join.conditionParts.operator);
+      if (op === '=' || op === '<=>') {
+        out.push([left, right].sort().join(` ${op} `));
+      } else {
+        out.push(normalizeExpr(join.condition));
+      }
+    } else if (join.condition) {
+      out.push(normalizeExpr(join.condition));
+    }
+  }
+  return out;
+}
+
+function columnExprs(query: ParsedQuery): string[] {
+  return query.columns.map((c) => normalizeExpr(c.expression));
+}
+
+/** 単純な列参照式からテーブル修飾子を取り出す（u.id / users.id / db.users.id） */
+function extractLeadingTableRef(expr: string): string | null {
+  const match = normalizeExpr(expr).match(/^((?:[\w]+\.)*[\w]+)\.[\w]+$/);
+  return match?.[1] ?? null;
+}
+
+function tableRefKeys(table: TableRef): Set<string> {
+  return new Set(
+    [table.alias, table.table, table.displayName, table.schema ? `${table.schema}.${table.table}` : undefined]
+      .filter(Boolean)
+      .map((s) => normalizeExpr(s!)),
+  );
+}
+
+function columnsOnlyFromTable(query: ParsedQuery, table: TableRef): boolean {
+  const keys = tableRefKeys(table);
+  const exprs = columnExprs(query);
+  if (exprs.length === 0) return false;
+  return exprs.every((expr) => {
+    const prefix = extractLeadingTableRef(expr);
+    if (!prefix) return false;
+    return keys.has(prefix);
+  });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 相関サブクエリ内の外側エイリアス参照を実テーブル名へ寄せる */
+function rewriteOuterTableRefs(text: string, outer: TableRef): string {
+  if (!text) return '';
+  const physical = outer.schema ? `${outer.schema}.${outer.table}` : outer.table;
+  const names = [outer.alias, outer.table, outer.displayName].filter(Boolean) as string[];
+  let result = text;
+  for (const name of [...names].sort((a, b) => b.length - a.length)) {
+    const re = new RegExp(`(?<![\\w.])${escapeRegExp(name)}\\.`, 'g');
+    result = result.replace(re, `${physical}.`);
+  }
+  return result;
+}
+
+function collectOuterPredsExcludingExists(
+  node: ConditionNode | undefined,
+  out: string[] = [],
+): string[] {
+  if (!node) return out;
+  if (node.type === 'exists') return out;
+  if (node.type === 'and' || node.type === 'or' || node.type === 'not') {
+    for (const child of node.children ?? []) collectOuterPredsExcludingExists(child, out);
+    return out;
+  }
+  collectComparisonPreds(node, out);
+  return out;
+}
+
+/** 外側エイリアスを解決してから比較述語を収集 */
+function collectComparisonPredsResolvingOuter(
+  node: ConditionNode | undefined,
+  outer: TableRef,
+  out: string[] = [],
+): string[] {
+  if (!node) return out;
+  if (
+    node.type === 'comparison' ||
+    node.type === 'like' ||
+    node.type === 'in' ||
+    node.type === 'between' ||
+    node.type === 'is_null'
+  ) {
+    const left = normalizeExpr(rewriteOuterTableRefs(node.left ?? '', outer));
+    const right = normalizeExpr(rewriteOuterTableRefs(node.right ?? '', outer));
+    const op = normalizeExpr(node.operator) || node.type;
+    if (op === '=' || op === '<=>') {
+      out.push([left, right].sort().join(` ${op} `));
+    } else {
+      out.push(
+        normalizeExpr(rewriteOuterTableRefs(node.label, outer)) || `${left}|${op}|${right}`,
+      );
+    }
+  }
+  for (const child of node.children ?? []) collectComparisonPredsResolvingOuter(child, outer, out);
+  return out;
+}
+
+function sortedBagKey(preds: string[]): string {
+  return [...preds].sort().join('\0');
+}
+
+function isExistsSemiJoinShape(query: ParsedQuery): boolean {
+  if (query.statementType !== 'SELECT') return false;
+  if (query.joins.length > 0) return false;
+  if (query.tables.filter((t) => !t.isDerived).length !== 1) return false;
+  if (query.groupBy.length > 0 || query.having) return false;
+  if (query.limit || query.offset) return false;
+  // OR/NOT 配下の EXISTS は半結合リファクタとみなさない（bag 比較の誤検知防止）
+  if (!isAndOnlyConnectors(query.where)) return false;
+  const existsNodes = collectExistsNodes(query.where);
+  if (existsNodes.length !== 1) return false;
+  // NOT EXISTS は反結合であり INNER JOIN+DISTINCT（半結合）とは意味が逆
+  if (isNotExistsNode(existsNodes[0]!)) return false;
+  const nested = existsNodes[0]?.nestedQuery;
+  if (!nested) return false;
+  if (nested.tables.filter((t) => !t.isDerived).length !== 1) return false;
+  if (nested.joins.length > 0) return false;
+  // ネスト側に集約・LIMIT があると DISTINCT JOIN への単純対応は崩れる
+  if (nested.groupBy.length > 0 || nested.having) return false;
+  if (nested.limit || nested.offset) return false;
+  if (!isAndOnlyConnectors(nested.where)) return false;
+  return true;
+}
+
+function isDistinctInnerJoinShape(query: ParsedQuery): boolean {
+  if (query.statementType !== 'SELECT') return false;
+  if (!query.distinct) return false;
+  if (query.joins.length !== 1) return false;
+  if (!isCommutativeJoinType(query.joins[0]!.type)) return false;
+  if (query.tables.filter((t) => !t.isDerived).length !== 2) return false;
+  if (query.groupBy.length > 0 || query.having) return false;
+  if (query.limit || query.offset) return false;
+  if (!isAndOnlyConnectors(query.where) || !joinsHaveAndOnlyOn(query.joins)) return false;
+  // SELECT 列は一方のテーブルのみ（半結合の典型）
+  return query.tables.some((t) => !t.isDerived && columnsOnlyFromTable(query, t));
+}
+
+function detectExistsVsDistinctJoin(a: ParsedQuery, b: ParsedQuery): ReviewHint | null {
+  const aExists = isExistsSemiJoinShape(a);
+  const bExists = isExistsSemiJoinShape(b);
+  const aJoin = isDistinctInnerJoinShape(a);
+  const bJoin = isDistinctInnerJoinShape(b);
+  if (!(aExists && bJoin) && !(bExists && aJoin)) return null;
+
+  const existsQ = aExists ? a : b;
+  const joinQ = aJoin ? a : b;
+  const outer = existsQ.tables.find((t) => !t.isDerived);
+  const joinOuter = joinQ.tables.find((t) => !t.isDerived && columnsOnlyFromTable(joinQ, t));
+  if (!outer || !joinOuter) return null;
+  if (physicalTableKey(outer) !== physicalTableKey(joinOuter)) return null;
+
+  const existsInner = collectExistsNodes(existsQ.where)[0]?.nestedQuery?.tables.find(
+    (t) => !t.isDerived,
+  );
+  const joinInner = joinQ.tables.find(
+    (t) => !t.isDerived && physicalTableKey(t) !== physicalTableKey(joinOuter),
+  );
+  if (!existsInner || !joinInner) return null;
+  if (physicalTableKey(existsInner) !== physicalTableKey(joinInner)) return null;
+
+  const existsCols = columnExprs(existsQ).join('\0');
+  const joinCols = columnExprs(joinQ).join('\0');
+  if (existsCols !== joinCols) return null;
+
+  // 外側 WHERE（EXISTS 以外）+ EXISTS 内 WHERE ≒ JOIN の WHERE + ON
+  const existsBag = sortedBagKey([
+    ...collectOuterPredsExcludingExists(existsQ.where),
+    ...collectComparisonPredsResolvingOuter(
+      collectExistsNodes(existsQ.where)[0]?.nestedQuery?.where,
+      outer,
+    ),
+  ]);
+  const joinBag = sortedBagKey([
+    ...collectComparisonPreds(joinQ.where),
+    ...collectJoinOnPreds(joinQ.joins),
+  ]);
+  if (!existsBag || existsBag !== joinBag) return null;
+
+  return {
+    id: 'exists-vs-distinct-join',
+    title: '相関 EXISTS ↔ INNER JOIN + DISTINCT',
+    message:
+      '片方は相関 EXISTS、もう片方は INNER JOIN + DISTINCT で、外側テーブル・結合先・絞り込み条件が対応しています。多くの場合は結果セットは同じになります。保証はしません。実データでの確認を推奨します。',
+  };
+}
+
+function predicateBagSignature(query: ParsedQuery): string {
+  const preds: string[] = [];
+  collectComparisonPreds(query.where, preds);
+  collectJoinOnPreds(query.joins, preds);
+  return preds.sort().join('\0');
+}
+
+function allJoinsInner(query: ParsedQuery): boolean {
+  return query.joins.length > 0 && query.joins.every((j) => isCommutativeJoinType(j.type));
+}
+
+function detectWhereToOn(a: ParsedQuery, b: ParsedQuery): ReviewHint | null {
+  if (a.statementType !== 'SELECT' || b.statementType !== 'SELECT') return null;
+  if (!allJoinsInner(a) || !allJoinsInner(b)) return null;
+  if (a.joins.length !== b.joins.length) return null;
+  if (a.distinct !== b.distinct) return null;
+  if (columnExprs(a).join('\0') !== columnExprs(b).join('\0')) return null;
+
+  // bag 比較は OR/NOT を潰すため、AND のみのときに限る
+  if (!isAndOnlyConnectors(a.where) || !isAndOnlyConnectors(b.where)) return null;
+  if (!joinsHaveAndOnlyOn(a.joins) || !joinsHaveAndOnlyOn(b.joins)) return null;
+
+  // WHERE↔ON 以外の差分があるときはヒントを出さない
+  if (fragmentSetSignature(a.groupBy) !== fragmentSetSignature(b.groupBy)) return null;
+  if (conditionSignature(a.having) !== conditionSignature(b.having)) return null;
+  if (limitSignature(a) !== limitSignature(b)) return null;
+  if (fragmentListSignature(a.orderBy) !== fragmentListSignature(b.orderBy)) return null;
+
+  const tablesA = a.tables.map(physicalTableKey).sort().join('\0');
+  const tablesB = b.tables.map(physicalTableKey).sort().join('\0');
+  if (tablesA !== tablesB) return null;
+
+  const joinStructA = joinStructureSignatures(a).join('\0');
+  const joinStructB = joinStructureSignatures(b).join('\0');
+  if (joinStructA !== joinStructB) return null;
+
+  const whereA = conditionSignature(a.where);
+  const whereB = conditionSignature(b.where);
+  const bagA = predicateBagSignature(a);
+  const bagB = predicateBagSignature(b);
+  if (!bagA || bagA !== bagB) return null;
+  // WHERE または ON の配置だけが違うとき
+  if (whereA === whereB) return null;
+
+  return {
+    id: 'where-to-on',
+    title: 'WHERE 条件と JOIN ON の配置違い',
+    message:
+      'INNER JOIN では、絞り込みを WHERE に書くか ON に書くかで行集合が同じになることが多いです。構文上は差分がありますが、意味的には同等の可能性があります。保証はしません。',
+  };
+}
+
+/**
+ * 構文差分はあるが、よくあるリファクタの可能性があるときの補助ヒント。
+ * equalForResultSet は変更しない（誤って「同じ」に倒さない）。
+ * @param resolved 省略時は内部で resolveForDiff する
+ */
+export function detectReviewHints(
+  queryA: ParsedQuery,
+  queryB: ParsedQuery,
+  resolved?: { a: ParsedQuery; b: ParsedQuery },
+): ReviewHint[] {
+  const a = resolved?.a ?? resolveForDiff(queryA);
+  const b = resolved?.b ?? resolveForDiff(queryB);
+  const hints: ReviewHint[] = [];
+  const existsHint = detectExistsVsDistinctJoin(a, b);
+  if (existsHint) hints.push(existsHint);
+  const whereOnHint = detectWhereToOn(a, b);
+  if (whereOnHint) hints.push(whereOnHint);
+  return hints;
+}
+
 /**
  * 2つの ParsedQuery を比較し、実行結果に影響しうる構文差分を返す。
  * 実データは使わず、エイリアス解決後の構造比較による推定。
@@ -603,10 +968,13 @@ export function compareQueryResults(
     );
   }
 
+  const reviewHints = equalForResultSet ? [] : detectReviewHints(queryA, queryB, { a, b });
+
   return {
     equalForResultSet,
     equalIncludingOrder,
     categories,
+    reviewHints,
   };
 }
 

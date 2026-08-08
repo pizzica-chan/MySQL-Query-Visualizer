@@ -613,7 +613,8 @@ body {
   background: rgba(125, 184, 138, 0.08);
 }
 
-.result-diff-summary--order-only {
+.result-diff-summary--order-only,
+.result-diff-summary--review-needed {
   border-color: rgba(212, 176, 106, 0.45);
   background: rgba(212, 176, 106, 0.08);
 }
@@ -676,6 +677,33 @@ body {
 
 .result-diff-summary-body {
   font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.result-diff-hint-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.result-diff-hint {
+  border: 1px solid rgba(212, 176, 106, 0.4);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: rgba(212, 176, 106, 0.06);
+}
+
+.result-diff-hint-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--warning);
+}
+
+.result-diff-hint-message {
+  font-size: 0.82rem;
   color: var(--text-muted);
   line-height: 1.55;
 }

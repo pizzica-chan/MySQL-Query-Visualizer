@@ -272,6 +272,13 @@ describe('parseMySqlQuery', () => {
       expect(result.query.tables[0]?.table).toBe('users');
     });
   });
+
+  it('バッククォート付き列参照を正しく文字列化する', () => {
+    const result = parseMySqlQuery('SELECT `u`.`id`, `u`.`name` FROM users u');
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.query.columns.map((c) => c.expression)).toEqual(['u.id', 'u.name']);
+  });
 });
 
 describe('parseMySqlQuery 統計', () => {

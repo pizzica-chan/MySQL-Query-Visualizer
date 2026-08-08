@@ -188,8 +188,9 @@ export default function App() {
               aria-selected={mode === 'compare'}
               className={`app-mode-btn${mode === 'compare' ? ' app-mode-btn--active' : ''}`}
               onClick={() => setMode('compare')}
+              title="チューニング前後の SQL を比較し、結果が変わりそうな差分を確認します"
             >
-              結果比較
+              SQL前後比較
             </button>
           </div>
         </div>

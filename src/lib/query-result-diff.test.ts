@@ -3,6 +3,7 @@ import { parseMySqlQuery } from './parser';
 import {
   buildResultDiffSummary,
   compareQueryResults,
+  detectReviewHints,
   normalizeExpr,
   partitionDiffCategories,
   resultSetSignature,
@@ -18,6 +19,10 @@ function mustParse(sql: string) {
 describe('normalizeExpr', () => {
   it('空白と大文字小文字を揃える', () => {
     expect(normalizeExpr('  Foo.Bar  =  1 ')).toBe('foo.bar = 1');
+  });
+
+  it('バッククォートを除去する', () => {
+    expect(normalizeExpr('`users`.`id`')).toBe('users.id');
   });
 });
 
@@ -250,5 +255,297 @@ describe('compareQueryResults', () => {
     const diff = compareQueryResults(a, b);
     expect(diff.equalForResultSet).toBe(false);
     expect(diff.categories.find((c) => c.id === 'distinct')?.status).toBe('different');
+  });
+
+  it('EXISTS ↔ JOIN+DISTINCT は結果異なるまま要確認ヒントを出す', () => {
+    const existsSql = mustParse(`SELECT u.id, u.name
+FROM users u
+WHERE u.active = 1
+  AND EXISTS (
+    SELECT 1
+    FROM orders o
+    WHERE o.user_id = u.id
+      AND o.status = 'paid'
+  )`);
+    const joinSql = mustParse(`SELECT DISTINCT
+  u.id,
+  u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE u.active = 1
+  AND o.status = 'paid'`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('review-needed');
+    expect(summary.resultSet.status).toBe('different');
+  });
+
+  it('NOT EXISTS ↔ JOIN+DISTINCT には要確認ヒントを出さない', () => {
+    const notExistsSql = mustParse(`SELECT u.id, u.name
+FROM users u
+WHERE u.active = 1
+  AND NOT EXISTS (
+    SELECT 1
+    FROM orders o
+    WHERE o.user_id = u.id
+      AND o.status = 'paid'
+  )`);
+    const joinSql = mustParse(`SELECT DISTINCT
+  u.id,
+  u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE u.active = 1
+  AND o.status = 'paid'`);
+    const diff = compareQueryResults(notExistsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('WHERE→ON 配置違いは要確認ヒントを出す', () => {
+    const a = mustParse(`SELECT
+  u.id,
+  u.name,
+  o.id AS order_id,
+  o.total
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE o.status = 'paid'
+  AND o.total >= 1000`);
+    const b = mustParse(`SELECT
+  u.id,
+  u.name,
+  o.id AS order_id,
+  o.total
+FROM users u
+INNER JOIN orders o
+  ON u.id = o.user_id
+ AND o.status = 'paid'
+ AND o.total >= 1000`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(true);
+    expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
+  });
+
+  it('3 表 JOIN の WHERE→ON 配置違いでも要確認ヒントを出す', () => {
+    const a = mustParse(`SELECT u.id, p.name
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+INNER JOIN products p ON o.product_id = p.id
+WHERE o.status = 'paid'
+  AND p.active = 1`);
+    const b = mustParse(`SELECT u.id, p.name
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id AND o.status = 'paid'
+INNER JOIN products p ON o.product_id = p.id AND p.active = 1`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(true);
+    expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
+  });
+
+  it('JOIN 結合構造が違うと WHERE→ON ヒントを出さない', () => {
+    const a = mustParse(`SELECT u.id, p.name
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+INNER JOIN products p ON o.product_id = p.id
+WHERE o.status = 'paid'`);
+    const b = mustParse(`SELECT u.id, p.name
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id AND o.status = 'paid'
+INNER JOIN products p ON u.id = p.seller_id`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('JOIN 条件ミスは要確認ヒントを出さない', () => {
+    const a = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id WHERE u.active = 1',
+    );
+    const b = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.customer_id WHERE u.active = 1',
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints).toHaveLength(0);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('EXISTS と JOIN で絞り込み値が違うとヒントを出さない', () => {
+    const existsSql = mustParse(`SELECT u.id FROM users u
+WHERE EXISTS (
+  SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'paid'
+)`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE o.status = 'pending'`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(false);
+  });
+
+  it('EXISTS と JOIN で結合先テーブルが違うとヒントを出さない', () => {
+    const existsSql = mustParse(`SELECT u.id FROM users u
+WHERE EXISTS (
+  SELECT 1 FROM orders o WHERE o.user_id = u.id
+)`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id FROM users u
+INNER JOIN payments p ON p.user_id = u.id`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(false);
+  });
+
+  it('EXISTS 内に GROUP BY があると JOIN+DISTINCT ヒントを出さない', () => {
+    const existsSql = mustParse(`SELECT u.id FROM users u
+WHERE EXISTS (
+  SELECT o.user_id
+  FROM orders o
+  WHERE o.user_id = u.id
+  GROUP BY o.user_id
+  HAVING COUNT(*) > 1
+)`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id FROM users u
+INNER JOIN orders o ON o.user_id = u.id`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('EXISTS 内に LIMIT があると JOIN+DISTINCT ヒントを出さない', () => {
+    const existsSql = mustParse(`SELECT u.id FROM users u
+WHERE EXISTS (
+  SELECT 1 FROM orders o WHERE o.user_id = u.id LIMIT 1
+)`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id FROM users u
+INNER JOIN orders o ON o.user_id = u.id`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(false);
+  });
+
+  it('WHERE→ON に加えて LIMIT が違うとヒントを出さない', () => {
+    const a = mustParse(`SELECT u.id, o.id AS order_id
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE o.status = 'paid'
+LIMIT 10`);
+    const b = mustParse(`SELECT u.id, o.id AS order_id
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id AND o.status = 'paid'
+LIMIT 20`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('WHERE→ON に加えて GROUP BY が違うとヒントを出さない', () => {
+    const a = mustParse(`SELECT u.role, COUNT(*) AS c
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE o.status = 'paid'
+GROUP BY u.role`);
+    const b = mustParse(`SELECT u.role, COUNT(*) AS c
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id AND o.status = 'paid'
+GROUP BY u.role, u.active`);
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(false);
+  });
+
+  it('バッククォート付き列でも EXISTS↔JOIN ヒントを出す', () => {
+    const existsSql = mustParse(`SELECT \`u\`.\`id\`, \`u\`.\`name\`
+FROM users u
+WHERE \`u\`.\`active\` = 1
+  AND EXISTS (
+    SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'paid'
+  )`);
+    const joinSql = mustParse(`SELECT DISTINCT \`u\`.\`id\`, \`u\`.\`name\`
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE \`u\`.\`active\` = 1 AND o.status = 'paid'`);
+    const hints = detectReviewHints(existsSql, joinSql);
+    expect(hints.map((h) => h.id)).toEqual(['exists-vs-distinct-join']);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+    expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
+  });
+
+  it('NOT (EXISTS (...)) には EXISTS↔JOIN ヒントを出さない', () => {
+    const notExistsSql = mustParse(`SELECT u.id, u.name
+FROM users u
+WHERE u.active = 1
+  AND NOT (
+    EXISTS (
+      SELECT 1 FROM orders o
+      WHERE o.user_id = u.id AND o.status = 'paid'
+    )
+  )`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id, u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE u.active = 1 AND o.status = 'paid'`);
+    const diff = compareQueryResults(notExistsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('スキーマ修飾テーブルでも EXISTS↔JOIN ヒントを出す', () => {
+    const existsSql = mustParse(`SELECT u.id
+FROM mydb.users u
+WHERE EXISTS (SELECT 1 FROM mydb.orders o WHERE o.user_id = u.id)`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id
+FROM mydb.users u
+INNER JOIN mydb.orders o ON o.user_id = u.id`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+  });
+
+  it('WHERE の OR を ON の AND に崩しただけの差分には where-to-on ヒントを出さない', () => {
+    const a = mustParse(
+      "SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id WHERE o.status = 'paid' OR o.total > 100",
+    );
+    const b = mustParse(
+      "SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id AND o.status = 'paid' WHERE o.total > 100",
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('EXISTS が OR 配下にあるときは EXISTS↔JOIN ヒントを出さない', () => {
+    const existsSql = mustParse(
+      'SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id) OR u.active = 1',
+    );
+    const joinSql = mustParse(
+      'SELECT DISTINCT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id WHERE u.active = 1',
+    );
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(false);
+    expect(buildResultDiffSummary(diff).tone).toBe('different');
+  });
+
+  it('ON 側に OR がある WHERE→ON にはヒントを出さない', () => {
+    const a = mustParse(
+      "SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id WHERE o.status = 'paid' OR o.total > 100",
+    );
+    const b = mustParse(
+      "SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id AND (o.status = 'paid' OR o.total > 100)",
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(false);
   });
 });

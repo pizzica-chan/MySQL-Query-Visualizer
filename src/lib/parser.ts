@@ -40,9 +40,14 @@ function resetIds(): void {
   processedSqlForNatural = '';
 }
 
-function formatIdentifier(name: string | undefined): string {
-  if (!name) return '';
-  return name;
+function formatIdentifier(name: unknown): string {
+  if (name == null) return '';
+  if (typeof name === 'string') return name;
+  if (typeof name === 'object' && name !== null && 'value' in name) {
+    const value = (name as { value?: unknown }).value;
+    if (value != null) return String(value);
+  }
+  return String(name);
 }
 
 function formatTableName(db: string | undefined, table: string): string {

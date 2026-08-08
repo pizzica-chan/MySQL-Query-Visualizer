@@ -117,7 +117,9 @@ export function QueryResultDiffPanel({
       </p>
 
       <div className={`result-diff-summary result-diff-summary--${summary.tone}`} role="status">
-        <h2 className="result-diff-summary-title">比較結果</h2>
+        <h2 className="result-diff-summary-title">
+          {summary.tone === 'review-needed' ? '要確認（構文差分あり）' : '比較結果'}
+        </h2>
         <dl className="result-diff-summary-rows">
           <div className="result-diff-summary-row">
             <dt className="result-diff-summary-row-label">結果セット</dt>
@@ -137,10 +139,26 @@ export function QueryResultDiffPanel({
           </div>
         </dl>
         <p className="result-diff-summary-body">
-          結果セットは出力列・結合・条件など行の集合に影響する差分、並び順は ORDER BY の差分です。
+          {summary.tone === 'review-needed'
+            ? '構文上は差分があります。下のヒントに当てはまるリファクタの可能性がありますが、結果が同じことは保証しません。'
+            : '結果セットは出力列・結合・条件など行の集合に影響する差分、並び順は ORDER BY の差分です。'}
           {summary.note ? ` ${summary.note}` : ''}
         </p>
       </div>
+
+      {summary.hints.length > 0 && (
+        <section className="result-diff-section result-diff-hints">
+          <h3 className="result-diff-section-title">要確認ヒント</h3>
+          <ul className="result-diff-hint-list">
+            {summary.hints.map((hint) => (
+              <li key={hint.id} className="result-diff-hint">
+                <div className="result-diff-hint-title">{hint.title}</div>
+                <p className="result-diff-hint-message">{hint.message}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {resultSetDifferent.length > 0 && (
         <section className="result-diff-section">
