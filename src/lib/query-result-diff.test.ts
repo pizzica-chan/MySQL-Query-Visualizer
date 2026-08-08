@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { parseMySqlQuery } from './parser';
 import {
+  buildResultDiffSummary,
   compareQueryResults,
   normalizeExpr,
+  partitionDiffCategories,
   resultSetSignature,
 } from './query-result-diff';
 
@@ -114,27 +116,69 @@ describe('compareQueryResults', () => {
     expect(diff.categories.find((c) => c.id === 'columns')?.status).toBe('different');
   });
 
-  it('ORDER BY のみ違い: compareOrderBy false なら集合一致、true なら不一致', () => {
+  it('ORDER BY のみ違い: 結果セットは同じ・並び順は異なる', () => {
     const a = mustParse('SELECT id, name FROM users ORDER BY id');
     const b = mustParse('SELECT id, name FROM users ORDER BY name');
 
-    const ignoreOrder = compareQueryResults(a, b, { compareOrderBy: false });
-    expect(ignoreOrder.equalForResultSet).toBe(true);
-    expect(ignoreOrder.equalIncludingOrder).toBe(false);
-    expect(ignoreOrder.categories.find((c) => c.id === 'orderBy')?.status).toBe('different');
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.equalIncludingOrder).toBe(false);
+    expect(diff.categories.find((c) => c.id === 'orderBy')?.status).toBe('different');
 
-    const withOrder = compareQueryResults(a, b, { compareOrderBy: true });
-    expect(withOrder.equalForResultSet).toBe(true);
-    expect(withOrder.equalIncludingOrder).toBe(false);
-    expect(withOrder.categories.find((c) => c.id === 'orderBy')?.status).toBe('different');
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('order-only');
+    expect(summary.resultSet.label).toBe('同じ');
+    expect(summary.order.label).toBe('異なる');
+
+    const parts = partitionDiffCategories(diff.categories);
+    expect(parts.resultSetDifferent).toHaveLength(0);
+    expect(parts.orderDifferent).toHaveLength(1);
   });
 
   it('ORDER BY が同じなら equalIncludingOrder も true', () => {
     const a = mustParse('SELECT id FROM users ORDER BY id DESC');
     const b = mustParse('SELECT id FROM users ORDER BY id DESC');
-    const diff = compareQueryResults(a, b, { compareOrderBy: true });
+    const diff = compareQueryResults(a, b);
     expect(diff.equalForResultSet).toBe(true);
     expect(diff.equalIncludingOrder).toBe(true);
+
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('same');
+    expect(summary.resultSet.label).toBe('同じ');
+    expect(summary.order.label).toBe('同じ');
+  });
+
+  it('ORDER BY なし同士は並び順が指定なし', () => {
+    const a = mustParse('SELECT id FROM users');
+    const b = mustParse('SELECT id FROM users');
+    const diff = compareQueryResults(a, b);
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.order.status).toBe('not-specified');
+    expect(summary.order.label).toBe('指定なし');
+  });
+
+  it('LIMIT ありで ORDER BY のみ違うと結果セットも異なる扱い', () => {
+    const a = mustParse('SELECT id FROM users ORDER BY id LIMIT 1');
+    const b = mustParse('SELECT id FROM users ORDER BY name LIMIT 1');
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.equalIncludingOrder).toBe(false);
+    expect(diff.categories.find((c) => c.id === 'orderBy')?.status).toBe('different');
+    expect(diff.categories.find((c) => c.id === 'limit')?.status).toBe('same');
+
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('different');
+    expect(summary.resultSet.label).toBe('異なる');
+    expect(summary.order.label).toBe('異なる');
+    expect(summary.note).toMatch(/LIMIT/);
+  });
+
+  it('OFFSET ありで ORDER BY のみ違うと結果セットも異なる扱い', () => {
+    const a = mustParse('SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 5');
+    const b = mustParse('SELECT id FROM users ORDER BY name LIMIT 10 OFFSET 5');
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.equalIncludingOrder).toBe(false);
   });
 
   it('UNION ALL と UNION は union 差分', () => {

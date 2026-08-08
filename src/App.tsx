@@ -47,7 +47,6 @@ export default function App() {
   const [parsedFromB, setParsedFromB] = useState('');
   const [errorA, setErrorA] = useState<string | undefined>();
   const [errorB, setErrorB] = useState<string | undefined>();
-  const [compareOrderBy, setCompareOrderBy] = useState(false);
 
   const handleSourceSpanSelect: OnSourceSpanSelect = useCallback((span) => {
     setActiveSourceSpan(span ?? null);
@@ -90,8 +89,8 @@ export default function App() {
 
   const resultDiff = useMemo(() => {
     if (!aSynced || !bSynced || !parsedA || !parsedB) return null;
-    return compareQueryResults(parsedA, parsedB, { compareOrderBy });
-  }, [aSynced, bSynced, parsedA, parsedB, compareOrderBy]);
+    return compareQueryResults(parsedA, parsedB);
+  }, [aSynced, bSynced, parsedA, parsedB]);
 
   const runParse = useCallback(() => {
     const result = parseMySqlQuery(sql);
@@ -348,20 +347,9 @@ export default function App() {
           </section>
 
           <section className="panel panel--output">
-            <div className="display-options">
-              <label className="option-toggle">
-                <input
-                  type="checkbox"
-                  checked={compareOrderBy}
-                  onChange={(e) => setCompareOrderBy(e.target.checked)}
-                />
-                <span>ORDER BY（行順）も比較する</span>
-              </label>
-            </div>
             <div className="tab-content tab-content--compare">
               <QueryResultDiffPanel
                 diff={resultDiff}
-                compareOrderBy={compareOrderBy}
                 errorA={syncedErrorA}
                 errorB={syncedErrorB}
                 hasSqlA={hasSqlA}

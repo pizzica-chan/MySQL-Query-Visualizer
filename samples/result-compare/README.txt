@@ -14,7 +14,7 @@
   10-comma-to-inner-join    … カンマ結合 → 明示 INNER JOIN
 
   --- 行順のみ ---
-  03-order-by-only          … ORDER BY のみ変更（集合は同じ／行順トグルで差）
+  03-order-by-only          … ORDER BY のみ変更（結果セットは同じ・並び順に差分）
 
   --- 構文差分が出やすい（意図は同等寄り） ---
   09-where-to-on            … WHERE 絞り込みを ON へ移動（INNER では行は同じことが多いが構文差分）

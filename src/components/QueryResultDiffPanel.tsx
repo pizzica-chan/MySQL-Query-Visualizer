@@ -1,8 +1,12 @@
-import type { QueryResultDiff } from '../lib/query-result-diff';
+import type { DiffCategoryResult } from '../lib/query-result-diff';
+import {
+  buildResultDiffSummary,
+  partitionDiffCategories,
+  type QueryResultDiff,
+} from '../lib/query-result-diff';
 
 interface QueryResultDiffPanelProps {
   diff: QueryResultDiff | null;
-  compareOrderBy: boolean;
   errorA?: string;
   errorB?: string;
   hasSqlA: boolean;
@@ -11,57 +15,44 @@ interface QueryResultDiffPanelProps {
   pending?: boolean;
 }
 
-function summaryMessage(
-  diff: QueryResultDiff,
-  compareOrderBy: boolean,
-): { tone: 'same' | 'order-only' | 'different'; title: string; body: string } {
-  if (compareOrderBy) {
-    if (diff.equalIncludingOrder) {
-      return {
-        tone: 'same',
-        title: '結果は同じと推定',
-        body: '構文上、出力列・結合・条件・並び順を含め結果に影響する差分は見つかっていません。',
-      };
-    }
-    if (diff.equalForResultSet) {
-      return {
-        tone: 'order-only',
-        title: '行の集合は同じと推定（並びが異なる）',
-        body: 'ORDER BY 以外は一致しています。行順の比較がオンのため、結果は異なると判定しています。',
-      };
-    }
-    return {
-      tone: 'different',
-      title: '結果が異なる可能性あり',
-      body: '構文上、実行結果に影響しうる差分があります。下のカテゴリを確認してください。',
-    };
-  }
+function DiffCategoryList({ categories }: { categories: DiffCategoryResult[] }) {
+  return (
+    <ul className="result-diff-list">
+      {categories.map((cat) => (
+        <li key={cat.id} className="result-diff-item result-diff-item--different">
+          <div className="result-diff-item-header">
+            <span className="result-diff-item-label">{cat.label}</span>
+            <span className="result-diff-badge result-diff-badge--different">差分</span>
+          </div>
+          {cat.details.length > 0 && (
+            <ul className="result-diff-details">
+              {cat.details.map((detail, i) => (
+                <li key={`${cat.id}-${i}`}>{detail}</li>
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
-  if (diff.equalForResultSet) {
-    if (!diff.equalIncludingOrder) {
-      return {
-        tone: 'order-only',
-        title: '行の集合は同じと推定（並びのみ異なる可能性）',
-        body: 'ORDER BY 以外は一致しています。行順の比較はオフのため、結果集合としては同じとみなしています。',
-      };
-    }
-    return {
-      tone: 'same',
-      title: '結果は同じと推定',
-      body: '構文上、出力列・結合・条件など結果集合に影響する差分は見つかっていません。',
-    };
-  }
-
-  return {
-    tone: 'different',
-    title: '結果が異なる可能性あり',
-    body: '構文上、実行結果に影響しうる差分があります。下のカテゴリを確認してください。',
-  };
+function SameCategoryList({ categories }: { categories: DiffCategoryResult[] }) {
+  if (categories.length === 0) return null;
+  return (
+    <ul className="result-diff-same-list">
+      {categories.map((cat) => (
+        <li key={cat.id} className="result-diff-same-item">
+          <span className="result-diff-item-label">{cat.label}</span>
+          <span className="result-diff-badge result-diff-badge--same">一致</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export function QueryResultDiffPanel({
   diff,
-  compareOrderBy,
   errorA,
   errorB,
   hasSqlA,
@@ -113,9 +104,11 @@ export function QueryResultDiffPanel({
     );
   }
 
-  const summary = summaryMessage(diff, compareOrderBy);
-  const different = diff.categories.filter((c) => c.status === 'different');
-  const same = diff.categories.filter((c) => c.status === 'same');
+  const summary = buildResultDiffSummary(diff);
+  const { resultSetDifferent, orderDifferent, resultSetSame, orderSame } = partitionDiffCategories(
+    diff.categories,
+  );
+  const hasAnySame = resultSetSame.length > 0 || orderSame.length > 0;
 
   return (
     <div className="result-diff">
@@ -124,46 +117,68 @@ export function QueryResultDiffPanel({
       </p>
 
       <div className={`result-diff-summary result-diff-summary--${summary.tone}`} role="status">
-        <h2 className="result-diff-summary-title">{summary.title}</h2>
-        <p className="result-diff-summary-body">{summary.body}</p>
+        <h2 className="result-diff-summary-title">比較結果</h2>
+        <dl className="result-diff-summary-rows">
+          <div className="result-diff-summary-row">
+            <dt className="result-diff-summary-row-label">結果セット</dt>
+            <dd
+              className={`result-diff-summary-row-value result-diff-summary-row-value--${summary.resultSet.status}`}
+            >
+              {summary.resultSet.label}
+            </dd>
+          </div>
+          <div className="result-diff-summary-row">
+            <dt className="result-diff-summary-row-label">並び順</dt>
+            <dd
+              className={`result-diff-summary-row-value result-diff-summary-row-value--${summary.order.status}`}
+            >
+              {summary.order.label}
+            </dd>
+          </div>
+        </dl>
+        <p className="result-diff-summary-body">
+          結果セットは出力列・結合・条件など行の集合に影響する差分、並び順は ORDER BY の差分です。
+          {summary.note ? ` ${summary.note}` : ''}
+        </p>
       </div>
 
-      {different.length > 0 && (
+      {resultSetDifferent.length > 0 && (
         <section className="result-diff-section">
-          <h3 className="result-diff-section-title">差分あり</h3>
-          <ul className="result-diff-list">
-            {different.map((cat) => (
-              <li key={cat.id} className="result-diff-item result-diff-item--different">
-                <div className="result-diff-item-header">
-                  <span className="result-diff-item-label">{cat.label}</span>
-                  <span className="result-diff-badge result-diff-badge--different">差分</span>
-                </div>
-                {cat.details.length > 0 && (
-                  <ul className="result-diff-details">
-                    {cat.details.map((detail, i) => (
-                      <li key={`${cat.id}-${i}`}>{detail}</li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ul>
+          <h3 className="result-diff-section-title">結果セットに影響する差分</h3>
+          <DiffCategoryList categories={resultSetDifferent} />
+        </section>
+      )}
+
+      {orderDifferent.length > 0 && (
+        <section className="result-diff-section">
+          <h3 className="result-diff-section-title">並び順の差分</h3>
+          <DiffCategoryList categories={orderDifferent} />
         </section>
       )}
 
       <section className="result-diff-section">
         <h3 className="result-diff-section-title">一致</h3>
-        {same.length === 0 ? (
+        {!hasAnySame ? (
           <p className="result-diff-empty">一致しているカテゴリはありません。</p>
         ) : (
-          <ul className="result-diff-same-list">
-            {same.map((cat) => (
-              <li key={cat.id} className="result-diff-same-item">
-                <span className="result-diff-item-label">{cat.label}</span>
-                <span className="result-diff-badge result-diff-badge--same">一致</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            {resultSetSame.length > 0 && (
+              <>
+                {resultSetDifferent.length > 0 || orderDifferent.length > 0 ? (
+                  <p className="result-diff-subsection-label">結果セット</p>
+                ) : null}
+                <SameCategoryList categories={resultSetSame} />
+              </>
+            )}
+            {orderSame.length > 0 && (
+              <>
+                {resultSetSame.length > 0 ? (
+                  <p className="result-diff-subsection-label">並び順</p>
+                ) : null}
+                <SameCategoryList categories={orderSame} />
+              </>
+            )}
+          </>
         )}
       </section>
     </div>

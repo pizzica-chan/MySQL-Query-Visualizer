@@ -35,20 +35,88 @@ export interface DiffCategoryResult {
   details: string[];
 }
 
-export interface QueryResultDiffOptions {
-  /**
-   * UI 向け。エンジンは常に equalForResultSet / equalIncludingOrder の両方を返す。
-   * サマリ表示でどちらを主判定にするかは呼び出し側が切り替える。
-   */
-  compareOrderBy?: boolean;
-}
-
 export interface QueryResultDiff {
-  /** 行の集合として同じと推定できるか（ORDER BY を除く） */
+  /**
+   * 行の集合として同じと推定できるか。
+   * ORDER BY のみの差分は通常ここに含めないが、LIMIT/OFFSET がある場合は含める。
+   */
   equalForResultSet: boolean;
   /** ORDER BY を含めて同じと推定できるか */
   equalIncludingOrder: boolean;
   categories: DiffCategoryResult[];
+}
+
+export interface ResultDiffSummary {
+  /** サマリー枠の色 */
+  tone: 'same' | 'order-only' | 'different';
+  resultSet: { status: 'same' | 'different'; label: string };
+  order: { status: 'same' | 'different' | 'not-specified'; label: string };
+  /** LIMIT+ORDER BY など、サマリーだけでは分かりにくいときの補足 */
+  note?: string;
+}
+
+export interface PartitionedDiffCategories {
+  resultSetDifferent: DiffCategoryResult[];
+  orderDifferent: DiffCategoryResult[];
+  resultSetSame: DiffCategoryResult[];
+  orderSame: DiffCategoryResult[];
+}
+
+/** ORDER BY カテゴリを結果セット差分と並び順差分に分ける */
+export function partitionDiffCategories(categories: DiffCategoryResult[]): PartitionedDiffCategories {
+  const different = categories.filter((c) => c.status === 'different');
+  const same = categories.filter((c) => c.status === 'same');
+  return {
+    resultSetDifferent: different.filter((c) => c.id !== 'orderBy'),
+    orderDifferent: different.filter((c) => c.id === 'orderBy'),
+    resultSetSame: same.filter((c) => c.id !== 'orderBy'),
+    orderSame: same.filter((c) => c.id === 'orderBy'),
+  };
+}
+
+/** LIMIT / OFFSET があると ORDER BY の違いは返る行の集合にも影響し得る */
+export function orderAffectsResultSet(categories: DiffCategoryResult[]): boolean {
+  const orderDiffers = categories.some((c) => c.id === 'orderBy' && c.status === 'different');
+  const hasLimitOrOffset = categories.some((c) => c.id === 'limit');
+  return orderDiffers && hasLimitOrOffset;
+}
+
+/** 2 段サマリー（結果セット / 並び順） */
+export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary {
+  const orderCategory = diff.categories.find((c) => c.id === 'orderBy');
+  const orderDiffers = orderCategory?.status === 'different';
+
+  let order: ResultDiffSummary['order'];
+  if (!orderCategory) {
+    order = { status: 'not-specified', label: '指定なし' };
+  } else if (orderDiffers) {
+    order = { status: 'different', label: '異なる' };
+  } else {
+    order = { status: 'same', label: '同じ' };
+  }
+
+  const resultSetStatus = diff.equalForResultSet ? 'same' : 'different';
+  const tone: ResultDiffSummary['tone'] = !diff.equalForResultSet
+    ? 'different'
+    : !diff.equalIncludingOrder
+      ? 'order-only'
+      : 'same';
+
+  const otherDiffs = diff.categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
+  const note =
+    orderAffectsResultSet(diff.categories) && otherDiffs.length === 0
+      ? 'LIMIT / OFFSET があるため、ORDER BY の違いは返る行の集合にも影響し得ます。'
+      : undefined;
+
+  return {
+    tone,
+    resultSet: {
+      status: resultSetStatus,
+      label: resultSetStatus === 'same' ? '同じ' : '異なる',
+    },
+    order,
+    note,
+  };
 }
 
 const CATEGORY_LABELS: Record<DiffCategoryId, string> = {
@@ -515,7 +583,6 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
 export function compareQueryResults(
   queryA: ParsedQuery,
   queryB: ParsedQuery,
-  _options: QueryResultDiffOptions = {},
 ): QueryResultDiff {
   const a = resolveForDiff(queryA);
   const b = resolveForDiff(queryB);
@@ -524,12 +591,18 @@ export function compareQueryResults(
   const orderCategory = categories.find((c) => c.id === 'orderBy');
   const nonOrderDiffs = categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
   const orderDiffers = orderCategory?.status === 'different';
+  const limitAffectsSet = orderAffectsResultSet(categories);
 
-  const equalForResultSet = nonOrderDiffs.length === 0;
-  const equalIncludingOrder = equalForResultSet && !orderDiffers;
+  // LIMIT/OFFSET があるとき ORDER BY 差分は行集合そのものを変え得る
+  const equalForResultSet = nonOrderDiffs.length === 0 && !limitAffectsSet;
+  const equalIncludingOrder = nonOrderDiffs.length === 0 && !orderDiffers;
 
-  // compareOrderBy は UI が equalForResultSet / equalIncludingOrder のどちらを
-  // 主判定に使うかの切り替え用。エンジンは常に両方を返す。
+  if (limitAffectsSet && orderCategory && !orderCategory.details.some((d) => d.includes('LIMIT'))) {
+    orderCategory.details.push(
+      'LIMIT / OFFSET があるため、並びの違いは返る行の集合にも影響し得ます',
+    );
+  }
+
   return {
     equalForResultSet,
     equalIncludingOrder,
