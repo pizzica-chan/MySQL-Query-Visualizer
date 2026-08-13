@@ -4,7 +4,8 @@ import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerJoinScopeLine,
-  isInnerJoinType,
+  isInnerLikeJoin,
+  joinHasOnCondition,
   type EffectiveInnerAnalysis,
   type EffectiveInnerReason,
 } from './join-effective-inner';
@@ -494,7 +495,7 @@ function expandRequiredUpstreamTables(
 
   for (const join of query.joins) {
     if (join.targetId !== tableId) continue;
-    if (!isInnerJoinType(join.type) && join.type !== 'LEFT JOIN') continue;
+    if (!isInnerLikeJoin(join) && join.type !== 'LEFT JOIN') continue;
 
     const sourceIds = new Set<string>(resolveJoinLayoutSources(join, query.tables));
     if (join.sourceId && join.sourceId !== tableId) {
@@ -531,7 +532,7 @@ export function classifyTablePresenceRequirement(query: ParsedQuery): TablePrese
     const effectiveInner = Boolean(analysis && analysis.reasons.length > 0);
     const sourceIds = resolveJoinLayoutSources(join, query.tables);
 
-    if (isInnerJoinType(join.type)) {
+    if (isInnerLikeJoin(join)) {
       requiredIds.add(join.targetId);
       for (const id of sourceIds) requiredIds.add(id);
       optionalIds.delete(join.targetId);
@@ -567,6 +568,7 @@ export function classifyTablePresenceRequirement(query: ParsedQuery): TablePrese
       optionalIds.add(join.targetId);
       for (const id of sourceIds) optionalIds.add(id);
     } else if (join.type === 'CROSS JOIN') {
+      // ON / USING 付きは isInnerLikeJoin 側。ここは直積（ON なし）のみ
       requiredIds.add(join.targetId);
     }
   }
@@ -622,12 +624,6 @@ function buildTablePresenceGroups(
       })),
     },
   ];
-}
-
-function joinHasOnCondition(join: JoinEdge): boolean {
-  if (join.conditionRoot) return true;
-  const condition = join.condition.trim();
-  return condition.length > 0 && condition !== '(no condition)';
 }
 
 function describeJoinJapanese(
@@ -905,8 +901,7 @@ function isJoinRowFilter(
   join: JoinEdge,
   effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
 ): boolean {
-  if (isInnerJoinType(join.type)) return true;
-  if (join.type === 'CROSS JOIN' && joinHasOnCondition(join)) return true;
+  if (isInnerLikeJoin(join)) return true;
   return Boolean(effectiveInner);
 }
 

@@ -18,7 +18,7 @@ describe('sql-preprocess', () => {
     expect(sql.slice(span!.start, span!.end)).toBe('id');
   });
 
-  it('STRAIGHT_JOIN 除去は他の修飾子処理の後に行う', () => {
+  it('DISTINCTROW と別 SELECT の STRAIGHT_JOIN ヒントを独立に処理する', () => {
     const sql = 'SELECT DISTINCTROW x UNION SELECT STRAIGHT_JOIN y FROM a JOIN b ON a.id = b.id';
     const { straightJoinHintSelectStarts, sql: processed } = preprocessSqlForParser(sql);
     expect(processed).toContain('SELECT y FROM');

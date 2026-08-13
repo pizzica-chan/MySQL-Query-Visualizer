@@ -18,6 +18,31 @@ describe('sql-highlight', () => {
     expect(tokens.filter((t) => t.kind === 'keyword' && t.text.toUpperCase() === 'STRAIGHT_JOIN')).toHaveLength(2);
   });
 
+  it('SELECT / DML 修飾子をキーワードとしてハイライトする', () => {
+    const selectTokens = kinds(
+      'SELECT DISTINCTROW HIGH_PRIORITY SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS u.id FROM users u',
+    );
+    for (const keyword of [
+      'DISTINCTROW',
+      'HIGH_PRIORITY',
+      'SQL_SMALL_RESULT',
+      'SQL_BIG_RESULT',
+      'SQL_BUFFER_RESULT',
+      'SQL_NO_CACHE',
+      'SQL_CALC_FOUND_ROWS',
+    ]) {
+      expect(selectTokens.some((t) => t.kind === 'keyword' && t.text.toUpperCase() === keyword), keyword).toBe(
+        true,
+      );
+    }
+    expect(selectTokens.some((t) => t.kind === 'keyword' && t.text.toUpperCase() === 'DISTINCT')).toBe(false);
+
+    const updateTokens = kinds(
+      'UPDATE LOW_PRIORITY orders o JOIN users u ON u.id = o.user_id SET o.status = 1',
+    );
+    expect(updateTokens.some((t) => t.kind === 'keyword' && t.text.toUpperCase() === 'LOW_PRIORITY')).toBe(true);
+  });
+
   it('# 行コメントをハイライトする', () => {
     const tokens = kinds('SELECT id FROM t # USE INDEX (idx)\nJOIN u ON u.id = t.id');
     expect(tokens.some((t) => t.kind === 'comment' && t.text.includes('USE INDEX'))).toBe(true);

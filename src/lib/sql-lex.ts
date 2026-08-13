@@ -72,16 +72,38 @@ export function readBacktickIdentifierEnd(text: string, pos: number): number {
   return text.length;
 }
 
-/** openPos は '(' の位置。対応する ')' の直後インデックス。閉じ括弧が無ければ null */
+/** openPos は '(' の位置。対応する ')' の直後インデックス。閉じ括弧が無ければ null。文字列・コメント内の括弧は数えない */
 export function readBalancedParenEnd(text: string, openPos: number): number | null {
   if (text[openPos] !== '(') return null;
   let depth = 0;
-  for (let i = openPos; i < text.length; i++) {
+  for (let i = openPos; i < text.length; ) {
+    if (isDashLineCommentStart(text, i)) {
+      i = readLineCommentEnd(text, i);
+      continue;
+    }
+    if (text[i] === '#') {
+      i = readHashLineCommentEnd(text, i);
+      continue;
+    }
+    if (text[i] === '/' && text[i + 1] === '*') {
+      i = readBlockCommentEnd(text, i);
+      continue;
+    }
+    const quote = text[i];
+    if (quote === "'" || quote === '"') {
+      i = readQuotedStringEnd(text, i, quote);
+      continue;
+    }
+    if (text[i] === '`') {
+      i = readBacktickIdentifierEnd(text, i);
+      continue;
+    }
     if (text[i] === '(') depth += 1;
     else if (text[i] === ')') {
       depth -= 1;
       if (depth === 0) return i + 1;
     }
+    i += 1;
   }
   return null;
 }

@@ -1,5 +1,9 @@
 import { applyAliasResolution } from './alias-resolver';
-import { normalizeEffectiveInnerJoins } from './join-effective-inner';
+import {
+  isInnerLikeJoin,
+  joinHasOnCondition,
+  normalizeEffectiveInnerJoins,
+} from './join-effective-inner';
 import type {
   ConditionNode,
   CteRef,
@@ -379,24 +383,20 @@ function conditionDiffDetails(
   return [`A: ${conditionSummary(a)}`, `B: ${conditionSummary(b)}`];
 }
 
+/**
+ * 端点の並べ替えで結果集合が変わらない結合種別。
+ * 直積の CROSS JOIN（ON なし）も含む。行の絞り込みとしての INNER 相当は isInnerLikeJoin。
+ */
 function isCommutativeJoinType(type: JoinType | string): boolean {
   const t = normalizeExpr(type);
-  return t === 'inner join' || t === 'join' || t === 'cross join';
+  return t === 'inner join' || t === 'join' || t === 'cross join' || t === 'straight join';
 }
 
-/** INNER 相当（STRAIGHT JOIN・CROSS JOIN を含む）。結果集合・ON 述語の比較に使う */
-function isInnerLikeJoinType(type: JoinType | string): boolean {
-  return isCommutativeJoinType(type) || normalizeExpr(type) === 'straight join';
-}
-
-/** 結果集合向けの結合構造比較では STRAIGHT JOIN も端点の並べ替えで同等扱い */
-function isCommutativeJoinStructureType(type: JoinType | string): boolean {
-  return isInnerLikeJoinType(type);
-}
-
-function normalizeInnerJoinTypeName(type: string): string {
-  const t = normalizeExpr(type);
+/** JOIN / STRAIGHT JOIN / CROSS JOIN ON を結果集合比較では INNER JOIN に寄せる */
+function normalizeInnerJoinTypeName(join: JoinEdge): string {
+  const t = normalizeExpr(join.type);
   if (t === 'join' || t === 'straight join') return 'inner join';
+  if (t === 'cross join' && joinHasOnCondition(join)) return 'inner join';
   return t;
 }
 
@@ -411,13 +411,13 @@ function joinStructureSignature(
   const natural = join.isNatural ? 'natural' : '';
   const rawType = normalizeExpr(join.type);
 
-  if (isCommutativeJoinStructureType(join.type)) {
+  if (isCommutativeJoinType(join.type)) {
     const fromCondition = endpointsFromJoinCondition(join.condition, nameMap);
     const endpoints =
       fromCondition.length >= 2
         ? fromCondition.join('~')
         : [source, target].sort().join('~');
-    return [normalizeInnerJoinTypeName(rawType), natural, endpoints].filter(Boolean).join('|');
+    return [normalizeInnerJoinTypeName(join), natural, endpoints].filter(Boolean).join('|');
   }
 
   if (rawType === 'right join') {
@@ -758,7 +758,7 @@ function joinsHaveAndOnlyOn(joins: JoinEdge[]): boolean {
 
 function collectJoinOnPreds(joins: JoinEdge[], out: string[] = []): string[] {
   for (const join of joins) {
-    if (!isInnerLikeJoinType(join.type)) continue;
+    if (!isInnerLikeJoin(join)) continue;
     if (join.conditionRoot) {
       collectComparisonPreds(join.conditionRoot, out);
     } else if (join.conditionParts) {
@@ -897,7 +897,7 @@ function isDistinctInnerJoinShape(query: ParsedQuery): boolean {
   if (query.statementType !== 'SELECT') return false;
   if (!query.distinct) return false;
   if (query.joins.length !== 1) return false;
-  if (!isInnerLikeJoinType(query.joins[0]!.type)) return false;
+  if (!isInnerLikeJoin(query.joins[0]!)) return false;
   if (query.tables.filter((t) => !t.isDerived).length !== 2) return false;
   if (query.groupBy.length > 0 || query.having) return false;
   if (query.limit || query.offset) return false;
@@ -963,7 +963,7 @@ function predicateBagSignature(query: ParsedQuery): string {
 }
 
 function allJoinsInnerLike(query: ParsedQuery): boolean {
-  return query.joins.length > 0 && query.joins.every((j) => isInnerLikeJoinType(j.type));
+  return query.joins.length > 0 && query.joins.every((j) => isInnerLikeJoin(j));
 }
 
 function detectWhereToOn(a: ParsedQuery, b: ParsedQuery): ReviewHint | null {
@@ -1041,7 +1041,7 @@ function orderedJoinChainSignature(query: ParsedQuery): string {
       const source = idMap.get(join.sourceId) ?? join.sourceId;
       const target = idMap.get(join.targetId) ?? join.targetId;
       const condition = normalizeJoinConditionText(join);
-      const normalizedType = normalizeInnerJoinTypeName(join.type);
+      const normalizedType = normalizeInnerJoinTypeName(join);
       return [normalizedType, source, target, condition].join('|');
     })
     .join('\0');

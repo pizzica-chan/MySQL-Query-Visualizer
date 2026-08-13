@@ -107,6 +107,35 @@ describe('compareQueryResults', () => {
     expect(diff.equalForResultSet).toBe(true);
   });
 
+  it('CROSS JOIN ON と INNER JOIN は結果集合として同じ', () => {
+    const a = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id',
+    );
+    const b = mustParse(
+      'SELECT u.id FROM users u CROSS JOIN orders o ON u.id = o.user_id',
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.categories.find((c) => c.id === 'joins')?.status).toBe('same');
+  });
+
+  it('ON のない CROSS JOIN と INNER JOIN は結果集合として異なる', () => {
+    const a = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id',
+    );
+    const b = mustParse('SELECT u.id FROM users u CROSS JOIN orders o');
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+  });
+
+  it('CROSS JOIN USING と INNER JOIN USING は結果集合として同じ', () => {
+    const a = mustParse('SELECT u.id FROM users u INNER JOIN orders o USING (id)');
+    const b = mustParse('SELECT u.id FROM users u CROSS JOIN orders o USING (id)');
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.categories.find((c) => c.id === 'joins')?.status).toBe('same');
+  });
+
   it('LEFT JOIN の保全側入れ替えは結果が異なると判定する', () => {
     const a = mustParse(
       'SELECT u.id, o.id FROM users u LEFT JOIN orders o ON u.id = o.user_id',

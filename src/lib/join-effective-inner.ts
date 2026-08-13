@@ -47,6 +47,22 @@ export function isInnerJoinType(type: JoinType): boolean {
   return type === 'INNER JOIN' || type === 'JOIN' || type === 'STRAIGHT JOIN';
 }
 
+/** ON / USING があるか（直積の CROSS JOIN と INNER 相当の CROSS JOIN ON を区別する） */
+export function joinHasOnCondition(join: JoinEdge): boolean {
+  if (join.conditionRoot) return true;
+  const condition = join.condition.trim();
+  return condition.length > 0 && condition !== '(no condition)';
+}
+
+/**
+ * 結果行を絞り込む INNER 相当（ON / USING 付き CROSS JOIN を含む）。
+ * 直積の CROSS JOIN は含めない。端点の可換比較は query-result-diff の isCommutativeJoinType。
+ */
+export function isInnerLikeJoin(join: JoinEdge): boolean {
+  if (isInnerJoinType(join.type)) return true;
+  return join.type === 'CROSS JOIN' && joinHasOnCondition(join);
+}
+
 function isOuterJoinWithNullableSide(type: JoinType): boolean {
   return type === 'LEFT JOIN' || type === 'RIGHT JOIN';
 }
@@ -244,7 +260,7 @@ function findSubsequentInnerJoinReasons(
 
   for (let i = joinIndex + 1; i < joins.length; i++) {
     const join = joins[i]!;
-    if (!isInnerJoinType(join.type)) continue;
+    if (!isInnerLikeJoin(join)) continue;
     if (!expressionReferencesTable(resolveJoinConditionExpression(join), nullableTable)) continue;
     reasons.push({
       kind: 'inner_join',
@@ -312,8 +328,13 @@ export function analyzeEffectiveInnerJoins(query: ParsedQuery): EffectiveInnerAn
 export function formatEffectiveInnerCausePhrase(reasons: EffectiveInnerReason[]): string {
   const innerReasons = reasons.filter((r) => r.kind === 'inner_join');
   if (innerReasons.length > 0) {
-    const allStraight = innerReasons.every((r) => r.joinType === 'STRAIGHT JOIN');
-    return allStraight ? '後続の STRAIGHT JOIN により' : '後続の INNER JOIN により';
+    const types = innerReasons.map((r) => r.joinType ?? 'INNER JOIN');
+    const only = types[0];
+    if (only && types.every((t) => t === only)) {
+      if (only === 'STRAIGHT JOIN') return '後続の STRAIGHT JOIN により';
+      if (only === 'CROSS JOIN') return '後続の CROSS JOIN により';
+    }
+    return '後続の INNER JOIN により';
   }
   const parts: string[] = [];
   if (reasons.some((r) => r.kind === 'where')) parts.push('WHERE');
