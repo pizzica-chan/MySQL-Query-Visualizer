@@ -78,6 +78,20 @@ describe('join-effective-inner', () => {
         expect(analysis?.reasons.some((r) => r.kind === 'inner_join')).toBe(true);
       });
 
+      it('nullable を参照する後続 STRAIGHT JOIN も実質 INNER として検出する', () => {
+        const query = parseSql(`
+          SELECT * FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          STRAIGHT_JOIN table_c c ON c.b_id = b.id
+        `);
+        const bJoin = leftJoinByCondition(query, 'b.a_id');
+        const analysis = analysisForJoin(query, bJoin!.id);
+        expect(analysis?.reasons.some((r) => r.kind === 'inner_join' && r.label.includes('STRAIGHT JOIN'))).toBe(
+          true,
+        );
+        expect(formatEffectiveInnerCausePhrase(analysis!.reasons)).toBe('後続の STRAIGHT JOIN により');
+      });
+
       it('RIGHT JOIN で nullable 側を参照する後続 INNER JOIN を検出する', () => {
         const query = parseSql(`
           SELECT a.id, b.name, d.val
@@ -383,6 +397,11 @@ describe('join-effective-inner', () => {
       expect(formatEffectiveInnerCausePhrase([{ kind: 'inner_join', label: 'INNER JOIN p' }])).toBe(
         '後続の INNER JOIN により',
       );
+      expect(
+        formatEffectiveInnerCausePhrase([
+          { kind: 'inner_join', label: 'STRAIGHT JOIN c', joinType: 'STRAIGHT JOIN' },
+        ]),
+      ).toBe('後続の STRAIGHT JOIN により');
       expect(
         formatEffectiveInnerCausePhrase([
           { kind: 'inner_join', label: 'INNER JOIN p' },

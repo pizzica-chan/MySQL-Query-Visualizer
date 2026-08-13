@@ -4,6 +4,7 @@ import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerJoinScopeLine,
+  isInnerJoinType,
   type EffectiveInnerAnalysis,
   type EffectiveInnerReason,
 } from './join-effective-inner';
@@ -260,24 +261,30 @@ const JOIN_SCOPE: Record<string, (left: string, right: string, condition: string
   'INNER JOIN': (l, r, c) =>
     `${l} と ${r} を INNER JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
   JOIN: (l, r, c) => `${l} と ${r} を JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  'STRAIGHT JOIN': (l, r, c) =>
+    `${l} と ${r} を STRAIGHT JOIN — 結合条件「${c}」を満たす組み合わせのみ残る（FROM 句の記述順で結合）`,
   'LEFT JOIN': (l, r, c) =>
     `${l} の行をすべて残し ${r} を LEFT JOIN — 結合条件「${c}」（${r} が無くても ${l} は残る）`,
   'RIGHT JOIN': (l, r, c) =>
     `${r} の行をすべて残し ${l} を RIGHT JOIN — 結合条件「${c}」`,
   'FULL JOIN': (l, r, c) => `${l} と ${r} を FULL JOIN — 結合条件「${c}」`,
-  'CROSS JOIN': (l, r) => `${l} と ${r} の直積（すべての組み合わせ）`,
+  'CROSS JOIN': (l, r, c) =>
+    `${l} と ${r} を CROSS JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
 };
 
 const MULTI_SOURCE_JOIN_SCOPE: Record<string, (sources: string, target: string, condition: string) => string> = {
   'INNER JOIN': (s, r, c) =>
     `${s} と ${r} を INNER JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
   JOIN: (s, r, c) => `${s} と ${r} を JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
+  'STRAIGHT JOIN': (s, r, c) =>
+    `${s} と ${r} を STRAIGHT JOIN — 結合条件「${c}」を満たす組み合わせのみ残る（FROM 句の記述順で結合）`,
   'LEFT JOIN': (s, r, c) =>
     `${s} を基点に ${r} を LEFT JOIN — 結合条件「${c}」（${r} が無い組み合わせも LEFT 側は残る）`,
   'RIGHT JOIN': (s, r, c) =>
     `${r} を基点に ${s} を RIGHT JOIN — 結合条件「${c}」`,
   'FULL JOIN': (s, r, c) => `${s} と ${r} を FULL JOIN — 結合条件「${c}」`,
-  'CROSS JOIN': (s, r) => `${s} と ${r} の直積（すべての組み合わせ）`,
+  'CROSS JOIN': (s, r, c) =>
+    `${s} と ${r} を CROSS JOIN — 結合条件「${c}」を満たす組み合わせのみ残る`,
 };
 
 const ACTION_LABELS: Record<ParsedQuery['statementType'], { action: EffectAction; label: string; verb: string }> = {
@@ -443,10 +450,6 @@ function tableName(_join: JoinEdge, tables: TableRef[], id: string): string {
 
 function joinSourceLabels(join: JoinEdge, tables: TableRef[]): string[] {
   return resolveJoinLayoutSources(join, tables).map((id) => tableName(join, tables, id));
-}
-
-function isInnerJoinType(type: JoinEdge['type']): boolean {
-  return type === 'INNER JOIN' || type === 'JOIN';
 }
 
 export interface TablePresenceClassification {
@@ -621,6 +624,12 @@ function buildTablePresenceGroups(
   ];
 }
 
+function joinHasOnCondition(join: JoinEdge): boolean {
+  if (join.conditionRoot) return true;
+  const condition = join.condition.trim();
+  return condition.length > 0 && condition !== '(no condition)';
+}
+
 function describeJoinJapanese(
   join: JoinEdge,
   tables: TableRef[],
@@ -638,12 +647,10 @@ function describeJoinJapanese(
     return formatEffectiveInnerJoinScopeLine(join, preservedLabel, effectiveInner.nullableTable, effectiveInner.reasons);
   }
 
-  if (join.type === 'CROSS JOIN') {
-    const fn =
-      sourceLabels.length > 1
-        ? MULTI_SOURCE_JOIN_SCOPE['CROSS JOIN']
-        : JOIN_SCOPE['CROSS JOIN'];
-    return fn(left, right, condition);
+  if (join.type === 'CROSS JOIN' && !joinHasOnCondition(join)) {
+    return sourceLabels.length > 1
+      ? `${sourcesText} と ${right} の直積（すべての組み合わせ）`
+      : `${left} と ${right} の直積（すべての組み合わせ）`;
   }
 
   if (sourceLabels.length > 1) {
@@ -813,7 +820,7 @@ function joinFilterHeader(
     return effectiveInnerFilterTag(join, effectiveInner.reasons);
   }
   const typeLabel = formatJoinDisplayType(join);
-  if (!join.isNatural && isInnerJoinType(join.type)) {
+  if (!join.isNatural && (join.type === 'INNER JOIN' || join.type === 'JOIN')) {
     return 'INNER JOIN';
   }
   return typeLabel;
@@ -899,6 +906,7 @@ function isJoinRowFilter(
   effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
 ): boolean {
   if (isInnerJoinType(join.type)) return true;
+  if (join.type === 'CROSS JOIN' && joinHasOnCondition(join)) return true;
   return Boolean(effectiveInner);
 }
 
@@ -965,6 +973,14 @@ function describeRowFilterSection(query: ParsedQuery, mode: QueryEffectMode): Qu
   };
 }
 
+function pushStraightJoinHintLine(lines: EffectLine[], query: ParsedQuery): void {
+  if (!query.straightJoinHint || query.joins.length === 0) return;
+  lines.push({
+    text: 'SELECT STRAIGHT_JOIN — FROM 句の記述順で結合する（結果集合は INNER JOIN と同じ）',
+    sourceSpan: query.straightJoinHintSpan,
+  });
+}
+
 function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection | null {
   const lines: EffectLine[] = [];
   let presenceGroups: TablePresenceGroup[] | undefined;
@@ -991,6 +1007,7 @@ function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSe
         text: `${tableLabel(query.tables[0]!)} を起点に行の組み合わせを構成`,
         sourceSpan: query.tables[0]?.sourceSpan,
       });
+      pushStraightJoinHintLine(lines, query);
       for (const join of query.joins) {
         const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
         lines.push({
@@ -1012,8 +1029,9 @@ function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSe
         optionalJoins,
         mode,
       );
+      pushStraightJoinHintLine(lines, query);
       for (const join of query.joins) {
-        if (join.type === 'CROSS JOIN') {
+        if (join.type === 'CROSS JOIN' && !joinHasOnCondition(join)) {
           lines.push({ text: crossJoinPhrase(join, query.tables) });
         }
       }

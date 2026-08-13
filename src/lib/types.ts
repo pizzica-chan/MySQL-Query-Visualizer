@@ -14,6 +14,7 @@ export type JoinType =
   | 'RIGHT JOIN'
   | 'FULL JOIN'
   | 'CROSS JOIN'
+  | 'STRAIGHT JOIN'
   | 'JOIN';
 
 export interface CteRef {
@@ -131,6 +132,10 @@ export interface ParsedQuery {
   /** LIMIT offset, count のカンマ形式か（LIMIT n OFFSET m との区別） */
   limitCommaOffset?: boolean;
   distinct: boolean;
+  /** SELECT STRAIGHT_JOIN ヒント（FROM 句の JOIN 種別は書き換えない） */
+  straightJoinHint?: boolean;
+  /** 元 SQL 上の SELECT … STRAIGHT_JOIN 範囲 */
+  straightJoinHintSpan?: SourceSpan;
   /** UNION / UNION ALL 等の各ブランチ（2本以上のとき） */
   unionBranches?: UnionBranch[];
   /** WITH 句で定義された CTE */

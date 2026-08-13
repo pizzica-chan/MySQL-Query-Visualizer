@@ -3,6 +3,10 @@ import { Parser } from 'node-sql-parser';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { formatJoinConditionLabel } from './join-condition';
 import {
+  preprocessSqlForParser,
+  remapParsedQuerySpans,
+} from './sql-preprocess';
+import {
   columnEntrySourceSpan,
   orderByEntrySourceSpan,
   toSourceSpan,
@@ -28,6 +32,10 @@ let nodeCounter = 0;
 /** 前処理後 SQL 上で NATURAL 由来の JOIN キーワード開始オフセット */
 let naturalJoinStarts: number[] = [];
 let processedSqlForNatural = '';
+/** SELECT 直後の STRAIGHT_JOIN ヒントを剥がした SELECT 開始オフセット */
+let straightJoinHintSelectStarts: number[] = [];
+/** 元 SQL 上の SELECT … STRAIGHT_JOIN 範囲（straightJoinHintSelectStarts と同じ順） */
+let straightJoinHintOriginalSpans: SourceSpan[] = [];
 
 function nextId(prefix: string): string {
   nodeCounter += 1;
@@ -38,6 +46,8 @@ function resetIds(): void {
   nodeCounter = 0;
   naturalJoinStarts = [];
   processedSqlForNatural = '';
+  straightJoinHintSelectStarts = [];
+  straightJoinHintOriginalSpans = [];
 }
 
 function formatIdentifier(name: unknown): string {
@@ -230,23 +240,10 @@ function withConditionSpan(node: ConditionNode, astNode: any): ConditionNode {
   return sourceSpan ? { ...node, sourceSpan } : node;
 }
 
-function extendColumnSpanWithAlias(
-  sql: string | undefined,
-  col: any,
-  span: SourceSpan | undefined,
-): SourceSpan | undefined {
-  if (!span || !sql || !col?.as) return span;
-  const aliasNeedle = ` AS ${col.as}`;
-  const idx = sql.indexOf(aliasNeedle, Math.max(0, span.end - 1));
-  if (idx >= 0 && idx <= span.end + 5) {
-    return { start: span.start, end: idx + aliasNeedle.length };
-  }
-  return span;
-}
-
 function normalizeJoinType(join: string | undefined): JoinType {
   if (!join) return 'INNER JOIN';
   const upper = join.toUpperCase().replace(/\s+/g, ' ').trim();
+  if (upper.includes('STRAIGHT')) return 'STRAIGHT JOIN';
   if (upper.includes('LEFT')) return 'LEFT JOIN';
   if (upper.includes('RIGHT')) return 'RIGHT JOIN';
   if (upper.includes('FULL')) return 'FULL JOIN';
@@ -255,30 +252,107 @@ function normalizeJoinType(join: string | undefined): JoinType {
   return 'INNER JOIN';
 }
 
+function locStartOffset(node: any): number | null {
+  const offset = node?.loc?.start?.offset;
+  return typeof offset === 'number' ? offset : null;
+}
+
+function firstSelectItemOffset(ast: any): number | null {
+  const col = ast?.columns?.[0];
+  const offset = col?.expr?.loc?.start?.offset ?? col?.loc?.start?.offset;
+  return typeof offset === 'number' ? offset : null;
+}
+
+function firstFromTableOffset(ast: any): number | null {
+  const from = ast?.from;
+  const first = Array.isArray(from) ? from[0] : from;
+  return locStartOffset(first);
+}
+
+function pushSelectLocRange(node: any, ranges: Array<{ start: number; end: number }>): void {
+  const start = locStartOffset(node);
+  const end = node?.loc?.end?.offset;
+  if (start != null && typeof end === 'number' && end > start) {
+    ranges.push({ start, end });
+  }
+}
+
+/** SELECT リスト内のスカラーサブクエリなど、このクエリ自身のヒント判定から除外する入れ子 SELECT */
+function collectNestedSelectRangesFromExpr(
+  node: any,
+  ranges: Array<{ start: number; end: number }>,
+  seen: Set<unknown> = new Set(),
+): void {
+  if (!node || typeof node !== 'object') return;
+  if (seen.has(node)) return;
+  seen.add(node);
+
+  if (Array.isArray(node)) {
+    for (const item of node) collectNestedSelectRangesFromExpr(item, ranges, seen);
+    return;
+  }
+
+  const selectAst =
+    node.type === 'select' ? node : node.ast?.type === 'select' ? node.ast : null;
+  if (selectAst) {
+    pushSelectLocRange(selectAst, ranges);
+    return;
+  }
+
+  if (node.type === 'subquery') {
+    collectNestedSelectRangesFromExpr(node.subquery?.ast ?? node.subquery, ranges, seen);
+    return;
+  }
+
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'loc') continue;
+    collectNestedSelectRangesFromExpr(value, ranges, seen);
+  }
+}
+
+/** WITH 内 SELECT や先頭列のスカラーサブクエリなど、このクエリ自身の SELECT に属さない入れ子範囲 */
+function nestedSelectRangesToExclude(ast: any): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const entry of ast?.with ?? []) {
+    const inner = entry?.stmt?.ast ?? entry?.stmt;
+    pushSelectLocRange(inner, ranges);
+  }
+  for (const col of ast?.columns ?? []) {
+    collectNestedSelectRangesFromExpr(col?.expr ?? col, ranges);
+  }
+  return ranges;
+}
+
+function matchStraightJoinHintIndex(ast: any): number {
+  if (straightJoinHintSelectStarts.length === 0) return -1;
+  const astStart = locStartOffset(ast);
+  if (astStart == null) return -1;
+  const exact = straightJoinHintSelectStarts.indexOf(astStart);
+  if (exact >= 0) return exact;
+
+  // 先頭列に loc が無いときは FROM 開始まで。クエリ全体 (ast.loc.end) まで広げると
+  // SELECT リスト内サブクエリのヒントが外側 JOIN に漏れる
+  const windowEnd = firstSelectItemOffset(ast) ?? firstFromTableOffset(ast);
+  if (windowEnd == null) return -1;
+
+  const excluded = nestedSelectRangesToExclude(ast);
+  return straightJoinHintSelectStarts.findIndex((hintStart) => {
+    if (hintStart < astStart || hintStart >= windowEnd) return false;
+    return !excluded.some((range) => hintStart >= range.start && hintStart < range.end);
+  });
+}
+
+function straightJoinHintSpanForAst(ast: any): SourceSpan | undefined {
+  const index = matchStraightJoinHintIndex(ast);
+  if (index < 0) return undefined;
+  return straightJoinHintOriginalSpans[index];
+}
+
 /** JOIN 種別の表示用文字列（NATURAL JOIN 対応） */
 export function formatJoinDisplayType(join: Pick<JoinEdge, 'type' | 'isNatural'>): string {
   if (!join.isNatural) return join.type;
   const base = join.type === 'JOIN' ? 'INNER JOIN' : join.type;
   return `NATURAL ${base}`;
-}
-
-/** node-sql-parser は NATURAL 非対応のため剥がし、位置で後から復元する */
-function preprocessSqlForParser(sql: string): { sql: string; naturalJoinStarts: number[] } {
-  const starts: number[] = [];
-  let processed = '';
-  let lastIndex = 0;
-  const re = /\bNATURAL\s+((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+)?JOIN\b/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(sql)) !== null) {
-    processed += sql.slice(lastIndex, match.index);
-    const type = match[1]?.trim().toUpperCase() || 'INNER';
-    const replacement = `${type} JOIN`;
-    starts.push(processed.length);
-    processed += replacement;
-    lastIndex = match.index + match[0].length;
-  }
-  processed += sql.slice(lastIndex);
-  return { sql: processed, naturalJoinStarts: starts };
 }
 
 function fromEntryRegionEnd(entry: any): number {
@@ -630,7 +704,7 @@ function enrichConditionTree(node: ConditionNode): ConditionNode {
   return normalizeConditionTree(enriched);
 }
 
-function parseColumns(columns: any[], rawSql?: string): SelectColumn[] {
+function parseColumns(columns: any[]): SelectColumn[] {
   if (!columns || columns.length === 0) return [{ expression: '*' }];
 
   return columns.map((col) => {
@@ -643,11 +717,7 @@ function parseColumns(columns: any[], rawSql?: string): SelectColumn[] {
     }
     const expr = col.expr ? exprToString(col.expr) : exprToString(col);
     const alias = col.as ?? col.alias;
-    const sourceSpan = extendColumnSpanWithAlias(
-      rawSql,
-      col,
-      columnEntrySourceSpan(col),
-    );
+    const sourceSpan = columnEntrySourceSpan(col);
     return { expression: expr, alias: alias || undefined, sourceSpan };
   });
 }
@@ -833,7 +903,7 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
   return { tables, joins };
 }
 
-function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
+function buildSelectParsed(ast: any): ParsedQuery {
   const { tables, joins } = parseFromClause(ast.from);
 
   let where = parseConditionTree(ast.where);
@@ -853,6 +923,7 @@ function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
   }));
 
   const { limit, offset, limitSpan, offsetSpan, limitCommaOffset } = parseLimitOffset(ast);
+  const straightJoinHintSpan = straightJoinHintSpanForAst(ast);
 
   return {
     rawSql: '',
@@ -862,7 +933,7 @@ function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
     joins,
     where,
     having,
-    columns: parseColumns(ast.columns, rawSql),
+    columns: parseColumns(ast.columns),
     groupBy,
     orderBy,
     limit,
@@ -871,18 +942,20 @@ function buildSelectParsed(ast: any, rawSql?: string): ParsedQuery {
     offsetSpan,
     limitCommaOffset,
     distinct: Boolean(ast.distinct),
+    straightJoinHint: Boolean(straightJoinHintSpan) || undefined,
+    straightJoinHintSpan,
   };
 }
 
 function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
   const ctes = parseWithClause(ast.with);
   const branches = collectUnionBranches(ast);
-  let main = applyCtesToQuery(buildSelectParsed(branches[0].ast, rawSql), ctes);
+  let main = applyCtesToQuery(buildSelectParsed(branches[0].ast), ctes);
   main.rawSql = rawSql;
 
   if (branches.length > 1) {
     main.unionBranches = branches.map((branch, index) => {
-      const branchQuery = applyCtesToQuery(buildSelectParsed(branch.ast, rawSql), ctes);
+      const branchQuery = applyCtesToQuery(buildSelectParsed(branch.ast), ctes);
       const sourceSpan = toSourceSpan(branch.ast?.loc);
       return {
         id: nextId('union'),
@@ -1079,8 +1152,16 @@ export function parseMySqlQuery(sql: string): ParseResult {
   }
 
   try {
-    const { sql: preprocessed, naturalJoinStarts: starts } = preprocessSqlForParser(trimmed);
+    const {
+      sql: preprocessed,
+      naturalJoinStarts: starts,
+      straightJoinHintSelectStarts: straightStarts,
+      straightJoinHintOriginalSpans: straightSpans,
+      processedToOriginal,
+    } = preprocessSqlForParser(trimmed);
     naturalJoinStarts = starts;
+    straightJoinHintSelectStarts = straightStarts;
+    straightJoinHintOriginalSpans = straightSpans;
     processedSqlForNatural = preprocessed;
     const ast = parser.astify(preprocessed, {
       database: 'MySQL',
@@ -1093,16 +1174,21 @@ export function parseMySqlQuery(sql: string): ParseResult {
       return { success: false, error: { message: '解析できるSQLが見つかりません' } };
     }
 
+    const remap = (query: ParsedQuery) => remapParsedQuerySpans(processedToOriginal, query, trimmed);
+
     if (first.type === 'select') {
-      return { success: true, query: parseSelectQuery(first, trimmed) };
+      const query = parseSelectQuery(first, trimmed);
+      return { success: true, query: remap(query) };
     }
 
     if (first.type === 'update') {
-      return { success: true, query: parseUpdateAst(first, trimmed) };
+      const query = parseUpdateAst(first, trimmed);
+      return { success: true, query: remap(query) };
     }
 
     if (first.type === 'delete') {
-      return { success: true, query: parseDeleteAst(first, trimmed) };
+      const query = parseDeleteAst(first, trimmed);
+      return { success: true, query: remap(query) };
     }
 
     return {

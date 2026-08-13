@@ -72,6 +72,41 @@ describe('compareQueryResults', () => {
     expect(diff.categories.find((c) => c.id === 'joins')?.status).toBe('same');
   });
 
+  it('STRAIGHT JOIN と INNER JOIN は結果集合として同じ', () => {
+    const a = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id',
+    );
+    const b = mustParse(
+      'SELECT u.id FROM users u STRAIGHT_JOIN orders o ON u.id = o.user_id',
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.categories.find((c) => c.id === 'joins')?.status).toBe('same');
+  });
+
+  it('SELECT STRAIGHT_JOIN ヒント付き JOIN も INNER JOIN と結果集合として同じ', () => {
+    const a = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON u.id = o.user_id',
+    );
+    const b = mustParse(
+      'SELECT STRAIGHT_JOIN u.id FROM users u JOIN orders o ON u.id = o.user_id',
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.categories.find((c) => c.id === 'joins')?.status).toBe('same');
+  });
+
+  it('STRAIGHT JOIN のテーブル順入れ替えでも結果集合は同等', () => {
+    const a = mustParse(
+      'SELECT u.id FROM users u STRAIGHT_JOIN orders o ON u.id = o.user_id',
+    );
+    const b = mustParse(
+      'SELECT u.id FROM orders o STRAIGHT_JOIN users u ON u.id = o.user_id',
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+  });
+
   it('LEFT JOIN の保全側入れ替えは結果が異なると判定する', () => {
     const a = mustParse(
       'SELECT u.id, o.id FROM users u LEFT JOIN orders o ON u.id = o.user_id',
@@ -331,6 +366,18 @@ INNER JOIN orders o
     expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
   });
 
+  it('CROSS JOIN ON の WHERE→ON 配置違いでも要確認ヒントを出す', () => {
+    const a = mustParse(
+      "SELECT u.id FROM users u CROSS JOIN orders o ON u.id = o.user_id WHERE o.status = 'paid'",
+    );
+    const b = mustParse(
+      "SELECT u.id FROM users u CROSS JOIN orders o ON u.id = o.user_id AND o.status = 'paid'",
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(true);
+  });
+
   it('3 表 JOIN の WHERE→ON 配置違いでも要確認ヒントを出す', () => {
     const a = mustParse(`SELECT u.id, p.name
 FROM users u
@@ -507,6 +554,17 @@ WHERE EXISTS (SELECT 1 FROM mydb.orders o WHERE o.user_id = u.id)`);
     const joinSql = mustParse(`SELECT DISTINCT u.id
 FROM mydb.users u
 INNER JOIN mydb.orders o ON o.user_id = u.id`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+  });
+
+  it('DISTINCT CROSS JOIN でも EXISTS↔JOIN ヒントを出す', () => {
+    const existsSql = mustParse(`SELECT u.id
+FROM users u
+WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id
+FROM users u
+CROSS JOIN orders o ON o.user_id = u.id`);
     const diff = compareQueryResults(existsSql, joinSql);
     expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
   });

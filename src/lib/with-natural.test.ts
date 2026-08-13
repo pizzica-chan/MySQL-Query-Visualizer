@@ -77,6 +77,21 @@ describe('NATURAL JOIN', () => {
     expect(optional?.entries.some((e) => e.join?.type === 'NATURAL LEFT JOIN')).toBe(true);
   });
 
+  it('NATURAL LEFT OUTER JOIN も NATURAL LEFT JOIN として解析できる', () => {
+    const sql = `
+      SELECT *
+      FROM users u
+      NATURAL LEFT OUTER JOIN profiles p
+    `;
+    const result = parseMySqlQuery(sql);
+    expect(result.success, result.success ? '' : result.error.message).toBe(true);
+    if (!result.success) return;
+
+    const join = result.query.joins[0]!;
+    expect(join.isNatural).toBe(true);
+    expect(formatJoinDisplayType(join)).toBe('NATURAL LEFT JOIN');
+  });
+
   it('エイリアス解決後も NATURAL 表示を維持する', () => {
     const sql = `SELECT * FROM users u NATURAL JOIN orders o`;
     const result = parseMySqlQuery(sql);

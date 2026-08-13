@@ -1,4 +1,12 @@
 import type { SourceSpan } from './types';
+import {
+  isDashLineCommentStart,
+  readBacktickIdentifierEnd,
+  readBlockCommentEnd,
+  readHashLineCommentEnd,
+  readLineCommentEnd,
+  readQuotedStringEnd,
+} from './sql-lex';
 
 export type SqlHighlightKind =
   | 'keyword'
@@ -18,6 +26,8 @@ const KEYWORDS = [
   'UNION ALL',
   'GROUP BY',
   'ORDER BY',
+  'STRAIGHT JOIN',
+  'STRAIGHT_JOIN',
   'INNER JOIN',
   'LEFT JOIN',
   'RIGHT JOIN',
@@ -111,54 +121,23 @@ function matchKeyword(text: string, pos: number): string | null {
 }
 
 function readLineComment(text: string, pos: number): string {
-  let i = pos + 2;
-  while (i < text.length && text[i] !== '\n') i += 1;
-  return text.slice(pos, i);
+  return text.slice(pos, readLineCommentEnd(text, pos));
+}
+
+function readHashLineComment(text: string, pos: number): string {
+  return text.slice(pos, readHashLineCommentEnd(text, pos));
 }
 
 function readBlockComment(text: string, pos: number): string {
-  let i = pos + 2;
-  while (i < text.length - 1) {
-    if (text[i] === '*' && text[i + 1] === '/') {
-      return text.slice(pos, i + 2);
-    }
-    i += 1;
-  }
-  return text.slice(pos);
+  return text.slice(pos, readBlockCommentEnd(text, pos));
 }
 
 function readQuotedString(text: string, pos: number, quote: "'" | '"'): string {
-  let i = pos + 1;
-  while (i < text.length) {
-    if (text[i] === quote) {
-      if (text[i + 1] === quote) {
-        i += 2;
-        continue;
-      }
-      return text.slice(pos, i + 1);
-    }
-    if (text[i] === '\\' && i + 1 < text.length) {
-      i += 2;
-      continue;
-    }
-    i += 1;
-  }
-  return text.slice(pos);
+  return text.slice(pos, readQuotedStringEnd(text, pos, quote));
 }
 
 function readBacktickIdentifier(text: string, pos: number): string {
-  let i = pos + 1;
-  while (i < text.length) {
-    if (text[i] === '`') {
-      if (text[i + 1] === '`') {
-        i += 2;
-        continue;
-      }
-      return text.slice(pos, i + 1);
-    }
-    i += 1;
-  }
-  return text.slice(pos);
+  return text.slice(pos, readBacktickIdentifierEnd(text, pos));
 }
 
 function readNumber(text: string, pos: number): string | null {
@@ -184,8 +163,14 @@ export function tokenizeSql(sql: string): SqlHighlightToken[] {
     const ch = sql[i];
     const next = sql[i + 1];
 
-    if (ch === '-' && next === '-') {
+    if (isDashLineCommentStart(sql, i)) {
       pushToken(tokens, 'comment', readLineComment(sql, i));
+      i += tokens[tokens.length - 1].text.length;
+      continue;
+    }
+
+    if (ch === '#') {
+      pushToken(tokens, 'comment', readHashLineComment(sql, i));
       i += tokens[tokens.length - 1].text.length;
       continue;
     }

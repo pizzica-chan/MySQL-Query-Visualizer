@@ -4,6 +4,8 @@ import { resolveJoinConditionExpression } from './join-condition';
 export interface EffectiveInnerReason {
   kind: 'inner_join' | 'where' | 'having';
   label: string;
+  /** kind === 'inner_join' のときの結合種別 */
+  joinType?: JoinType;
 }
 
 export interface EffectiveInnerAnalysis {
@@ -41,8 +43,8 @@ function expressionReferencesTable(expr: string, table: TableRef): boolean {
   });
 }
 
-function isInnerJoinType(type: JoinType): boolean {
-  return type === 'INNER JOIN' || type === 'JOIN';
+export function isInnerJoinType(type: JoinType): boolean {
+  return type === 'INNER JOIN' || type === 'JOIN' || type === 'STRAIGHT JOIN';
 }
 
 function isOuterJoinWithNullableSide(type: JoinType): boolean {
@@ -81,7 +83,8 @@ function tableDisplayLabel(table: TableRef): string {
 function innerJoinReasonLabel(join: JoinEdge, tables: TableRef[]): string {
   const target = tables.find((t) => t.id === join.targetId);
   const name = target ? tableDisplayLabel(target) : join.targetId;
-  return `INNER JOIN ${name}`;
+  const typeLabel = join.type === 'JOIN' ? 'INNER JOIN' : join.type;
+  return `${typeLabel} ${name}`;
 }
 
 function isNullPreservingCondition(node: ConditionNode): boolean {
@@ -246,6 +249,7 @@ function findSubsequentInnerJoinReasons(
     reasons.push({
       kind: 'inner_join',
       label: innerJoinReasonLabel(join, tables),
+      joinType: join.type,
     });
   }
 
@@ -306,8 +310,10 @@ export function analyzeEffectiveInnerJoins(query: ParsedQuery): EffectiveInnerAn
 }
 
 export function formatEffectiveInnerCausePhrase(reasons: EffectiveInnerReason[]): string {
-  if (reasons.some((r) => r.kind === 'inner_join')) {
-    return '後続の INNER JOIN により';
+  const innerReasons = reasons.filter((r) => r.kind === 'inner_join');
+  if (innerReasons.length > 0) {
+    const allStraight = innerReasons.every((r) => r.joinType === 'STRAIGHT JOIN');
+    return allStraight ? '後続の STRAIGHT JOIN により' : '後続の INNER JOIN により';
   }
   const parts: string[] = [];
   if (reasons.some((r) => r.kind === 'where')) parts.push('WHERE');

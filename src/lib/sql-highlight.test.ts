@@ -13,11 +13,28 @@ describe('sql-highlight', () => {
     expect(tokens.some((t) => t.kind === 'keyword' && t.text.toUpperCase() === 'FROM')).toBe(true);
   });
 
+  it('STRAIGHT_JOIN をキーワードとしてハイライトする', () => {
+    const tokens = kinds('SELECT STRAIGHT_JOIN u.id FROM users u STRAIGHT_JOIN orders o ON o.user_id = u.id');
+    expect(tokens.filter((t) => t.kind === 'keyword' && t.text.toUpperCase() === 'STRAIGHT_JOIN')).toHaveLength(2);
+  });
+
+  it('# 行コメントをハイライトする', () => {
+    const tokens = kinds('SELECT id FROM t # USE INDEX (idx)\nJOIN u ON u.id = t.id');
+    expect(tokens.some((t) => t.kind === 'comment' && t.text.includes('USE INDEX'))).toBe(true);
+    expect(tokens.some((t) => t.kind === 'keyword' && t.text.toUpperCase() === 'JOIN')).toBe(true);
+  });
+
   it('文字列リテラルとコメントをハイライトする', () => {
     const tokens = kinds("WHERE name = 'O''Reilly' -- comment\n/* block */");
     expect(tokens.some((t) => t.kind === 'string' && t.text === "'O''Reilly'")).toBe(true);
     expect(tokens.some((t) => t.kind === 'comment' && t.text === '-- comment')).toBe(true);
     expect(tokens.some((t) => t.kind === 'comment' && t.text === '/* block */')).toBe(true);
+  });
+
+  it('空白なしの -- はコメントにしない', () => {
+    const tokens = tokenizeSql('SELECT a--b FROM t');
+    expect(tokens.some((t) => t.kind === 'comment')).toBe(false);
+    expect(tokens.map((t) => t.text).join('')).toBe('SELECT a--b FROM t');
   });
 
   it('>= などの演算子をリテラル表示する', () => {

@@ -9,6 +9,8 @@ export interface EffectTextSegment {
 
 const SQL_KEYWORDS = [
   '実質 INNER JOIN',
+  'STRAIGHT JOIN',
+  'STRAIGHT_JOIN',
   'INNER JOIN',
   'LEFT JOIN',
   'RIGHT JOIN',

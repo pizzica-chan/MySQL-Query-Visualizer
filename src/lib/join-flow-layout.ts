@@ -2,7 +2,7 @@ import type { Edge, Node } from '@xyflow/react';
 import { MarkerType } from '@xyflow/react';
 import { effectiveInnerAnalysisByJoinId } from './join-effective-inner';
 import { formatJoinDisplayType } from './parser';
-import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from './types';
+import type { JoinEdge, JoinType, ParsedQuery, SourceSpan, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
 import {
   computeJoinNodePositions,
@@ -27,12 +27,13 @@ export const JOIN_NODE_HANDLE_OFFSETS = ['22%', '50%', '78%'] as const;
 
 const DEFAULT_PATH_CURVATURE = 0.28;
 
-export const JOIN_EDGE_COLORS: Record<string, string> = {
+export const JOIN_EDGE_COLORS: Record<JoinType, string> = {
   'INNER JOIN': '#6b9fd4',
   'LEFT JOIN': '#7db88a',
   'RIGHT JOIN': '#d4b06a',
   'FULL JOIN': '#a89fd4',
   'CROSS JOIN': '#d47a7a',
+  'STRAIGHT JOIN': '#5a9e8f',
   JOIN: '#6b9fd4',
 };
 

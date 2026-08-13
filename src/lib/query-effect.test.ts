@@ -141,6 +141,84 @@ describe('query-effect', () => {
     expect(effect.sections.some((s) => s.kind === 'aggregate')).toBe(true);
   });
 
+  it('STRAIGHT JOIN のフィルタ見出しは INNER JOIN に潰さない', () => {
+    const sql = `
+      SELECT u.id
+      FROM users u
+      STRAIGHT_JOIN orders o ON o.user_id = u.id
+    `;
+    expect(joinFilterNodes(sql).some((n) => n.label === 'STRAIGHT JOIN')).toBe(true);
+    expect(joinFilterNodes(sql).some((n) => n.label === 'INNER JOIN')).toBe(false);
+
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const jpScope = buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'scope');
+    expect(lineTexts(jpScope).some((l) => l.includes('STRAIGHT JOIN'))).toBe(true);
+    expect(lineTexts(jpScope).some((l) => l.includes('SELECT STRAIGHT_JOIN'))).toBe(false);
+  });
+
+  it('SELECT STRAIGHT_JOIN ヒントは JOIN 種別にせず作用説明に出す', () => {
+    const sql = `
+      SELECT STRAIGHT_JOIN u.id
+      FROM users u
+      JOIN orders o ON o.user_id = u.id
+    `;
+    expect(joinFilterNodes(sql).some((n) => n.label === 'INNER JOIN' || n.label === 'JOIN')).toBe(
+      true,
+    );
+    expect(joinFilterNodes(sql).some((n) => n.label === 'STRAIGHT JOIN')).toBe(false);
+
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const jpScope = buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'scope');
+    expect(lineTexts(jpScope).some((l) => l.includes('SELECT STRAIGHT_JOIN'))).toBe(true);
+    expect(lineTexts(jpScope).some((l) => /を INNER JOIN|を JOIN/.test(l))).toBe(true);
+
+    const hintLine = jpScope?.lines?.find((l) => l.text.includes('SELECT STRAIGHT_JOIN'));
+    expect(hintLine?.sourceSpan).toBeDefined();
+    expect(result.query.rawSql.slice(hintLine!.sourceSpan!.start, hintLine!.sourceSpan!.end)).toMatch(
+      /SELECT\s+STRAIGHT_JOIN/i,
+    );
+  });
+
+  it('CROSS JOIN に ON があるときは直積ではなく結合条件として説明する', () => {
+    const sql = `
+      SELECT u.id
+      FROM users u
+      CROSS JOIN orders o ON o.user_id = u.id
+    `;
+    expect(joinFilterNodes(sql).some((n) => n.label === 'CROSS JOIN')).toBe(true);
+
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const jpScope = buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'scope');
+    expect(lineTexts(jpScope).some((l) => l.includes('CROSS JOIN') && l.includes('o.user_id = u.id'))).toBe(
+      true,
+    );
+    expect(lineTexts(jpScope).some((l) => l.includes('直積'))).toBe(false);
+
+    const sqlScope = buildQueryEffect(result.query, 'sql').sections.find((s) => s.kind === 'scope');
+    expect(lineTexts(sqlScope).some((l) => l.includes('すべての組み合わせ'))).toBe(false);
+  });
+
+  it('ON のない CROSS JOIN は直積として説明する', () => {
+    const sql = `
+      SELECT u.id
+      FROM users u
+      CROSS JOIN orders o
+    `;
+    expect(joinFilterNodes(sql).some((n) => n.label === 'CROSS JOIN')).toBe(false);
+
+    const result = parseMySqlQuery(sql);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const jpScope = buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'scope');
+    expect(lineTexts(jpScope).some((l) => l.includes('直積'))).toBe(true);
+  });
+
   it('SELECT の表示対象はエイリアス解決の有無に関わらず実テーブル名とエイリアスを併記する', () => {
     const result = parseMySqlQuery(SAMPLE_SQL);
     expect(result.success).toBe(true);

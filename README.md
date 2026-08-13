@@ -131,15 +131,17 @@ npm run test:dist     # ビルド + オフライン監査・JOIN 図描画テス
 
 ### SQL 構文（主要）
 
-- JOIN: INNER / LEFT / RIGHT / FULL / CROSS、**NATURAL JOIN**、**JOIN USING**、暗黙 JOIN（カンマ区切り）
+- JOIN: INNER / LEFT / RIGHT / FULL / CROSS / **STRAIGHT_JOIN**、**NATURAL JOIN**、**JOIN USING**、暗黙 JOIN（カンマ区切り）
 - **WITH（CTE）** — 定義の解析と FROM 参照の紐付け、作用説明での表示
 - WHERE / HAVING: 比較、IN、BETWEEN、LIKE、IS NULL、EXISTS、NOT、AND / OR
 - GROUP BY / ORDER BY / LIMIT / OFFSET / DISTINCT
+- MySQL ヒント・修飾子: `SELECT STRAIGHT_JOIN`（クエリ単位の結合順ヒント。FROM の JOIN 種別は書き換えない） / `DISTINCTROW` 等、`USE`/`FORCE`/`IGNORE INDEX`、`PARTITION`、`UPDATE`/`DELETE` の `LOW_PRIORITY` / `IGNORE` / `QUICK`
 
 ### 未対応・制限
 
 - INSERT / REPLACE など上記以外の文種
 - ウィンドウ関数の専用説明
+- オプティマイザヒントコメント（`/*+ STRAIGHT_JOIN */` 等）
 - 実行計画・実際の行数取得（解析・可視化のみ）
 - SQL前後比較における意味的等価の厳密証明（構文構造の差分検出まで）
 
