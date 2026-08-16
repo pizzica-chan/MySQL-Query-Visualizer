@@ -694,6 +694,23 @@ body {
   line-height: 1.5;
 }
 
+.result-diff-proof-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(125, 184, 138, 0.4);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: rgba(125, 184, 138, 0.1);
+  font-size: 0.83rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.result-diff-summary--review-needed .result-diff-proof-note {
+  border-color: rgba(212, 176, 106, 0.45);
+  background: rgba(212, 176, 106, 0.1);
+}
+
 .result-diff-limit-warning {
   margin-top: 12px;
   padding: 10px 12px;

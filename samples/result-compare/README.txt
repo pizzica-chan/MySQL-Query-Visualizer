@@ -6,9 +6,15 @@ SQL前後比較モード用の手動テスト用サンプル（アプリから�
   3. 期待結果は各フォルダの expected.txt を参照
 
 判定の見方（アプリ）:
-  緑 … 構文上、結果に影響しうる差分なし
-  黄 … 構文差分あり（並びのみ、または要確認ヒント付きリファクタ）
+  緑 … 構文上、結果に影響しうる差分なし／または等価性を証明済み
+  黄 … 構文差分あり（並びのみ、要確認ヒント付きリファクタ、重複行のみ未保証）
   赤 … 明確に結果が変わりうる構文差分
+
+等価証明について:
+  INNER 相当の JOIN・AND・= のみ・修飾済み列だけで書かれたクエリ（合接クエリ）は、
+  準同型写像の相互存在で結果セットの一致を「証明」できる。
+  OR / NOT EXISTS / OUTER JOIN / 集約 / LIMIT / 不等号などが 1 つでもあれば証明の対象外となり、
+  従来どおりの構文差分表示に戻る（証明できないときに「同じ」と言うことはない）。
 
 ケース一覧:
   --- 1. 構文同等 → 結果同じと推定（緑） ---
@@ -19,12 +25,15 @@ SQL前後比較モード用の手動テスト用サンプル（アプリから�
   10-comma-to-inner-join    … カンマ結合 → 明示 INNER JOIN
   12-left-join-effective-inner   … LEFT JOIN + WHERE（右表列）→ INNER JOIN 相当
 
+  --- 1b. 構文差分あり → 等価性を証明（緑・証明済み） ---
+  14-exists-to-join-distinct     … 相関 EXISTS → JOIN（両方 DISTINCT）
+
   --- 並び順のみ（黄 / order-only） ---
   03-order-by-only          … ORDER BY のみ変更
 
   --- 2. 構文差分あり・意味は同等になりやすい（黄 / 要確認ヒント） ---
-  07-subquery-to-join       … 相関 EXISTS → JOIN + DISTINCT
-  09-where-to-on            … WHERE 絞り込みを ON へ移動（INNER）
+  07-subquery-to-join       … 相関 EXISTS → JOIN + DISTINCT（重複行のみ未保証）
+  09-where-to-on            … WHERE 絞り込みを ON へ移動（不等号ありで証明対象外）
   13-join-order-limit-no-order-by … INNER JOIN 順入れ替え + LIMIT（ORDER BY なし）
 
   --- 3. 結果が変わる（赤） ---

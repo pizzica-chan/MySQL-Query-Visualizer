@@ -1,4 +1,5 @@
 import { applyAliasResolution } from './alias-resolver';
+import { proveCqEquivalence, type CqEquivalenceResult } from './cq-equivalence';
 import {
   isInnerLikeJoin,
   joinHasOnCondition,
@@ -56,6 +57,11 @@ export interface QueryResultDiff {
   matchedViaEffectiveInner: boolean;
   /** LIMIT / OFFSET ありかつ ORDER BY なし（いずれかまたは両方のクエリ） */
   limitWithoutOrderActive: boolean;
+  /**
+   * 合接クエリ断片に収まる場合の等価性証明。
+   * 構文差分があっても証明できれば結果セットは同じと言い切れる。証明できないときは not-proven。
+   */
+  equivalenceProof: CqEquivalenceResult;
 }
 
 export interface ReviewHint {
@@ -77,6 +83,8 @@ export interface ResultDiffSummary {
   effectiveInnerNote?: string;
   /** LIMIT あり・ORDER BY なしのときの注意（目立つ警告） */
   limitWithoutOrderWarning?: string;
+  /** 合接クエリ断片で等価性を証明できたときの説明 */
+  proofNote?: string;
   /** サマリー本文 */
   body: string;
   /** 要確認ヒント（黄トーン時など） */
@@ -109,16 +117,27 @@ export function orderAffectsResultSet(categories: DiffCategoryResult[]): boolean
   return orderDiffers && hasLimitOrOffset;
 }
 
+/** 「証明済み」の範囲を毎回明示し、一般の意味等価と誤解されないようにする */
+const CQ_SCOPE_NOTE =
+  '判定対象は INNER 相当の JOIN・AND・= のみで構成される範囲（合接クエリ）に限定しています。';
+
 function buildSummaryBody(
   diff: QueryResultDiff,
   tone: ResultDiffSummary['tone'],
   limitWithoutOrderCaution: boolean,
+  proofStatus: CqEquivalenceResult['status'],
 ): string {
   if (limitWithoutOrderCaution) {
     if (diff.equalForResultSet) {
       return '構文上の差分はありませんが、ORDER BY がないため LIMIT / OFFSET で返る行は保証されません。';
     }
     return 'JOIN の記述順などの構文差は、下のカテゴリ一覧には出ない場合があります。ORDER BY がない LIMIT の返る行は実行依存です。';
+  }
+  if (proofStatus === 'proven-equivalent') {
+    return '構文には差分がありますが、書き換え後も返る行の集合が変わらないことを構造から証明しました。';
+  }
+  if (proofStatus === 'proven-equivalent-set-only') {
+    return '重複を除いた行の集合が一致することは証明しました。重複行の個数までは一致しない可能性があります。';
   }
   if (tone === 'review-needed') {
     return '構文上は差分があります。下のヒントに当てはまるリファクタの可能性がありますが、結果が同じことは保証しません。';
@@ -134,6 +153,9 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
   const nonOrderDifferent = diff.categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
   const hasExplicitResultSetDiff = nonOrderDifferent.length > 0;
   const limitWithoutOrderCaution = diff.limitWithoutOrderActive && !hasExplicitResultSetDiff;
+  const proof = diff.equivalenceProof ?? { status: 'not-proven' as const };
+  const proven = proof.status === 'proven-equivalent';
+  const provenSetOnly = proof.status === 'proven-equivalent-set-only';
 
   let order: ResultDiffSummary['order'];
   if (!orderCategory) {
@@ -144,33 +166,50 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     order = { status: 'same', label: '同じ' };
   }
 
-  const resultSetStatus: ResultDiffSummary['resultSet']['status'] = limitWithoutOrderCaution
-    ? 'uncertain'
-    : diff.equalForResultSet
-      ? 'same'
-      : 'different';
-  const resultSetLabel = limitWithoutOrderCaution
-    ? '要確認'
-    : diff.equalForResultSet
-      ? '同じ'
-      : '異なる';
+  let resultSetStatus: ResultDiffSummary['resultSet']['status'];
+  let resultSetLabel: string;
+  if (limitWithoutOrderCaution) {
+    resultSetStatus = 'uncertain';
+    resultSetLabel = '要確認';
+  } else if (diff.equalForResultSet) {
+    resultSetStatus = 'same';
+    resultSetLabel = '同じ';
+  } else if (proven) {
+    resultSetStatus = 'same';
+    resultSetLabel = '同じ（証明済み）';
+  } else if (provenSetOnly) {
+    resultSetStatus = 'uncertain';
+    resultSetLabel = '重複を除けば同じ';
+  } else {
+    resultSetStatus = 'different';
+    resultSetLabel = '異なる';
+  }
 
   let tone: ResultDiffSummary['tone'];
   if (limitWithoutOrderCaution) {
     tone = 'review-needed';
   } else if (diff.equalForResultSet) {
     tone = diff.equalIncludingOrder ? 'same' : 'order-only';
-  } else if (hints.length > 0) {
+  } else if (proven) {
+    tone = orderDiffers ? 'order-only' : 'same';
+  } else if (provenSetOnly || hints.length > 0) {
     tone = 'review-needed';
   } else {
     tone = 'different';
   }
 
-  const title = limitWithoutOrderCaution
-    ? '要確認（LIMIT あり・ORDER BY なし）'
-    : tone === 'review-needed'
-      ? '要確認（構文差分あり）'
-      : '比較結果';
+  let title: string;
+  if (limitWithoutOrderCaution) {
+    title = '要確認（LIMIT あり・ORDER BY なし）';
+  } else if (proven) {
+    title = '比較結果（結果セットの一致を証明）';
+  } else if (provenSetOnly) {
+    title = '要確認（重複行の扱いのみ差分）';
+  } else if (tone === 'review-needed') {
+    title = '要確認（構文差分あり）';
+  } else {
+    title = '比較結果';
+  }
 
   const otherDiffs = nonOrderDifferent;
   let note: string | undefined;
@@ -186,7 +225,12 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     ? 'ORDER BY がない状態で LIMIT / OFFSET があります。構文差分がなくても、返る行は実行計画や結合順に依存して変わり得ます。問題ないと判断せず、実データで確認してください。'
     : undefined;
 
-  const body = buildSummaryBody(diff, tone, limitWithoutOrderCaution);
+  const proofNote =
+    proven || provenSetOnly
+      ? [proof.reason, CQ_SCOPE_NOTE].filter(Boolean).join(' ')
+      : undefined;
+
+  const body = buildSummaryBody(diff, tone, limitWithoutOrderCaution, proof.status);
 
   return {
     tone,
@@ -199,6 +243,7 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     note,
     effectiveInnerNote,
     limitWithoutOrderWarning,
+    proofNote,
     body,
     hints,
   };
@@ -1158,12 +1203,19 @@ export function compareQueryResults(
     );
   }
 
-  let reviewHints = equalForResultSet
-    ? []
-    : detectReviewHints(queryA, queryB, {
-        a: rawA,
-        b: rawB,
-      });
+  // エイリアス解決前の生クエリで判定する（自己結合を潰さないため）
+  const equivalenceProof: CqEquivalenceResult = equalForResultSet
+    ? { status: 'not-proven', reason: '構文差分がないため証明は不要です' }
+    : proveCqEquivalence(queryA, queryB);
+  const proven = equivalenceProof.status !== 'not-proven';
+
+  let reviewHints =
+    equalForResultSet || proven
+      ? []
+      : detectReviewHints(queryA, queryB, {
+          a: rawA,
+          b: rawB,
+        });
 
   if (limitWithoutOrderHint) {
     reviewHints = [
@@ -1192,6 +1244,7 @@ export function compareQueryResults(
     reviewHints,
     matchedViaEffectiveInner,
     limitWithoutOrderActive,
+    equivalenceProof,
   };
 }
 

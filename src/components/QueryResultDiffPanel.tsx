@@ -109,11 +109,19 @@ export function QueryResultDiffPanel({
     diff.categories,
   );
   const hasAnySame = resultSetSame.length > 0 || orderSame.length > 0;
+  const proofStatus = diff.equivalenceProof?.status ?? 'not-proven';
+  const syntaxDiffTitle =
+    proofStatus === 'proven-equivalent'
+      ? '構文の差分（結果セットへの影響なしと証明済み）'
+      : proofStatus === 'proven-equivalent-set-only'
+        ? '構文の差分（重複行の扱い以外は影響なしと証明済み）'
+        : '結果セットに影響する差分';
 
   return (
     <div className="result-diff">
       <p className="result-diff-disclaimer">
-        実データは使いません。SQL 構文の構造比較による推定です。意味的に等価でも構文が違う場合は差分と出ることがあります。
+        実データは使いません。SQL 構文の構造比較による推定です。意味的に等価でも構文が違う場合は差分と出ることがあります（INNER
+        相当の JOIN・AND・= だけで書かれた範囲に限り、等価性を証明できることがあります）。
       </p>
 
       <div className={`result-diff-summary result-diff-summary--${summary.tone}`} role="status">
@@ -140,6 +148,7 @@ export function QueryResultDiffPanel({
           {summary.body}
           {summary.note ? ` ${summary.note}` : ''}
         </p>
+        {summary.proofNote && <p className="result-diff-proof-note">{summary.proofNote}</p>}
         {summary.effectiveInnerNote && (
           <p className="result-diff-effective-inner-note">{summary.effectiveInnerNote}</p>
         )}
@@ -166,7 +175,7 @@ export function QueryResultDiffPanel({
 
       {resultSetDifferent.length > 0 && (
         <section className="result-diff-section">
-          <h3 className="result-diff-section-title">結果セットに影響する差分</h3>
+          <h3 className="result-diff-section-title">{syntaxDiffTitle}</h3>
           <DiffCategoryList categories={resultSetDifferent} />
         </section>
       )}

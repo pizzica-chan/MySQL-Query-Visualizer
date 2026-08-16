@@ -321,7 +321,7 @@ describe('compareQueryResults', () => {
     expect(diff.categories.find((c) => c.id === 'distinct')?.status).toBe('different');
   });
 
-  it('EXISTS ↔ JOIN+DISTINCT は結果異なるまま要確認ヒントを出す', () => {
+  it('EXISTS ↔ JOIN+DISTINCT は重複を除いた一致を証明し、ヒントより強い表示にする', () => {
     const existsSql = mustParse(`SELECT u.id, u.name
 FROM users u
 WHERE u.active = 1
@@ -340,10 +340,34 @@ WHERE u.active = 1
   AND o.status = 'paid'`);
     const diff = compareQueryResults(existsSql, joinSql);
     expect(diff.equalForResultSet).toBe(false);
-    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+    expect(diff.equivalenceProof.status).toBe('proven-equivalent-set-only');
+    // 証明できたら推測ヒントは重複するので出さない
+    expect(diff.reviewHints).toEqual([]);
     const summary = buildResultDiffSummary(diff);
     expect(summary.tone).toBe('review-needed');
-    expect(summary.resultSet.status).toBe('different');
+    expect(summary.resultSet.status).toBe('uncertain');
+    expect(summary.resultSet.label).toBe('重複を除けば同じ');
+    expect(summary.proofNote).toBeTruthy();
+  });
+
+  it('両方 DISTINCT の EXISTS ↔ JOIN は結果セットの一致を証明する', () => {
+    const existsSql = mustParse(`SELECT DISTINCT u.id, u.name
+FROM users u
+WHERE u.active = 1
+  AND EXISTS (
+    SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'paid'
+  )`);
+    const joinSql = mustParse(`SELECT DISTINCT u.id, u.name
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id
+WHERE u.active = 1 AND o.status = 'paid'`);
+    const diff = compareQueryResults(existsSql, joinSql);
+    expect(diff.equivalenceProof.status).toBe('proven-equivalent');
+    expect(diff.reviewHints).toEqual([]);
+    const summary = buildResultDiffSummary(diff);
+    expect(summary.tone).toBe('same');
+    expect(summary.resultSet.status).toBe('same');
+    expect(summary.resultSet.label).toBe('同じ（証明済み）');
   });
 
   it('NOT EXISTS ↔ JOIN+DISTINCT には要確認ヒントを出さない', () => {
@@ -395,7 +419,7 @@ INNER JOIN orders o
     expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
   });
 
-  it('CROSS JOIN ON の WHERE→ON 配置違いでも要確認ヒントを出す', () => {
+  it('CROSS JOIN ON の WHERE→ON 配置違いは重複数まで一致を証明する', () => {
     const a = mustParse(
       "SELECT u.id FROM users u CROSS JOIN orders o ON u.id = o.user_id WHERE o.status = 'paid'",
     );
@@ -404,10 +428,12 @@ INNER JOIN orders o
     );
     const diff = compareQueryResults(a, b);
     expect(diff.equalForResultSet).toBe(false);
-    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(true);
+    expect(diff.equivalenceProof.status).toBe('proven-equivalent');
+    expect(diff.reviewHints).toEqual([]);
+    expect(buildResultDiffSummary(diff).tone).toBe('same');
   });
 
-  it('3 表 JOIN の WHERE→ON 配置違いでも要確認ヒントを出す', () => {
+  it('3 表 JOIN の WHERE→ON 配置違いも一致を証明する', () => {
     const a = mustParse(`SELECT u.id, p.name
 FROM users u
 INNER JOIN orders o ON u.id = o.user_id
@@ -420,8 +446,8 @@ INNER JOIN orders o ON u.id = o.user_id AND o.status = 'paid'
 INNER JOIN products p ON o.product_id = p.id AND p.active = 1`);
     const diff = compareQueryResults(a, b);
     expect(diff.equalForResultSet).toBe(false);
-    expect(diff.reviewHints.some((h) => h.id === 'where-to-on')).toBe(true);
-    expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
+    expect(diff.equivalenceProof.status).toBe('proven-equivalent');
+    expect(buildResultDiffSummary(diff).tone).toBe('same');
   });
 
   it('JOIN 結合構造が違うと WHERE→ON ヒントを出さない', () => {
@@ -552,7 +578,7 @@ WHERE \`u\`.\`active\` = 1 AND o.status = 'paid'`);
     const hints = detectReviewHints(existsSql, joinSql);
     expect(hints.map((h) => h.id)).toEqual(['exists-vs-distinct-join']);
     const diff = compareQueryResults(existsSql, joinSql);
-    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+    expect(diff.equivalenceProof.status).toBe('proven-equivalent-set-only');
     expect(buildResultDiffSummary(diff).tone).toBe('review-needed');
   });
 
@@ -576,7 +602,7 @@ WHERE u.active = 1 AND o.status = 'paid'`);
     expect(buildResultDiffSummary(diff).tone).toBe('different');
   });
 
-  it('スキーマ修飾テーブルでも EXISTS↔JOIN ヒントを出す', () => {
+  it('スキーマ修飾テーブルでも EXISTS↔JOIN の一致を証明する', () => {
     const existsSql = mustParse(`SELECT u.id
 FROM mydb.users u
 WHERE EXISTS (SELECT 1 FROM mydb.orders o WHERE o.user_id = u.id)`);
@@ -584,10 +610,10 @@ WHERE EXISTS (SELECT 1 FROM mydb.orders o WHERE o.user_id = u.id)`);
 FROM mydb.users u
 INNER JOIN mydb.orders o ON o.user_id = u.id`);
     const diff = compareQueryResults(existsSql, joinSql);
-    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+    expect(diff.equivalenceProof.status).toBe('proven-equivalent-set-only');
   });
 
-  it('DISTINCT CROSS JOIN でも EXISTS↔JOIN ヒントを出す', () => {
+  it('DISTINCT CROSS JOIN でも EXISTS↔JOIN の一致を証明する', () => {
     const existsSql = mustParse(`SELECT u.id
 FROM users u
 WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)`);
@@ -595,7 +621,7 @@ WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)`);
 FROM users u
 CROSS JOIN orders o ON o.user_id = u.id`);
     const diff = compareQueryResults(existsSql, joinSql);
-    expect(diff.reviewHints.some((h) => h.id === 'exists-vs-distinct-join')).toBe(true);
+    expect(diff.equivalenceProof.status).toBe('proven-equivalent-set-only');
   });
 
   it('WHERE の OR を ON の AND に崩しただけの差分には where-to-on ヒントを出さない', () => {
