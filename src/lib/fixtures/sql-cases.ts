@@ -397,13 +397,20 @@ WHERE status = 1`,
     },
   },
   {
-    name: 'セミコロン付き（複文の先頭のみ解析）',
+    name: '末尾セミコロン付きの単文',
     category: 'edge',
-    sql: "SELECT id FROM users WHERE status = 1; SELECT id FROM orders",
+    sql: 'SELECT id FROM users WHERE status = 1;',
     expectSuccess: true,
     assert: (q) => {
-      if (tableNames(q)[0] !== 'users') throw new Error('first statement only');
+      if (tableNames(q)[0] !== 'users') throw new Error('users expected');
     },
+  },
+  {
+    name: '複文は 2 文目以降を捨てずにエラーにする',
+    category: 'error',
+    sql: 'SELECT id FROM users WHERE status = 1; SELECT id FROM orders',
+    expectSuccess: false,
+    errorContains: '複数の文',
   },
   {
     name: 'ORのみのWHEREルート',

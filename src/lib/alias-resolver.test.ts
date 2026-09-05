@@ -39,6 +39,29 @@ describe('alias-resolver', () => {
     expect(resolveAliasesInText('o.user_id', map)).toBe('orders.user_id');
   });
 
+  it('文字列リテラル・コメント内のエイリアスは置換しない', () => {
+    const map = buildAliasMap(tables);
+    expect(resolveAliasesInText("u.note = 'u.name'", map)).toBe("users.note = 'u.name'");
+    expect(resolveAliasesInText('u.id /* o.id */ = 1', map)).toBe('users.id /* o.id */ = 1');
+  });
+
+  it('keepSelfJoinAliases で自己結合の別名を実テーブル名へ潰さない', () => {
+    const selfJoined = [
+      { id: 't1', table: 'users', alias: 'u1', displayName: 'u1' },
+      { id: 't2', table: 'users', alias: 'u2', displayName: 'u2' },
+      { id: 't3', table: 'orders', alias: 'o', displayName: 'o' },
+    ];
+    const kept = buildAliasMap(selfJoined, { keepSelfJoinAliases: true });
+    expect(kept.has('u1')).toBe(false);
+    expect(kept.has('u2')).toBe(false);
+    expect(kept.get('o')).toBe('orders');
+
+    // 既定（表示用）は従来どおりすべて解決する
+    const resolved = buildAliasMap(selfJoined);
+    expect(resolved.get('u1')).toBe('users');
+    expect(resolved.get('u2')).toBe('users');
+  });
+
   it('スキーマ付きテーブルのエイリアスを解決する', () => {
     const map = buildAliasMap([
       { id: 't1', schema: 'mydb', table: 'users', alias: 'u', displayName: 'u' },

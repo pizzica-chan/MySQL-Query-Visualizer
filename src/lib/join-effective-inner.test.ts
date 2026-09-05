@@ -47,6 +47,15 @@ describe('join-effective-inner', () => {
         );
       });
 
+      it('文字列リテラル内の `b.` はテーブル参照として数えない', () => {
+        const query = parseSql(`
+          SELECT a.id FROM table_a a
+          LEFT JOIN table_b b ON b.a_id = a.id
+          WHERE a.note = 'b.id'
+        `);
+        expect(analyzeEffectiveInnerJoins(query)).toHaveLength(0);
+      });
+
       it('nullable を参照しない後続 INNER JOIN だけでは検出しない', () => {
         const query = parseSql(`
           SELECT * FROM table_a a

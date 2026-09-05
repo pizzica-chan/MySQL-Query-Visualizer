@@ -1,5 +1,6 @@
 import type { ConditionNode, JoinEdge, JoinType, ParsedQuery, TableRef } from './types';
 import { resolveJoinConditionExpression } from './join-condition';
+import { maskNonCode } from './sql-lex';
 
 export interface EffectiveInnerReason {
   kind: 'inner_join' | 'where' | 'having';
@@ -35,11 +36,22 @@ function tableIdentifiers(table: TableRef): string[] {
   return [...new Set(ids)];
 }
 
+/**
+ * テーブル参照を走査する前に文字列リテラル・コメントを空白へ潰す。
+ * `WHERE u.note = 'o.id'` の `'o.id'` を orders への参照と誤読すると、
+ * 絞り込みが無い LEFT JOIN を実質 INNER と判定してしまう。
+ * maskNonCode は長さを保つので、マスク後の位置は元の式の位置と一致する。
+ */
+function maskExprLiterals(expr: string): string {
+  return maskNonCode(expr);
+}
+
 function expressionReferencesTable(expr: string, table: TableRef): boolean {
   if (!expr) return false;
+  const masked = maskExprLiterals(expr);
   return tableIdentifiers(table).some((id) => {
     const pattern = new RegExp(`\\b${escapeRegex(id)}\\.`, 'i');
-    return pattern.test(expr);
+    return pattern.test(masked);
   });
 }
 
@@ -110,7 +122,8 @@ function isNullPreservingCondition(node: ConditionNode): boolean {
 }
 
 /** IFNULL / COALESCE / NVL の引数範囲（開き括弧の直後〜閉じ括弧直前） */
-function findNullCoalescingArgSpans(expr: string): Array<{ start: number; end: number }> {
+function findNullCoalescingArgSpans(rawExpr: string): Array<{ start: number; end: number }> {
+  const expr = maskExprLiterals(rawExpr);
   const spans: Array<{ start: number; end: number }> = [];
   const re = /\b(?:ifnull|coalesce|nvl)\s*\(/gi;
   let match: RegExpExecArray | null;
@@ -172,7 +185,8 @@ function findNullCoalescingArgSpans(expr: string): Array<{ start: number; end: n
   return spans;
 }
 
-function tableRefStartPositions(expr: string, table: TableRef): number[] {
+function tableRefStartPositions(rawExpr: string, table: TableRef): number[] {
+  const expr = maskExprLiterals(rawExpr);
   const positions: number[] = [];
   for (const id of tableIdentifiers(table)) {
     const pattern = new RegExp(`\\b${escapeRegex(id)}\\.`, 'gi');

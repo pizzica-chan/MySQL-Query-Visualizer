@@ -276,8 +276,13 @@ export function normalizeExpr(text: string | undefined | null): string {
   return stripIdentifierQuotes(text.replace(/\s+/g, ' ').trim().toLowerCase());
 }
 
+/**
+ * 比較用のエイリアス解決。
+ * 自己結合の別名は残す — u1 / u2 を同じ実テーブル名に潰すと
+ * 「どちらのインスタンスを出力・絞り込みしているか」の違いが消え、別結果のクエリを同一と誤判定する。
+ */
 function resolveForDiff(query: ParsedQuery): ParsedQuery {
-  const resolved = applyAliasResolution(query, true);
+  const resolved = applyAliasResolution(query, true, { keepSelfJoinAliases: true });
   return {
     ...resolved,
     ctes: resolved.ctes?.map((cte) => ({

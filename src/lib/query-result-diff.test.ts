@@ -941,3 +941,72 @@ HAVING COUNT(b.id) >= 0`);
     expect(buildResultDiffSummary(diff).effectiveInnerNote).toBeUndefined();
   });
 });
+
+describe('compareQueryResults — 自己結合のインスタンス識別', () => {
+  const selfJoin = (select: string, where = '') =>
+    mustParse(
+      `SELECT ${select}
+FROM users u1
+INNER JOIN users u2 ON u2.id = u1.manager_id${where ? `\nWHERE ${where}` : ''}`,
+    );
+
+  it('出力列がどちらのインスタンスかで結果は異なる', () => {
+    const diff = compareQueryResults(selfJoin('u1.name'), selfJoin('u2.name'));
+    expect(diff.equalForResultSet).toBe(false);
+    expect(buildResultDiffSummary(diff).resultSet.status).not.toBe('same');
+  });
+
+  it('WHERE 条件の掛かるインスタンスが入れ替わると結果は異なる', () => {
+    const diff = compareQueryResults(
+      selfJoin('u1.id', "u1.status = 'a' AND u2.status = 'b'"),
+      selfJoin('u1.id', "u1.status = 'b' AND u2.status = 'a'"),
+    );
+    expect(diff.equalForResultSet).toBe(false);
+  });
+
+  it('ON 条件の向きが逆なら結果は異なる', () => {
+    const a = mustParse('SELECT u1.id FROM users u1 INNER JOIN users u2 ON u2.id = u1.manager_id');
+    const b = mustParse('SELECT u1.id FROM users u1 INNER JOIN users u2 ON u1.id = u2.manager_id');
+    expect(compareQueryResults(a, b).equalForResultSet).toBe(false);
+  });
+
+  it('同一の自己結合クエリは同じと判定する', () => {
+    expect(compareQueryResults(selfJoin('u1.name'), selfJoin('u1.name')).equalForResultSet).toBe(true);
+  });
+
+  it('自己結合でも JOIN の記述順入れ替えは同じと判定する', () => {
+    const a = mustParse('SELECT u1.name FROM users u1 INNER JOIN users u2 ON u2.id = u1.manager_id');
+    const b = mustParse('SELECT u1.name FROM users u2 INNER JOIN users u1 ON u2.id = u1.manager_id');
+    expect(compareQueryResults(a, b).equalForResultSet).toBe(true);
+  });
+
+  it('自己結合でない別名の付け替えは従来どおり同じと判定する', () => {
+    const a = mustParse('SELECT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id');
+    const b = mustParse('SELECT usr.id FROM users usr INNER JOIN orders ord ON ord.user_id = usr.id');
+    expect(compareQueryResults(a, b).equalForResultSet).toBe(true);
+  });
+});
+
+describe('compareQueryResults — 文字列リテラル内のテーブル参照', () => {
+  it("WHERE の 'o.id' というリテラルでは LEFT JOIN を INNER 相当にしない", () => {
+    const left = mustParse(
+      "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE u.note = 'o.id'",
+    );
+    const inner = mustParse(
+      "SELECT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id WHERE u.note = 'o.id'",
+    );
+    const diff = compareQueryResults(left, inner);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.matchedViaEffectiveInner).toBe(false);
+  });
+
+  it('実際に nullable 側を絞り込む条件があれば従来どおり INNER 相当と判定する', () => {
+    const left = mustParse(
+      'SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE o.total > 0',
+    );
+    const inner = mustParse(
+      'SELECT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id WHERE o.total > 0',
+    );
+    expect(compareQueryResults(left, inner).equalForResultSet).toBe(true);
+  });
+});

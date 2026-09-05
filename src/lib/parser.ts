@@ -1174,6 +1174,16 @@ export function parseMySqlQuery(sql: string): ParseResult {
       return { success: false, error: { message: '解析できるSQLが見つかりません' } };
     }
 
+    // 2 文目以降を黙って捨てると、貼り付けミスに気づけないまま 1 文目の解析結果を見てしまう
+    if (statements.length > 1) {
+      return {
+        success: false,
+        error: {
+          message: `複数の文が含まれています（${statements.length} 文）。1 文ずつ入力してください`,
+        },
+      };
+    }
+
     const remap = (query: ParsedQuery) => remapParsedQuerySpans(processedToOriginal, query, trimmed);
 
     if (first.type === 'select') {

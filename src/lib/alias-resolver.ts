@@ -1,31 +1,86 @@
+import { maskNonCode } from './sql-lex';
 import type { ConditionNode, JoinEdge, ParsedQuery, SetClause, DeleteTarget, TableRef } from './types';
+
+export interface AliasResolutionOptions {
+  /**
+   * 同じ実テーブルを複数回参照する（自己結合）とき、その別名を実テーブル名へ潰さない。
+   * 表示上は潰しても別途エイリアスを併記できるが、比較では u1 と u2 が同一名になり
+   * 「出力列や条件がどちらのインスタンスに掛かるか」の違いが消えてしまうため、比較側では true にする。
+   */
+  keepSelfJoinAliases?: boolean;
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function buildAliasMap(tables: TableRef[]): Map<string, string> {
+function physicalTableName(table: TableRef): string {
+  return table.schema ? `${table.schema}.${table.table}` : table.table;
+}
+
+/** 同じ実テーブルを 2 回以上参照しているときの、その正規化名の集合 */
+function selfJoinedPhysicalNames(tables: TableRef[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const t of tables) {
+    if (t.isDerived) continue;
+    const key = physicalTableName(t).toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const duplicated = new Set<string>();
+  for (const [key, count] of counts) {
+    if (count > 1) duplicated.add(key);
+  }
+  return duplicated;
+}
+
+export function buildAliasMap(
+  tables: TableRef[],
+  options: AliasResolutionOptions = {},
+): Map<string, string> {
+  const selfJoined = options.keepSelfJoinAliases ? selfJoinedPhysicalNames(tables) : null;
   const map = new Map<string, string>();
   for (const t of tables) {
     if (!t.alias || t.isDerived) continue;
-    const physical = t.schema ? `${t.schema}.${t.table}` : t.table;
+    const physical = physicalTableName(t);
+    if (selfJoined?.has(physical.toLowerCase())) continue;
     map.set(t.alias, physical);
   }
   return map;
 }
 
+/**
+ * `alias.` を実テーブル名へ置換する。
+ * 文字列リテラル・コメント内（例: `note = 'u.name'`）は置換しない。
+ */
 export function resolveAliasesInText(text: string, aliasMap: Map<string, string>): string {
   if (!text || aliasMap.size === 0) return text;
 
-  let result = text;
+  const masked = maskNonCode(text);
   const aliases = [...aliasMap.keys()].sort((a, b) => b.length - a.length);
+  const hits: Array<{ start: number; end: number; replacement: string }> = [];
 
   for (const alias of aliases) {
     const tableName = aliasMap.get(alias)!;
-    const qualified = new RegExp(`(?<![\\w.])${escapeRegExp(alias)}\\.`, 'g');
-    result = result.replace(qualified, `${tableName}.`);
+    const qualified = new RegExp(`(?<![\\w.\`])${escapeRegExp(alias)}\\.`, 'g');
+    let match: RegExpExecArray | null;
+    while ((match = qualified.exec(masked)) !== null) {
+      hits.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        replacement: `${tableName}.`,
+      });
+    }
   }
 
+  if (hits.length === 0) return text;
+
+  // 置換で長さが変わるため後ろから適用する
+  // （別名同士は `<alias>.` 全体に一致するので範囲が重なることはない）
+  hits.sort((a, b) => b.start - a.start);
+  let result = text;
+  for (const hit of hits) {
+    result = result.slice(0, hit.start) + hit.replacement + result.slice(hit.end);
+  }
   return result;
 }
 
@@ -33,20 +88,24 @@ function resolveStandaloneAlias(name: string, aliasMap: Map<string, string>): st
   return aliasMap.get(name) ?? name;
 }
 
-function resolveConditionNode(node: ConditionNode, aliasMap: Map<string, string>): ConditionNode {
+function resolveConditionNode(
+  node: ConditionNode,
+  aliasMap: Map<string, string>,
+  options: AliasResolutionOptions,
+): ConditionNode {
   return {
     ...node,
     label: resolveAliasesInText(node.label, aliasMap),
     left: node.left ? resolveAliasesInText(node.left, aliasMap) : undefined,
     right: node.right ? resolveAliasesInText(node.right, aliasMap) : undefined,
-    children: node.children?.map((child) => resolveConditionNode(child, aliasMap)),
+    children: node.children?.map((child) => resolveConditionNode(child, aliasMap, options)),
     nestedQuery: node.nestedQuery
-      ? applyAliasResolution(node.nestedQuery, true)
+      ? applyAliasResolution(node.nestedQuery, true, options)
       : undefined,
   };
 }
 
-function resolveTableRef(table: TableRef): TableRef {
+function resolveTableRef(table: TableRef, options: AliasResolutionOptions): TableRef {
   const displayName = table.isDerived
     ? table.displayName
     : table.schema
@@ -56,12 +115,16 @@ function resolveTableRef(table: TableRef): TableRef {
     ...table,
     displayName,
     derivedQuery: table.derivedQuery
-      ? applyAliasResolution(table.derivedQuery, true)
+      ? applyAliasResolution(table.derivedQuery, true, options)
       : undefined,
   };
 }
 
-function resolveJoin(join: JoinEdge, aliasMap: Map<string, string>): JoinEdge {
+function resolveJoin(
+  join: JoinEdge,
+  aliasMap: Map<string, string>,
+  options: AliasResolutionOptions,
+): JoinEdge {
   return {
     ...join,
     layoutCondition: join.layoutCondition ?? join.condition,
@@ -76,7 +139,7 @@ function resolveJoin(join: JoinEdge, aliasMap: Map<string, string>): JoinEdge {
         }
       : undefined,
     conditionRoot: join.conditionRoot
-      ? resolveConditionNode(join.conditionRoot, aliasMap)
+      ? resolveConditionNode(join.conditionRoot, aliasMap, options)
       : undefined,
   };
 }
@@ -97,18 +160,22 @@ function resolveDeleteTarget(target: DeleteTarget, aliasMap: Map<string, string>
   };
 }
 
-/** 解析結果の表示用にエイリアスを実テーブル名へ置換する */
-export function applyAliasResolution(query: ParsedQuery, enabled: boolean): ParsedQuery {
+/** 解析結果の表示・比較用にエイリアスを実テーブル名へ置換する */
+export function applyAliasResolution(
+  query: ParsedQuery,
+  enabled: boolean,
+  options: AliasResolutionOptions = {},
+): ParsedQuery {
   if (!enabled) return query;
 
-  const aliasMap = buildAliasMap(query.tables);
+  const aliasMap = buildAliasMap(query.tables, options);
 
   return {
     ...query,
-    tables: query.tables.map(resolveTableRef),
-    joins: query.joins.map((j) => resolveJoin(j, aliasMap)),
-    where: query.where ? resolveConditionNode(query.where, aliasMap) : undefined,
-    having: query.having ? resolveConditionNode(query.having, aliasMap) : undefined,
+    tables: query.tables.map((table) => resolveTableRef(table, options)),
+    joins: query.joins.map((j) => resolveJoin(j, aliasMap, options)),
+    where: query.where ? resolveConditionNode(query.where, aliasMap, options) : undefined,
+    having: query.having ? resolveConditionNode(query.having, aliasMap, options) : undefined,
     columns: query.columns.map((col) => ({
       ...col,
       expression: resolveAliasesInText(col.expression, aliasMap),
@@ -125,7 +192,7 @@ export function applyAliasResolution(query: ParsedQuery, enabled: boolean): Pars
     })),
     unionBranches: query.unionBranches?.map((branch) => ({
       ...branch,
-      query: applyAliasResolution(branch.query, true),
+      query: applyAliasResolution(branch.query, true, options),
     })),
   };
 }
