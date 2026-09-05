@@ -985,6 +985,25 @@ INNER JOIN users u2 ON u2.id = u1.manager_id${where ? `\nWHERE ${where}` : ''}`,
     const b = mustParse('SELECT usr.id FROM users usr INNER JOIN orders ord ON ord.user_id = usr.id');
     expect(compareQueryResults(a, b).equalForResultSet).toBe(true);
   });
+
+  it('片方が無別名の自己結合で、保存側の条件を実質 INNER の根拠にしない', () => {
+    // WHERE users.status は保存側への条件。u2 への絞り込みではないので LEFT と INNER は別結果
+    const left = mustParse(
+      'SELECT users.id FROM users LEFT JOIN users u2 ON u2.manager_id = users.id WHERE users.status = 1',
+    );
+    const inner = mustParse(
+      'SELECT users.id FROM users INNER JOIN users u2 ON u2.manager_id = users.id WHERE users.status = 1',
+    );
+    const diff = compareQueryResults(left, inner);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.matchedViaEffectiveInner).toBe(false);
+  });
+
+  it('別名の大文字小文字だけの違いは同じと判定する（MySQL は区別しない）', () => {
+    const a = mustParse('SELECT U.id FROM users u INNER JOIN orders o ON o.user_id = u.id');
+    const b = mustParse('SELECT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id');
+    expect(compareQueryResults(a, b).equalForResultSet).toBe(true);
+  });
 });
 
 describe('compareQueryResults — 文字列リテラル内のテーブル参照', () => {

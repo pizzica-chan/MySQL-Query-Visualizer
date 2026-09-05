@@ -413,6 +413,15 @@ WHERE status = 1`,
     errorContains: '複数の文',
   },
   {
+    name: '先頭セミコロン付きの単文（astify の空要素を文数に数えない）',
+    category: 'edge',
+    sql: ';SELECT id FROM users WHERE status = 1',
+    expectSuccess: true,
+    assert: (q) => {
+      if (tableNames(q)[0] !== 'users') throw new Error('users expected');
+    },
+  },
+  {
     name: 'ORのみのWHEREルート',
     category: 'edge',
     sql: 'SELECT id FROM t WHERE a = 1 OR b = 2 OR c = 3',

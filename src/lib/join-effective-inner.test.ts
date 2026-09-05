@@ -56,6 +56,27 @@ describe('join-effective-inner', () => {
         expect(analyzeEffectiveInnerJoins(query)).toHaveLength(0);
       });
 
+      it('自己結合で片方が無別名なら、共有する識別子を根拠にしない', () => {
+        // `users.` は無別名側の参照。u2 への絞り込みと区別できないので根拠にできない
+        const query = parseSql(`
+          SELECT users.id FROM users
+          LEFT JOIN users u2 ON u2.manager_id = users.id
+          WHERE users.status = 1
+        `);
+        expect(analyzeEffectiveInnerJoins(query)).toHaveLength(0);
+      });
+
+      it('自己結合でも別名で区別できれば検出する', () => {
+        const query = parseSql(`
+          SELECT u1.id FROM users u1
+          LEFT JOIN users u2 ON u2.manager_id = u1.id
+          WHERE u2.status = 1
+        `);
+        const analyses = analyzeEffectiveInnerJoins(query);
+        expect(analyses).toHaveLength(1);
+        expect(analyses[0]!.reasons.some((r) => r.kind === 'where')).toBe(true);
+      });
+
       it('nullable を参照しない後続 INNER JOIN だけでは検出しない', () => {
         const query = parseSql(`
           SELECT * FROM table_a a

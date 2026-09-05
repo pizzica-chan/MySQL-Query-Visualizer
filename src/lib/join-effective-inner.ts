@@ -37,6 +37,24 @@ function tableIdentifiers(table: TableRef): string[] {
 }
 
 /**
+ * 式の中でこのテーブル参照だけを指す識別子。
+ *
+ * 自己結合では複数の参照が同じ識別子を持つ（例: `FROM users LEFT JOIN users u2` は
+ * どちらも `users` を候補に持つ）。その識別子でどちらを指しているかは判別できないので除く。
+ * 除いた結果が空なら「参照していない」扱いになり、実質 INNER を検出しない安全側に倒れる。
+ */
+function tableReferenceIdentifiers(table: TableRef, allTables: TableRef[]): string[] {
+  const counts = new Map<string, number>();
+  for (const other of allTables) {
+    for (const id of tableIdentifiers(other)) {
+      const key = id.toLowerCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return tableIdentifiers(table).filter((id) => counts.get(id.toLowerCase()) === 1);
+}
+
+/**
  * テーブル参照を走査する前に文字列リテラル・コメントを空白へ潰す。
  * `WHERE u.note = 'o.id'` の `'o.id'` を orders への参照と誤読すると、
  * 絞り込みが無い LEFT JOIN を実質 INNER と判定してしまう。
@@ -46,10 +64,10 @@ function maskExprLiterals(expr: string): string {
   return maskNonCode(expr);
 }
 
-function expressionReferencesTable(expr: string, table: TableRef): boolean {
+function expressionReferencesTable(expr: string, identifiers: string[]): boolean {
   if (!expr) return false;
   const masked = maskExprLiterals(expr);
-  return tableIdentifiers(table).some((id) => {
+  return identifiers.some((id) => {
     const pattern = new RegExp(`\\b${escapeRegex(id)}\\.`, 'i');
     return pattern.test(masked);
   });
@@ -185,10 +203,10 @@ function findNullCoalescingArgSpans(rawExpr: string): Array<{ start: number; end
   return spans;
 }
 
-function tableRefStartPositions(rawExpr: string, table: TableRef): number[] {
+function tableRefStartPositions(rawExpr: string, identifiers: string[]): number[] {
   const expr = maskExprLiterals(rawExpr);
   const positions: number[] = [];
-  for (const id of tableIdentifiers(table)) {
+  for (const id of identifiers) {
     const pattern = new RegExp(`\\b${escapeRegex(id)}\\.`, 'gi');
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(expr)) !== null) {
@@ -204,28 +222,28 @@ function tableRefStartPositions(rawExpr: string, table: TableRef): number[] {
  */
 function expressionOnlyReferencesTableViaNullCoalescing(
   expr: string,
-  table: TableRef,
+  identifiers: string[],
 ): boolean {
-  if (!expressionReferencesTable(expr, table)) return false;
+  if (!expressionReferencesTable(expr, identifiers)) return false;
   const spans = findNullCoalescingArgSpans(expr);
   if (spans.length === 0) return false;
-  const refs = tableRefStartPositions(expr, table);
+  const refs = tableRefStartPositions(expr, identifiers);
   if (refs.length === 0) return false;
   return refs.every((pos) => spans.some((span) => pos >= span.start && pos < span.end));
 }
 
-function isNullRejectingLeaf(node: ConditionNode, nullableTable: TableRef): boolean {
+function isNullRejectingLeaf(node: ConditionNode, identifiers: string[]): boolean {
   if (isNullPreservingCondition(node)) return false;
   if (!NULL_REJECTING_CONDITION_TYPES.has(node.type)) return false;
 
   const exprs = [node.left, node.label].filter((e): e is string => !!e);
-  if (!exprs.some((e) => expressionReferencesTable(e, nullableTable))) return false;
+  if (!exprs.some((e) => expressionReferencesTable(e, identifiers))) return false;
 
   // 参照が NULL 置換関数の引数にしか無いときは未結合行を残しうる（過検出回避）
   const coalescedOnly = exprs.every(
     (e) =>
-      !expressionReferencesTable(e, nullableTable) ||
-      expressionOnlyReferencesTableViaNullCoalescing(e, nullableTable),
+      !expressionReferencesTable(e, identifiers) ||
+      expressionOnlyReferencesTableViaNullCoalescing(e, identifiers),
   );
   if (coalescedOnly) return false;
 
@@ -235,30 +253,30 @@ function isNullRejectingLeaf(node: ConditionNode, nullableTable: TableRef): bool
 function collectConditionReasons(
   node: ConditionNode | undefined,
   kind: 'where' | 'having',
-  nullableTable: TableRef,
+  identifiers: string[],
   underOr: boolean,
 ): EffectiveInnerReason[] {
   if (!node) return [];
 
   if (node.type === 'or') {
     return (node.children ?? []).flatMap((child) =>
-      collectConditionReasons(child, kind, nullableTable, true),
+      collectConditionReasons(child, kind, identifiers, true),
     );
   }
 
   if (node.type === 'and') {
     return (node.children ?? []).flatMap((child) =>
-      collectConditionReasons(child, kind, nullableTable, underOr),
+      collectConditionReasons(child, kind, identifiers, underOr),
     );
   }
 
   if (node.type === 'not') {
     return (node.children ?? []).flatMap((child) =>
-      collectConditionReasons(child, kind, nullableTable, underOr),
+      collectConditionReasons(child, kind, identifiers, underOr),
     );
   }
 
-  if (underOr || !isNullRejectingLeaf(node, nullableTable)) return [];
+  if (underOr || !isNullRejectingLeaf(node, identifiers)) return [];
 
   const prefix = kind === 'where' ? 'WHERE' : 'HAVING';
   return [{ kind, label: `${prefix}: ${node.label}` }];
@@ -268,14 +286,14 @@ function findSubsequentInnerJoinReasons(
   joins: JoinEdge[],
   tables: TableRef[],
   joinIndex: number,
-  nullableTable: TableRef,
+  identifiers: string[],
 ): EffectiveInnerReason[] {
   const reasons: EffectiveInnerReason[] = [];
 
   for (let i = joinIndex + 1; i < joins.length; i++) {
     const join = joins[i]!;
     if (!isInnerLikeJoin(join)) continue;
-    if (!expressionReferencesTable(resolveJoinConditionExpression(join), nullableTable)) continue;
+    if (!expressionReferencesTable(resolveJoinConditionExpression(join), identifiers)) continue;
     reasons.push({
       kind: 'inner_join',
       label: innerJoinReasonLabel(join, tables),
@@ -301,10 +319,13 @@ function reasonsForNullableTable(
   joinIndex: number,
   nullableTable: TableRef,
 ): EffectiveInnerReason[] {
+  const identifiers = tableReferenceIdentifiers(nullableTable, query.tables);
+  if (identifiers.length === 0) return [];
+
   return dedupeReasons([
-    ...findSubsequentInnerJoinReasons(query.joins, query.tables, joinIndex, nullableTable),
-    ...collectConditionReasons(query.where, 'where', nullableTable, false),
-    ...collectConditionReasons(query.having, 'having', nullableTable, false),
+    ...findSubsequentInnerJoinReasons(query.joins, query.tables, joinIndex, identifiers),
+    ...collectConditionReasons(query.where, 'where', identifiers, false),
+    ...collectConditionReasons(query.having, 'having', identifiers, false),
   ]);
 }
 

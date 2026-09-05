@@ -1169,7 +1169,8 @@ export function parseMySqlQuery(sql: string): ParseResult {
       database: 'MySQL',
       parseOptions: { includeLocations: true },
     });
-    const statements = Array.isArray(ast) ? ast : [ast];
+    // 先頭 `;` などで astify が type を持たない空要素を返すことがある。文数に数えない
+    const statements = (Array.isArray(ast) ? ast : [ast]).filter((statement) => statement?.type);
     const first = statements[0];
 
     if (!first) {

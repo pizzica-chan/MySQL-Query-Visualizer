@@ -61,7 +61,8 @@ export function resolveAliasesInText(text: string, aliasMap: Map<string, string>
 
   for (const alias of aliases) {
     const tableName = aliasMap.get(alias)!;
-    const qualified = new RegExp(`(?<![\\w.\`])${escapeRegExp(alias)}\\.`, 'g');
+    // MySQL の別名参照は大文字小文字を区別しない（`u` と `U` は同じ別名）
+    const qualified = new RegExp(`(?<![\\w.\`])${escapeRegExp(alias)}\\.`, 'gi');
     let match: RegExpExecArray | null;
     while ((match = qualified.exec(masked)) !== null) {
       hits.push({
@@ -85,7 +86,14 @@ export function resolveAliasesInText(text: string, aliasMap: Map<string, string>
 }
 
 function resolveStandaloneAlias(name: string, aliasMap: Map<string, string>): string {
-  return aliasMap.get(name) ?? name;
+  const direct = aliasMap.get(name);
+  if (direct) return direct;
+  // MySQL の別名参照は大文字小文字を区別しない（SET / DELETE 対象の `U` と `u` は同じ）
+  const lowered = name.toLowerCase();
+  for (const [alias, physical] of aliasMap) {
+    if (alias.toLowerCase() === lowered) return physical;
+  }
+  return name;
 }
 
 function resolveConditionNode(
