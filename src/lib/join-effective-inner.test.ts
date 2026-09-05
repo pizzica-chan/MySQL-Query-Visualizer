@@ -77,6 +77,19 @@ describe('join-effective-inner', () => {
         expect(analyses[0]!.reasons.some((r) => r.kind === 'where')).toBe(true);
       });
 
+      it('自己結合の無別名インスタンス自身への絞り込みは根拠にできる', () => {
+        // RIGHT JOIN で nullable になるのは無別名側。`users.` は別名を持たない
+        // そのインスタンスを一意に指すので、共有名として捨ててはいけない
+        const query = parseSql(`
+          SELECT users.id FROM users
+          RIGHT JOIN users u2 ON u2.manager_id = users.id
+          WHERE users.status = 1
+        `);
+        const analyses = analyzeEffectiveInnerJoins(query);
+        expect(analyses).toHaveLength(1);
+        expect(analyses[0]!.reasons.some((r) => r.kind === 'where')).toBe(true);
+      });
+
       it('nullable を参照しない後続 INNER JOIN だけでは検出しない', () => {
         const query = parseSql(`
           SELECT * FROM table_a a

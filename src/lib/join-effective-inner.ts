@@ -36,22 +36,44 @@ function tableIdentifiers(table: TableRef): string[] {
   return [...new Set(ids)];
 }
 
+/** SQL 本文でこのテーブル参照を指す名前。別名を付けたら別名でしか参照できない */
+function primaryIdentifier(table: TableRef): string | undefined {
+  return table.alias || table.table || table.displayName || undefined;
+}
+
 /**
  * 式の中でこのテーブル参照だけを指す識別子。
  *
- * 自己結合では複数の参照が同じ識別子を持つ（例: `FROM users LEFT JOIN users u2` は
- * どちらも `users` を候補に持つ）。その識別子でどちらを指しているかは判別できないので除く。
- * 除いた結果が空なら「参照していない」扱いになり、実質 INNER を検出しない安全側に倒れる。
+ * tableIdentifiers は主名のほかに、別名解決後のテキスト（`u.` が `users.` になる）用に
+ * 実テーブル名も候補に含む。自己結合ではこの副次名が別インスタンスと衝突するため、
+ * `FROM users LEFT JOIN users u2` の `users.` を u2 への参照と誤読していた。
+ *
+ * そこで副次名は、他の参照の主名でも他の参照の副次名でもないときだけ採用する。
+ * 主名（上の例の無別名 `users`）はそのインスタンスを一意に指すので落とさない。
  */
 function tableReferenceIdentifiers(table: TableRef, allTables: TableRef[]): string[] {
-  const counts = new Map<string, number>();
+  const primaryCounts = new Map<string, number>();
+  const secondaryCounts = new Map<string, number>();
+
   for (const other of allTables) {
+    const primary = primaryIdentifier(other)?.toLowerCase();
+    if (primary) primaryCounts.set(primary, (primaryCounts.get(primary) ?? 0) + 1);
     for (const id of tableIdentifiers(other)) {
       const key = id.toLowerCase();
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+      if (key === primary) continue;
+      secondaryCounts.set(key, (secondaryCounts.get(key) ?? 0) + 1);
     }
   }
-  return tableIdentifiers(table).filter((id) => counts.get(id.toLowerCase()) === 1);
+
+  const own = primaryIdentifier(table)?.toLowerCase();
+  return tableIdentifiers(table).filter((id) => {
+    const key = id.toLowerCase();
+    // 主名は、他の参照と重複していなければそのインスタンスを一意に指す
+    if (key === own) return (primaryCounts.get(key) ?? 0) === 1;
+    // 副次名は、他の参照の主名・副次名と衝突したら誰を指すか決められない
+    if ((primaryCounts.get(key) ?? 0) > 0) return false;
+    return (secondaryCounts.get(key) ?? 0) === 1;
+  });
 }
 
 /**
