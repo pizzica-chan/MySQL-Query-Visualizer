@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Parser } from 'node-sql-parser';
+// 既定エントリ（node-sql-parser のルート）は全方言のパーサを同梱する。
+// このアプリは MySQL のみなので MySQL 専用ビルドを直接読む（オフライン配布の JS を大幅に軽くする）
+import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { formatJoinConditionLabel } from './join-condition';
 import {

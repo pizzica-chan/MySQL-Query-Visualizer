@@ -172,4 +172,5 @@ npm run test:dist     # ビルド + オフライン監査・JOIN 図描画テス
 
 - React 19 + TypeScript + Vite
 - [node-sql-parser](https://github.com/taozhi8833990/node-sql-parser) — MySQL AST 解析
+  - ルートエントリは全方言のパーサを同梱するため、`node-sql-parser/build/mysql`（MySQL 専用ビルド）を直接読み込んでいます
 - [@xyflow/react](https://reactflow.dev/) — JOIN 関係のグラフ表示
