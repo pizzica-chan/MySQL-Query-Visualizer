@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { applyAliasResolution, buildAliasMap, resolveAliasesInText } from './alias-resolver';
+import {
+  applyAliasResolution,
+  buildAliasMap,
+  formatTableLabel,
+  resolveAliasesInText,
+} from './alias-resolver';
 import { assertParseInvariants } from './fixtures/parse-invariants';
 import { parseMySqlQuery, SAMPLE_SQL, UNION_SAMPLE_SQL } from './parser';
 import { collectAllNestedQueries } from './query-utils';
@@ -60,6 +65,33 @@ describe('alias-resolver', () => {
     const resolved = buildAliasMap(selfJoined);
     expect(resolved.get('u1')).toBe('users');
     expect(resolved.get('u2')).toBe('users');
+  });
+
+  it('別名を残したテーブルは displayName も別名のままにする', () => {
+    const result = parseMySqlQuery(
+      'SELECT u1.id FROM users u1 LEFT JOIN users u2 ON u2.manager_id = u1.id',
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const resolved = applyAliasResolution(result.query, true, { keepSelfJoinAliases: true });
+    // 条件式が u1 / u2 のままなので、表示名だけ users にすると読み手が対応を追えない
+    expect(resolved.tables.map((t) => t.displayName).sort()).toEqual(['u1', 'u2']);
+    expect(resolved.joins[0]?.condition).toContain('u2.manager_id');
+    // 実テーブル名はラベル側で併記される
+    expect(formatTableLabel(resolved.tables[0]!, true)).toEqual({ primary: 'users', aliasNote: 'u1' });
+  });
+
+  it('自己結合でないテーブルの displayName は従来どおり実テーブル名にする', () => {
+    const result = parseMySqlQuery(
+      'SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id',
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const resolved = applyAliasResolution(result.query, true, { keepSelfJoinAliases: true });
+    expect(resolved.tables.map((t) => t.displayName).sort()).toEqual(['orders', 'users']);
+    expect(resolved.joins[0]?.condition).toContain('orders.user_id');
   });
 
   it('スキーマ付きテーブルのエイリアスを解決する', () => {

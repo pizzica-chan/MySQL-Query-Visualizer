@@ -113,12 +113,21 @@ function resolveConditionNode(
   };
 }
 
-function resolveTableRef(table: TableRef, options: AliasResolutionOptions): TableRef {
-  const displayName = table.isDerived
-    ? table.displayName
-    : table.schema
-      ? `${table.schema}.${table.table}`
-      : table.table;
+function resolveTableRef(
+  table: TableRef,
+  options: AliasResolutionOptions,
+  aliasMap: Map<string, string>,
+): TableRef {
+  // 別名を残したテーブル（自己結合）は表示名も別名のままにする。
+  // 条件式が `u1.id` のままなのに表示名だけ `users` にすると、
+  // どちらのインスタンスの話か読み取れなくなる
+  const keepsAlias = Boolean(table.alias) && !aliasMap.has(table.alias!);
+  const displayName =
+    table.isDerived || keepsAlias
+      ? table.displayName
+      : table.schema
+        ? `${table.schema}.${table.table}`
+        : table.table;
   return {
     ...table,
     displayName,
@@ -180,7 +189,7 @@ export function applyAliasResolution(
 
   return {
     ...query,
-    tables: query.tables.map((table) => resolveTableRef(table, options)),
+    tables: query.tables.map((table) => resolveTableRef(table, options, aliasMap)),
     joins: query.joins.map((j) => resolveJoin(j, aliasMap, options)),
     where: query.where ? resolveConditionNode(query.where, aliasMap, options) : undefined,
     having: query.having ? resolveConditionNode(query.having, aliasMap, options) : undefined,

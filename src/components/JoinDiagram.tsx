@@ -162,6 +162,13 @@ function JoinDiagramFlow({
   const reactFlowRef = useRef<JoinDiagramFlowInstance | null>(null);
   const flowWrapRef = useRef<HTMLDivElement>(null);
   const fitStateRef = useRef({ lastFitLayoutKey: null as string | null, needsFitOnShow: true });
+  /** 進行中の実測待ちループを識別する。値が変わったループは打ち切る */
+  const fitRunRef = useRef(0);
+
+  // アンマウント後もリトライが回り続けないよう、世代を進めて打ち切る
+  useEffect(() => () => {
+    fitRunRef.current += 1;
+  }, []);
 
   /**
    * display:none が解除された直後はコンテナも measured も 0 のままで、
@@ -169,8 +176,13 @@ function JoinDiagramFlow({
    * fitView の戻り値は常に true で成否判定に使えないため、呼ぶ前に実測が揃うのを待つ。
    */
   const fitDiagramView = useCallback(() => {
+    const run = fitRunRef.current + 1;
+    fitRunRef.current = run;
+
     const attemptFit = (attempt: number) => {
       requestAnimationFrame(() => {
+        // 新しい fit 要求やアンマウントで置き換わっていたら何もしない
+        if (run !== fitRunRef.current) return;
         const instance = reactFlowRef.current;
         const wrap = flowWrapRef.current;
         const nodes = instance?.getNodes() ?? [];

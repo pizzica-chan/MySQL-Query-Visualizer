@@ -57,8 +57,12 @@ export default function App() {
     onSourceSpanSelect: handleSourceSpanSelect,
   };
 
+  // 自己結合の別名は残す。u1 / u2 を同じ実テーブル名へ潰すと
+  // 「users の行をすべて残し users を LEFT JOIN」のように説明が意味をなさなくなる。
+  // どの実テーブルかはテーブルラベル（users（u1））が併記するので情報は失われない
   const displayQuery = useMemo(
-    () => (parsed ? applyAliasResolution(parsed, resolveAliases) : null),
+    () =>
+      parsed ? applyAliasResolution(parsed, resolveAliases, { keepSelfJoinAliases: true }) : null,
     [parsed, resolveAliases],
   );
 
