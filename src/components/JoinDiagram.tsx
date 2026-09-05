@@ -24,7 +24,7 @@ import {
   toggleJoinDiagramFocus,
   type JoinDiagramFocus,
 } from '../lib/join-diagram-focus';
-import { planJoinDiagramFit } from '../lib/join-diagram-fit';
+import { decideJoinDiagramFit, planJoinDiagramFit } from '../lib/join-diagram-fit';
 import {
   JOIN_EDGE_COLORS,
   JOIN_MINIMAP_COMPACT_SIZE,
@@ -39,6 +39,15 @@ import {
 } from '../lib/join-flow-layout';
 import { sourceSelectableProps, toggleSourceSpan, type OnSourceSpanSelect } from '../lib/source-link';
 import type { JoinEdge, ParsedQuery, SourceSpan, TableRef } from '../lib/types';
+
+/** fitView の実測待ちを諦めるまでのフレーム数（約 1 秒） */
+const FIT_MAX_ATTEMPTS = 60;
+
+/** JoinDiagram が使う ReactFlow インスタンスの部分型 */
+interface JoinDiagramFlowInstance {
+  fitView: (options?: { padding?: number }) => Promise<boolean>;
+  getNodes: () => { measured?: { width?: number; height?: number } }[];
+}
 
 interface JoinDiagramProps {
   tables: TableRef[];
@@ -150,23 +159,38 @@ function JoinDiagramFlow({
     setJoinFocus(null);
   }, [layoutKey]);
 
-  const reactFlowRef = useRef<{
-    fitView: (options?: { padding?: number }) => Promise<boolean>;
-  } | null>(null);
+  const reactFlowRef = useRef<JoinDiagramFlowInstance | null>(null);
+  const flowWrapRef = useRef<HTMLDivElement>(null);
   const fitStateRef = useRef({ lastFitLayoutKey: null as string | null, needsFitOnShow: true });
 
+  /**
+   * display:none が解除された直後はコンテナも measured も 0 のままで、
+   * その状態で fitView するとグラフ中心が画面左上に来る viewport が確定してしまう。
+   * fitView の戻り値は常に true で成否判定に使えないため、呼ぶ前に実測が揃うのを待つ。
+   */
   const fitDiagramView = useCallback(() => {
     const attemptFit = (attempt: number) => {
       requestAnimationFrame(() => {
         const instance = reactFlowRef.current;
-        if (!instance) {
-          if (attempt < 12) attemptFit(attempt + 1);
+        const wrap = flowWrapRef.current;
+        const nodes = instance?.getNodes() ?? [];
+        const decision = decideJoinDiagramFit(
+          {
+            hasInstance: Boolean(instance),
+            containerWidth: wrap?.clientWidth ?? 0,
+            containerHeight: wrap?.clientHeight ?? 0,
+            nodeCount: nodes.length,
+            measuredNodeCount: nodes.filter((n) => n.measured?.width && n.measured?.height).length,
+          },
+          attempt,
+          FIT_MAX_ATTEMPTS,
+        );
+
+        if (decision === 'retry') {
+          attemptFit(attempt + 1);
           return;
         }
-        void instance.fitView({ padding: 0.3 }).then((didFit) => {
-          // display:none 解除直後は width/height が 0 で失敗することがある
-          if (!didFit && attempt < 12) attemptFit(attempt + 1);
-        });
+        if (decision === 'fit' && instance) void instance.fitView({ padding: 0.3 });
       });
     };
     attemptFit(0);
@@ -181,12 +205,9 @@ function JoinDiagramFlow({
     if (plan.shouldFit) fitDiagramView();
   }, [layoutKey, isActive, fitDiagramView]);
 
-  const handleInit = useCallback(
-    (instance: { fitView: (options?: { padding?: number }) => Promise<boolean> }) => {
-      reactFlowRef.current = instance;
-    },
-    [],
-  );
+  const handleInit = useCallback((instance: JoinDiagramFlowInstance) => {
+    reactFlowRef.current = instance;
+  }, []);
 
   const handleResetLayout = useCallback(() => {
     resetLayout();
@@ -266,7 +287,7 @@ function JoinDiagramFlow({
           selectNode={selectNode}
           selectEdge={selectEdge}
         >
-        <div className="join-diagram-flow-wrap">
+        <div className="join-diagram-flow-wrap" ref={flowWrapRef}>
           {!compact && joins.length > 0 && (
             <div className="join-diagram-toolbar">
               <button
