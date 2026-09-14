@@ -125,8 +125,62 @@ function formatQuotedLiteral(node: any): string {
   return formatSingleQuotedString(String(node.value));
 }
 
+/** LIKE の ESCAPE 句。右辺に付くので、比較を組み立てるときも忘れず添える */
+function formatEscapeClause(node: any): string {
+  const escape = node?.right?.escape;
+  return escape ? ` ESCAPE ${exprToString(escape.value)}` : '';
+}
+
+/**
+ * 関数の引数を並べる。`TRIM(BOTH ' ' FROM name)` のようにキーワードが引数列に混ざる形があり、
+ * そこへカンマを入れると元の SQL と違う式に見えてしまう
+ */
+function formatFunctionArgs(args: any[]): string {
+  let out = '';
+  let prevWasKeyword = false;
+  args.forEach((arg: any, index: number) => {
+    const isKeyword = arg?.type === 'origin';
+    const text = exprToString(arg);
+    if (index > 0) out += isKeyword || prevWasKeyword ? ' ' : ', ';
+    out += text;
+    prevWasKeyword = isKeyword;
+  });
+  return out;
+}
+
+/** CAST の変換先データ型。node-sql-parser は配列で返し、桁・精度は別フィールドに入る */
+function formatCastTarget(target: any): string {
+  const entry = Array.isArray(target) ? target[0] : target;
+  if (!entry) return '';
+  const dataType = String(entry.dataType ?? '');
+  const params = [entry.length, entry.scale].filter((v) => v !== undefined && v !== null);
+  return params.length > 0 ? `${dataType}(${params.join(',')})` : dataType;
+}
+
+/** 分析関数の OVER 句。落とすと同じ関数呼び出しに見えてしまう */
+function formatOverClause(over: any): string {
+  const spec = over?.as_window_specification?.window_specification;
+  if (!spec) return over?.as_window_specification?.name ? ` OVER ${over.as_window_specification.name}` : '';
+
+  const parts: string[] = [];
+  const partitionBy = toArray<any>(spec.partitionby)
+    .map((p: any) => exprToString(p?.expr ?? p))
+    .filter(Boolean);
+  if (partitionBy.length > 0) parts.push(`PARTITION BY ${partitionBy.join(', ')}`);
+
+  const orderBy = toArray<any>(spec.orderby)
+    .map((o: any) => `${exprToString(o?.expr ?? o)}${o?.type ? ` ${o.type}` : ''}`)
+    .filter((text) => text.trim().length > 0);
+  if (orderBy.length > 0) parts.push(`ORDER BY ${orderBy.join(', ')}`);
+
+  return ` OVER (${parts.join(' ')})`;
+}
+
 function exprToString(node: any): string {
   if (!node) return '';
+
+  // 元 SQL の括弧を落とすと (a + b) * 2 が a + b * 2 になり、表示が別の意味になる
+  const wrap = (text: string): string => (node.parentheses ? `(${text})` : text);
 
   switch (node.type) {
     case 'column_ref': {
@@ -150,16 +204,22 @@ function exprToString(node: any): string {
       return toArray(node.value)
         .map((a: any) => exprToString(a))
         .join(', ');
-    case 'binary_expr':
-      return `${exprToString(node.left)} ${node.operator} ${exprToString(node.right)}`;
+    case 'binary_expr': {
+      // ESCAPE を落とすと LIKE の意味が変わって見える
+      return wrap(
+        `${exprToString(node.left)} ${node.operator} ${exprToString(node.right)}${formatEscapeClause(node)}`,
+      );
+    }
     case 'unary_expr':
-      return `${node.operator} ${exprToString(node.expr)}`;
+      return wrap(`${node.operator} ${exprToString(node.expr)}`);
+    case 'extract':
+      return `EXTRACT(${node.args?.field ?? ''} FROM ${exprToString(node.args?.source)})`;
+    case 'interval':
+      return `INTERVAL ${exprToString(node.expr)} ${String(node.unit ?? '').toUpperCase()}`.trim();
     case 'function': {
       const fnName = resolveFunctionName(node.name);
-      const args = extractFunctionArgs(node)
-        .map((a: any) => exprToString(a))
-        .join(', ');
-      return `${fnName}(${args})`;
+      const args = formatFunctionArgs(extractFunctionArgs(node));
+      return `${fnName}(${args})${formatOverClause(node.over)}`;
     }
     case 'aggr_func': {
       const rawArgs = node.args?.expr ?? node.args?.value ?? node.args;
@@ -167,17 +227,29 @@ function exprToString(node: any): string {
       const args = toArray<any>(rawArgs)
         .map((a: any) => exprToString(a))
         .join(', ');
-      return `${node.name}(${distinctPrefix}${args})`;
+      // GROUP_CONCAT の ORDER BY / SEPARATOR は結果の並びと区切りを決める。落とすと別物に見える
+      const orderBy = toArray<any>(node.args?.orderby)
+        .map((o: any) => `${exprToString(o?.expr ?? o)}${o?.type ? ` ${o.type}` : ''}`)
+        .filter((text) => text.trim().length > 0);
+      const orderPart = orderBy.length > 0 ? ` ORDER BY ${orderBy.join(', ')}` : '';
+      const separator = node.args?.separator
+        ? ` SEPARATOR ${exprToString(node.args.separator.value ?? node.args.separator)}`
+        : '';
+      return `${node.name}(${distinctPrefix}${args}${orderPart}${separator})${formatOverClause(node.over)}`;
     }
     case 'case': {
-      const whens = (node.args ?? [])
-        .map((w: any) => `WHEN ${exprToString(w.condition)} THEN ${exprToString(w.result)}`)
-        .join(' ');
-      const elsePart = node['else'] ? ` ELSE ${exprToString(node['else'])}` : '';
-      return `CASE ${whens}${elsePart} END`;
+      // ELSE は args の末尾に type:'else' の要素として入る。条件のフィールド名は cond。
+      // 単純 CASE（CASE 式 WHEN 値 …）は対象式が node.expr に来る
+      const operand = node.expr ? ` ${exprToString(node.expr)}` : '';
+      const branches = toArray<any>(node.args).map((arg: any) => {
+        if (arg?.type === 'else') return `ELSE ${exprToString(arg.result)}`;
+        const cond = exprToString(arg?.cond ?? arg?.condition);
+        return `WHEN ${cond} THEN ${exprToString(arg?.result)}`;
+      });
+      return `CASE${operand} ${branches.join(' ')} END`;
     }
     case 'cast': {
-      return `CAST(${exprToString(node.expr)} AS ${node.target?.dataType ?? ''})`;
+      return `CAST(${exprToString(node.expr)} AS ${formatCastTarget(node.target)})`;
     }
     case 'subquery': {
       const inner = node.subquery?.ast ?? node.subquery ?? node.ast;
@@ -186,10 +258,15 @@ function exprToString(node: any): string {
       }
       return '(subquery)';
     }
-    default:
+    default: {
+      // `SET col = (SELECT …)` や SELECT 列のスカラーサブクエリは、
+      // type を持たず ast だけを抱えたノードで来る。素通しすると AST の JSON が表示に出る
+      const inner = extractSubquerySelectAst(node);
+      if (inner) return summarizeSelect(inner);
       if (node.value !== undefined) return String(node.value);
       if (node.raw) return node.raw;
       return JSON.stringify(node);
+    }
   }
 }
 
@@ -436,7 +513,7 @@ function parseComparison(node: any): ConditionNode {
     {
       id: nextId('cond'),
       type: 'comparison',
-      label: `${left} ${node.operator} ${right}`,
+      label: `${left} ${node.operator} ${right}${formatEscapeClause(node)}`,
       operator: node.operator,
       left,
       right,

@@ -837,6 +837,146 @@ HAVING SUM(oi.qty) > 5`,
     },
   },
   {
+    name: '回帰: SELECT 列のスカラーサブクエリを AST ダンプで表示しない',
+    category: 'regression',
+    sql: 'SELECT u.id, (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS order_cnt FROM users u',
+    expectSuccess: true,
+    assert: (q) => {
+      const col = q.columns[1];
+      if (!col) throw new Error('2 columns expected');
+      if (col.expression.includes('tableList') || col.expression.includes('"ast"')) {
+        throw new Error(`AST dump leaked into column: ${col.expression.slice(0, 60)}`);
+      }
+      if (!col.expression.startsWith('(SELECT')) {
+        throw new Error(`unexpected column expression: ${col.expression}`);
+      }
+    },
+  },
+  {
+    name: '回帰: UPDATE SET のサブクエリを AST ダンプで表示しない',
+    category: 'regression',
+    sql: 'UPDATE users u SET u.order_cnt = (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) WHERE u.id > 0',
+    expectSuccess: true,
+    assert: (q) => {
+      const set = q.setClauses?.[0];
+      if (!set) throw new Error('1 set clause expected');
+      if (set.value.includes('tableList') || set.value.includes('"ast"')) {
+        throw new Error(`AST dump leaked into SET: ${set.value.slice(0, 60)}`);
+      }
+      if (!set.value.startsWith('(SELECT')) {
+        throw new Error(`unexpected SET value: ${set.value}`);
+      }
+    },
+  },
+  {
+    name: '回帰: GROUP_CONCAT の ORDER BY / SEPARATOR を落とさない',
+    category: 'regression',
+    sql: "SELECT GROUP_CONCAT(a ORDER BY b DESC SEPARATOR ',') AS g FROM t",
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (expr !== "GROUP_CONCAT(a ORDER BY b DESC SEPARATOR ',')") {
+        throw new Error(`group_concat: ${expr}`);
+      }
+    },
+  },
+  {
+    name: '回帰: EXTRACT を AST ダンプで表示しない',
+    category: 'regression',
+    sql: 'SELECT EXTRACT(YEAR FROM hired_at) AS y FROM t',
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (expr !== 'EXTRACT(YEAR FROM hired_at)') throw new Error(`extract: ${expr}`);
+    },
+  },
+  {
+    name: '回帰: TRIM(BOTH … FROM …) をカンマ区切りにしない',
+    category: 'regression',
+    sql: "SELECT TRIM(BOTH ' ' FROM name) AS t FROM t",
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (expr.includes("' ',")) throw new Error(`trim args: ${expr}`);
+    },
+  },
+  {
+    name: '回帰: 式の括弧を落とさない（表示の意味が変わる）',
+    category: 'regression',
+    sql: 'SELECT (a + b) * 2 AS c FROM t WHERE (x = 1 OR y = 2) AND z = 3',
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (expr !== '(a + b) * 2') throw new Error(`parentheses lost: ${expr}`);
+    },
+  },
+  {
+    name: '回帰: CAST の変換先データ型を落とさない',
+    category: 'regression',
+    sql: 'SELECT CAST(a AS DECIMAL(10,2)) AS c FROM t',
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (!/CAST\(a AS \w+\(10,2\)\)/.test(expr)) throw new Error(`cast target lost: ${expr}`);
+    },
+  },
+  {
+    name: '回帰: INTERVAL を AST ダンプで表示しない',
+    category: 'regression',
+    sql: 'SELECT DATE_SUB(NOW(), INTERVAL 30 DAY) AS d FROM t',
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (expr.includes('"type"')) throw new Error(`AST dump leaked: ${expr.slice(0, 60)}`);
+      if (!expr.includes('INTERVAL 30 DAY')) throw new Error(`interval lost: ${expr}`);
+    },
+  },
+  {
+    name: '回帰: 分析関数の OVER 句を落とさない',
+    category: 'regression',
+    sql: 'SELECT ROW_NUMBER() OVER (PARTITION BY a ORDER BY b DESC) AS rn FROM t',
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (expr !== 'ROW_NUMBER() OVER (PARTITION BY a ORDER BY b DESC)') {
+        throw new Error(`over clause lost: ${expr}`);
+      }
+    },
+  },
+  {
+    name: '回帰: LIKE の ESCAPE 句を落とさない',
+    category: 'regression',
+    sql: "SELECT id FROM t WHERE a LIKE 'x%' ESCAPE '!'",
+    expectSuccess: true,
+    assert: (q) => {
+      const label = q.where?.label ?? '';
+      if (!label.includes("ESCAPE '!'")) throw new Error(`escape lost: ${label}`);
+    },
+  },
+  {
+    name: '回帰: CASE の条件・ELSE を落とさずに表示する',
+    category: 'regression',
+    sql: "SELECT CASE WHEN a > 1 THEN 'x' WHEN a = 0 THEN 'y' ELSE 'z' END AS f FROM t",
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      const expected = "CASE WHEN a > 1 THEN 'x' WHEN a = 0 THEN 'y' ELSE 'z' END";
+      if (expr !== expected) throw new Error(`CASE expression: ${expr}`);
+    },
+  },
+  {
+    name: '回帰: 単純 CASE（CASE 式 WHEN 値）の対象式を落とさない',
+    category: 'regression',
+    sql: "SELECT CASE a WHEN 1 THEN 'x' ELSE 'y' END AS f FROM t",
+    expectSuccess: true,
+    assert: (q) => {
+      const expr = q.columns[0]?.expression ?? '';
+      if (expr !== "CASE a WHEN 1 THEN 'x' ELSE 'y' END") {
+        throw new Error(`simple CASE expression: ${expr}`);
+      }
+    },
+  },
+  {
     name: '回帰: NOT IN リテラル（サブクエリではない）',
     category: 'regression',
     sql: 'SELECT id FROM t WHERE status NOT IN (1, 2, 3)',
