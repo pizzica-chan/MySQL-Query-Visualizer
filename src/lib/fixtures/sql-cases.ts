@@ -1044,4 +1044,188 @@ HAVING SUM(oi.qty) > 5`,
     sql: 'これはSQLではない',
     expectSuccess: false,
   },
+  {
+    name: '括弧でまとめた JOIN は未対応と伝える（table_1 という架空のテーブルにしない）',
+    category: 'error',
+    sql: 'SELECT a.id FROM a LEFT JOIN (b JOIN c ON b.id = c.bid) ON a.id = b.aid',
+    expectSuccess: false,
+    errorContains: '括弧でまとめた JOIN',
+  },
+  {
+    name: 'UNION の右側だけを括弧で囲むとブランチが消えるので、未対応と伝える',
+    category: 'error',
+    sql: 'SELECT a FROM t UNION (SELECT a FROM u ORDER BY a LIMIT 2)',
+    expectSuccess: false,
+    errorContains: 'UNION の一部のブランチを解析できませんでした',
+  },
+  {
+    name: '派生テーブルの中の UNION で右側だけを括弧で囲んでも、未対応と伝える',
+    category: 'error',
+    sql: 'SELECT d.a FROM (SELECT a FROM t UNION (SELECT a FROM u)) d',
+    expectSuccess: false,
+    errorContains: 'UNION の一部のブランチを解析できませんでした',
+  },
+  {
+    name: 'CTE の列名リストを持つ',
+    category: 'regression',
+    sql: 'WITH c (p, q) AS (SELECT t.x, t.y FROM t) SELECT c.p FROM c',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.ctes?.[0]?.columns?.join() !== 'p,q') throw new Error(`columns: ${q.ctes?.[0]?.columns?.join()}`);
+    },
+  },
+  {
+    name: 'UNION 全体の ORDER BY / LIMIT を unionTail に持つ（括弧の有無の両方）',
+    category: 'regression',
+    sql: '(SELECT a FROM t) UNION (SELECT a FROM u ORDER BY a LIMIT 9) ORDER BY a DESC LIMIT 2',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.unionBranches?.length !== 2) throw new Error('branches');
+      const tail = q.unionTail;
+      if (tail?.orderBy.map((o) => o.text).join() !== 'a DESC' || tail.limit !== '2') {
+        throw new Error(`tail: ${JSON.stringify(tail)}`);
+      }
+      // 括弧の中の ORDER BY / LIMIT はそのブランチのもの
+      if (q.unionBranches[1]?.query.limit !== '9') throw new Error('branch limit');
+    },
+  },
+  {
+    name: '括弧の無い UNION の末尾の ORDER BY / LIMIT は UNION 全体に掛かる',
+    category: 'regression',
+    sql: 'SELECT a FROM t UNION SELECT a FROM u ORDER BY a LIMIT 5',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.unionTail?.orderBy.map((o) => o.text).join() !== 'a' || q.unionTail.limit !== '5') {
+        throw new Error(`tail: ${JSON.stringify(q.unionTail)}`);
+      }
+    },
+  },
+  {
+    name: 'FROM 句全体を括弧で囲んだ JOIN も未対応と伝える',
+    category: 'error',
+    sql: 'SELECT a.id FROM (a JOIN b ON b.aid = a.id)',
+    expectSuccess: false,
+    errorContains: '括弧でまとめた JOIN',
+  },
+
+  // --- 式の表示に出していなかった構文 ---
+  {
+    name: 'COLLATE を列・WHERE・ORDER BY の式に残す',
+    category: 'regression',
+    sql: 'SELECT t.n COLLATE utf8mb4_bin AS c FROM t WHERE t.a = t.b COLLATE utf8mb4_bin ORDER BY t.n COLLATE utf8mb4_bin',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.columns[0]?.expression !== 't.n COLLATE utf8mb4_bin') throw new Error(`column: ${q.columns[0]?.expression}`);
+      if (q.where?.label !== 't.a = t.b COLLATE utf8mb4_bin') throw new Error(`where: ${q.where?.label}`);
+      if (q.orderBy[0]?.text !== 't.n COLLATE utf8mb4_bin') throw new Error(`order: ${q.orderBy[0]?.text}`);
+    },
+  },
+  {
+    name: 'CONVERT の USING を残す',
+    category: 'regression',
+    sql: 'SELECT CONVERT(t.x USING utf8mb4) FROM t',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.columns[0]?.expression !== 'CONVERT(t.x USING UTF8MB4)') throw new Error(`column: ${q.columns[0]?.expression}`);
+    },
+  },
+  {
+    name: 'ウィンドウ枠と名前付きウィンドウの参照を OVER 句に残す',
+    category: 'regression',
+    sql: 'SELECT SUM(t.x) OVER (ORDER BY t.id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW), SUM(t.y) OVER (ORDER BY t.id ROWS UNBOUNDED PRECEDING), SUM(t.z) OVER w FROM t WINDOW w AS (ORDER BY t.id)',
+    expectSuccess: true,
+    assert: (q) => {
+      const exprs = q.columns.map((c) => c.expression);
+      const expected = [
+        'SUM(t.x) OVER (ORDER BY t.id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)',
+        'SUM(t.y) OVER (ORDER BY t.id ROWS UNBOUNDED PRECEDING)',
+        'SUM(t.z) OVER w',
+      ];
+      if (exprs.join(' | ') !== expected.join(' | ')) throw new Error(`columns: ${exprs.join(' | ')}`);
+    },
+  },
+  {
+    name: '式の中の BETWEEN は AND でつなぐ',
+    category: 'regression',
+    sql: 'SELECT t.x BETWEEN 1 AND 2, t.x NOT BETWEEN 3 AND 4 FROM t',
+    expectSuccess: true,
+    assert: (q) => {
+      const exprs = q.columns.map((c) => c.expression).join(' | ');
+      if (exprs !== 't.x BETWEEN 1 AND 2 | t.x NOT BETWEEN 3 AND 4') throw new Error(`columns: ${exprs}`);
+    },
+  },
+  {
+    name: 'GROUP BY の WITH ROLLUP を持つ',
+    category: 'regression',
+    sql: 'SELECT t.a, COUNT(*) FROM t GROUP BY t.a WITH ROLLUP',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.groupByModifier !== 'WITH ROLLUP') throw new Error(`modifier: ${q.groupByModifier}`);
+    },
+  },
+  {
+    name: '派生テーブルの UNION は全ブランチを持つ',
+    category: 'regression',
+    sql: 'SELECT d.x FROM (SELECT t.x FROM t UNION ALL SELECT u.x FROM u) d',
+    expectSuccess: true,
+    assert: (q) => {
+      const branches = q.tables[0]?.derivedQuery?.unionBranches;
+      if (branches?.length !== 2) throw new Error(`branches: ${branches?.length}`);
+      if (branches[1]?.operator !== 'UNION ALL') throw new Error(`operator: ${branches[1]?.operator}`);
+      if (tableNames(branches[1]!.query).join() !== 'u') throw new Error('second branch table');
+    },
+  },
+  {
+    name: 'CTE 本体と IN サブクエリの UNION も全ブランチを持つ',
+    category: 'regression',
+    sql: 'WITH c AS (SELECT t.x FROM t UNION SELECT u.x FROM u) SELECT c.x FROM c WHERE c.x IN (SELECT v.x FROM v UNION ALL SELECT w.x FROM w)',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.ctes?.[0]?.query.unionBranches?.length !== 2) throw new Error('cte branches');
+      if (q.where?.nestedQuery?.unionBranches?.length !== 2) throw new Error('IN subquery branches');
+    },
+  },
+  {
+    name: '式の中のサブクエリを embeddedSubqueries に持つ（表示は要約のまま）',
+    category: 'regression',
+    sql: 'SELECT (SELECT MAX(o.x) FROM o WHERE o.uid = u.id) AS m FROM users u WHERE COALESCE((SELECT 1 FROM z LIMIT 1), 0) = 1',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.columns[0]?.expression !== '(SELECT 1列 FROM o)') throw new Error(`column: ${q.columns[0]?.expression}`);
+      const embedded = (q.embeddedSubqueries ?? []).map((sub) => tableNames(sub).join());
+      if (embedded.sort().join() !== 'o,z') throw new Error(`embedded: ${embedded.join()}`);
+    },
+  },
+  {
+    name: '空行と字下げで始まる SQL でも、位置は入力した文字列上のオフセットで返す',
+    category: 'regression',
+    sql: '\n\n   SELECT STRAIGHT_JOIN t.id AS i FROM t WHERE t.a = 1 ORDER BY t.b DESC LIMIT 5',
+    expectSuccess: true,
+    assert: (q) => {
+      // テーブルや条件の範囲は直後の空白を含むことがあるので、前後の空白は比べない
+      const at = (span: { start: number; end: number } | undefined): string =>
+        span ? q.rawSql.slice(span.start, span.end).trim() : '(なし)';
+      const actual = [
+        at(q.columns[0]?.sourceSpan),
+        at(q.tables[0]?.sourceSpan),
+        at(q.where?.sourceSpan),
+        at(q.orderBy[0]?.sourceSpan),
+        at(q.limitSpan),
+        at(q.straightJoinHintSpan),
+      ].join(' | ');
+      const expected = 't.id AS i | t | t.a = 1 | t.b DESC | LIMIT 5 | SELECT STRAIGHT_JOIN';
+      if (actual !== expected) throw new Error(`spans: ${actual}`);
+    },
+  },
+  {
+    name: 'ORDER BY の範囲は式と DESC の間の空白の数によらない',
+    category: 'regression',
+    sql: 'SELECT t.id FROM t ORDER BY t.x   DESC, t.y\n  ASC',
+    expectSuccess: true,
+    assert: (q) => {
+      const sql = 'SELECT t.id FROM t ORDER BY t.x   DESC, t.y\n  ASC';
+      const texts = q.orderBy.map((o) => (o.sourceSpan ? sql.slice(o.sourceSpan.start, o.sourceSpan.end) : ''));
+      if (texts.join(' | ') !== 't.x   DESC | t.y\n  ASC') throw new Error(`spans: ${JSON.stringify(texts)}`);
+    },
+  },
 ];

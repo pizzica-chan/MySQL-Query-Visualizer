@@ -5,6 +5,9 @@ import {
   joinHasOnCondition,
   normalizeEffectiveInnerJoins,
 } from './join-effective-inner';
+import { joinTreeSignature, type JoinCondition, type JoinKind } from './join-tree';
+import { residualTokenDiff } from './residual-token-diff';
+import { maskNonCode, readBacktickIdentifierEnd, readQuotedStringEnd } from './sql-lex';
 import type {
   ConditionNode,
   CteRef,
@@ -16,6 +19,7 @@ import type {
   SqlFragment,
   TableRef,
   UnionBranch,
+  UnionTail,
 } from './types';
 
 export type DiffCategoryId =
@@ -32,7 +36,8 @@ export type DiffCategoryId =
   | 'union'
   | 'cte'
   | 'set'
-  | 'deleteTargets';
+  | 'deleteTargets'
+  | 'other';
 
 export interface DiffCategoryResult {
   id: DiffCategoryId;
@@ -264,16 +269,53 @@ const CATEGORY_LABELS: Record<DiffCategoryId, string> = {
   cte: 'CTE (WITH)',
   set: 'SET',
   deleteTargets: '削除対象',
+  other: 'その他の記述',
 };
 
-function stripIdentifierQuotes(text: string): string {
-  return text.replace(/`([^`]+)`/g, '$1');
-}
-
-/** 比較用に空白を潰し、大文字小文字を揃え、識別子のバッククォートを除去する */
+/**
+ * 比較用に式を正規化する。空白を 1 つにまとめ、識別子とキーワードを小文字にし、
+ * 識別子のバッククォートを外す。
+ * 文字列リテラルは 1 文字も変えない。`'A'` と `'a'`、`'a  b'` と `'a b'` は別の値なので、
+ * ここで揃えると結果が異なるクエリを「同じ」と判定してしまう。
+ */
 export function normalizeExpr(text: string | undefined | null): string {
   if (!text) return '';
-  return stripIdentifierQuotes(text.replace(/\s+/g, ' ').trim().toLowerCase());
+  const src = text.trim();
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i]!;
+    if (ch === "'" || ch === '"') {
+      const end = readQuotedStringEnd(src, i, ch);
+      out += src.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === '`') {
+      const end = readBacktickIdentifierEnd(src, i);
+      const closed = end - i >= 2 && src[end - 1] === '`';
+      out += src
+        .slice(i + 1, closed ? end - 1 : end)
+        .replace(/``/g, '`')
+        .toLowerCase();
+      i = end;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (!out.endsWith(' ')) out += ' ';
+      i += 1;
+      continue;
+    }
+    // `!=` と `<>` は同じ演算子
+    if (ch === '!' && src[i + 1] === '=') {
+      out += '<>';
+      i += 2;
+      continue;
+    }
+    out += ch.toLowerCase();
+    i += 1;
+  }
+  return out;
 }
 
 /**
@@ -302,30 +344,91 @@ function tableKey(table: TableRef): string {
     const body = table.derivedQuery ? querySignature(table.derivedQuery) : '';
     return `derived:${normalizeExpr(table.alias ?? table.displayName)}:${body}`;
   }
+  // テーブル名は大文字小文字を区別する。Linux の MySQL（lower_case_table_names=0）では
+  // `Users` と `users` は別のテーブル
   const name = table.schema ? `${table.schema}.${table.table}` : table.table;
-  return `table:${normalizeExpr(name)}`;
+  return `table:${name.replace(/`/g, '').trim()}`;
 }
 
-function tableLookupKey(table: TableRef): string {
-  if (table.isDerived) {
-    return normalizeExpr(table.alias ?? table.displayName) || table.id;
+/** テーブルの差分の表示。派生テーブルのキーは中身のシグネチャを含むので、別名だけを見せる */
+function formatTableDetails(details: string[]): string[] {
+  const label = (key: string): string => {
+    if (!key.startsWith('derived:')) return key.replace(/^table:/, '');
+    const alias = key.slice('derived:'.length).split(':')[0] ?? '';
+    return `派生テーブル ${alias}`;
+  };
+  const parsed = details.map((line) => {
+    const match = line.match(/^(A のみ|B のみ): (.*)$/s);
+    return match ? { side: match[1]!, key: match[2]!, text: '' } : { side: '', key: line, text: line };
+  });
+  const labelsA = new Set(parsed.filter((p) => p.side === 'A のみ').map((p) => label(p.key)));
+  const labelsB = new Set(parsed.filter((p) => p.side === 'B のみ').map((p) => label(p.key)));
+  const out: string[] = [];
+  const reported = new Set<string>();
+  for (const p of parsed) {
+    if (!p.side) {
+      out.push(p.text);
+      continue;
+    }
+    const name = label(p.key);
+    // 同じ別名の派生テーブルが両方にあるなら、中身が違うということ
+    if (p.key.startsWith('derived:') && labelsA.has(name) && labelsB.has(name)) {
+      if (!reported.has(name)) out.push(`${name} の中身が異なります`);
+      reported.add(name);
+      continue;
+    }
+    out.push(`${p.side}: ${name}`);
   }
+  return out;
+}
+
+function physicalName(table: TableRef): string {
   return normalizeExpr(table.schema ? `${table.schema}.${table.table}` : table.table);
 }
 
+/** 同じ実テーブルを 2 回以上参照している（自己結合の）実テーブル名 */
+function selfJoinedNames(tables: TableRef[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+  for (const t of tables) {
+    if (t.isDerived) continue;
+    const name = physicalName(t);
+    if (seen.has(name)) duplicated.add(name);
+    seen.add(name);
+  }
+  return duplicated;
+}
+
+/**
+ * 結合の端点を表すキー。
+ * 自己結合では別名も含める。実テーブル名だけにすると
+ * `users u1 LEFT JOIN users u2` と `users u2 LEFT JOIN users u1` の端点がどちらも
+ * `users->users` になり、保持する側が逆の LEFT JOIN を同じ結合と判定してしまう。
+ */
+function tableLookupKey(table: TableRef, selfJoined: Set<string>): string {
+  if (table.isDerived) {
+    return normalizeExpr(table.alias ?? table.displayName) || table.id;
+  }
+  const name = physicalName(table);
+  if (selfJoined.has(name)) return `${name}@${normalizeExpr(table.alias) || table.id}`;
+  return name;
+}
+
 function buildTableIdMap(tables: TableRef[]): Map<string, string> {
+  const selfJoined = selfJoinedNames(tables);
   const map = new Map<string, string>();
   for (const t of tables) {
-    map.set(t.id, tableLookupKey(t));
+    map.set(t.id, tableLookupKey(t, selfJoined));
   }
   return map;
 }
 
 /** エイリアス／テーブル名 → 比較用キー（ON 条件から結合相手を復元するため） */
 function buildTableNameMap(tables: TableRef[]): Map<string, string> {
+  const selfJoined = selfJoinedNames(tables);
   const map = new Map<string, string>();
   for (const t of tables) {
-    const key = tableLookupKey(t);
+    const key = tableLookupKey(t, selfJoined);
     const names = [
       t.alias,
       t.table,
@@ -481,6 +584,117 @@ function joinStructureSignature(
   return [rawType, natural, `${source}->${target}`].filter(Boolean).join('|');
 }
 
+/** 条件の中で、修飾の無い列名ではない語（キーワード・単位） */
+const CONDITION_KEYWORDS = new Set([
+  'and', 'or', 'not', 'xor', 'is', 'null', 'true', 'false', 'unknown', 'in', 'like', 'between',
+  'escape', 'case', 'when', 'then', 'else', 'end', 'interval', 'binary', 'collate', 'div', 'mod',
+  'regexp', 'rlike', 'sounds', 'distinct', 'asc', 'desc', 'microsecond', 'second', 'minute', 'hour',
+  'day', 'week', 'month', 'quarter', 'year',
+]);
+
+/** 修飾子（別名・テーブル名・スキーマ.テーブル名）→ テーブルのキー。同じ名前の参照が 2 つあれば両方 */
+function buildQualifierIndex(query: ParsedQuery, idMap: Map<string, string>): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  for (const t of query.tables) {
+    const key = idMap.get(t.id) ?? t.id;
+    for (const name of [t.alias, t.table, t.displayName, t.schema ? `${t.schema}.${t.table}` : undefined]) {
+      if (!name) continue;
+      const normalized = normalizeExpr(name);
+      const keys = index.get(normalized) ?? new Set<string>();
+      keys.add(key);
+      index.set(normalized, keys);
+    }
+  }
+  return index;
+}
+
+/**
+ * 条件の式が読むテーブル。修飾の無い列名、どのテーブルか決まらない修飾子、
+ * 中身を表示しないサブクエリの要約を含むときは 'unknown'
+ */
+function conditionTables(text: string, index: Map<string, Set<string>>): JoinCondition['tables'] {
+  let masked = maskNonCode(text.replace(/`/g, ''));
+  const tables = new Set<string>();
+  const qualified = /([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\.(?:[A-Za-z_$][\w$]*|\*)/g;
+  for (const match of masked.matchAll(qualified)) {
+    const keys = index.get(match[1]!.toLowerCase());
+    if (!keys || keys.size !== 1) return 'unknown';
+    tables.add([...keys][0]!);
+  }
+  masked = masked.replace(qualified, (m) => ' '.repeat(m.length));
+  for (const match of masked.matchAll(/[A-Za-z_$][\w$]*/g)) {
+    const word = match[0].toLowerCase();
+    const isFunction = /^\s*\(/.test(masked.slice(match.index! + match[0].length));
+    if (!isFunction && !CONDITION_KEYWORDS.has(word)) return 'unknown';
+  }
+  return tables;
+}
+
+/** 条件の 1 項の比較用シグネチャ。`=` と `<=>` は左右を入れ替えても同じ */
+function conjunctSignature(node: ConditionNode): string {
+  const operator = (node.operator ?? '').trim();
+  if (node.type === 'comparison' && (operator === '=' || operator === '<=>')) {
+    return [normalizeExpr(node.left), normalizeExpr(node.right)].sort().join(` ${operator} `);
+  }
+  return conditionSignature(node);
+}
+
+function joinKind(join: JoinEdge): JoinKind {
+  const type = normalizeExpr(join.type);
+  if (join.isNatural) return { fixed: `natural ${type}` };
+  if (type === 'inner join' || type === 'join' || type === 'straight join' || type === 'cross join') {
+    return 'inner';
+  }
+  if (type === 'left join') return 'left';
+  if (type === 'right join') return 'right';
+  return { fixed: type };
+}
+
+function joinConditions(join: JoinEdge, index: Map<string, Set<string>>): JoinCondition[] {
+  const root = join.conditionRoot;
+  if (!root) {
+    if (!joinHasOnCondition(join)) return [];
+    return [{ signature: normalizeJoinConditionText(join), tables: conditionTables(join.condition, index) }];
+  }
+  const conjuncts = root.type === 'and' ? (root.children ?? []) : [root];
+  return conjuncts.map((node) => ({
+    signature: conjunctSignature(node),
+    tables: conditionNodeTables(node, index),
+  }));
+}
+
+/** 条件木が読むテーブル。AND / OR / NOT の label は演算子名だけなので、子をたどって集める */
+function conditionNodeTables(node: ConditionNode, index: Map<string, Set<string>>): JoinCondition['tables'] {
+  if (!node.children?.length) return conditionTables(node.label, index);
+  const tables = new Set<string>();
+  for (const child of node.children) {
+    const childTables = conditionNodeTables(child, index);
+    if (childTables === 'unknown') return 'unknown';
+    for (const key of childTables) tables.add(key);
+  }
+  return tables;
+}
+
+/** FROM 句の結合の比較用シグネチャ（join-tree.ts）。木を組み立てられないときは null */
+function joinTree(query: ParsedQuery): string | null {
+  const idMap = buildTableIdMap(query.tables);
+  const index = buildQualifierIndex(query, idMap);
+  return joinTreeSignature(query, {
+    tableKey: (id) => idMap.get(id) ?? id,
+    kind: joinKind,
+    conditions: (join) => joinConditions(join, index),
+  });
+}
+
+/** 結合の比較用シグネチャ。木を組み立てられないときは、辺の集合で比べる */
+function joinsSignature(query: ParsedQuery): string {
+  const tree = joinTree(query);
+  if (tree !== null) return `tree:${tree}`;
+  const idMap = buildTableIdMap(query.tables);
+  const nameMap = buildTableNameMap(query.tables);
+  return `edges:${query.joins.map((j) => joinSignature(j, idMap, nameMap)).sort().join(',')}`;
+}
+
 function joinStructureSignatures(query: ParsedQuery): string[] {
   const idMap = buildTableIdMap(query.tables);
   const nameMap = buildTableNameMap(query.tables);
@@ -506,7 +720,40 @@ function setClauseSignature(set: SetClause): string {
   ].join('|');
 }
 
-function limitSignature(query: ParsedQuery): string {
+/**
+ * SET 句全体のシグネチャ。
+ * 単一テーブルの UPDATE では、MySQL は代入を左から順に評価する（`SET x = x + 1, y = x` の y は更新後の x）。
+ * 複数テーブルの UPDATE では順序が保証されないので、並べ替えると同じ結果になるとは言えない。
+ * ほかの代入先の列を右辺で読んでいるときは、並び順も結果を決めるので並べ替えない。
+ */
+function setClausesSignature(sets: SetClause[]): string {
+  const signatures = sets.map(setClauseSignature);
+  // 列名だけで照らす。複数テーブルの UPDATE では `SET a.x = b.x, b.x = 1` のように
+  // 同じ列名を別のテーブルで代入するので、自分と同じ列名を除くと順序の依存を見落とす
+  const orderMatters = sets.some((set, index) => {
+    const value = maskNonCode(set.value ?? '').toLowerCase();
+    return sets.some((other, otherIndex) => {
+      const column = normalizeExpr(other.column);
+      return (
+        otherIndex !== index &&
+        column !== '' &&
+        new RegExp(`(?<![\\w$])${escapeRegExp(column)}(?![\\w$])`).test(value)
+      );
+    });
+  });
+  return (orderMatters ? signatures : [...signatures].sort()).join('\0');
+}
+
+/**
+ * 結果全体に掛かる ORDER BY / LIMIT。
+ * UNION の orderBy / limit は先頭ブランチだけのものなので、unionTail を使う
+ */
+function resultTail(query: ParsedQuery): UnionTail {
+  if (!query.unionBranches?.length) return query;
+  return query.unionTail ?? { orderBy: [] };
+}
+
+function limitSignature(query: UnionTail): string {
   return [
     normalizeExpr(query.limit),
     normalizeExpr(query.offset),
@@ -519,36 +766,54 @@ function unionBranchSignature(branch: UnionBranch): string {
 }
 
 function cteSignature(cte: CteRef): string {
-  return `${normalizeExpr(cte.name)}:${querySignature(cte.query)}`;
+  const columns = (cte.columns ?? []).map(normalizeExpr).join(',');
+  return `${normalizeExpr(cte.name)}(${columns}):${querySignature(cte.query)}`;
 }
 
-/** クエリ全体の比較用シグネチャ（ORDER BY 除外） */
+/**
+ * 入れ子のクエリ（派生テーブル・CTE・サブクエリ・UNION ブランチ）の ORDER BY。
+ * LIMIT / OFFSET があるときは、並び順が「どの行を返すか」を決めるので行集合の比較に含める。
+ */
+function nestedOrderSignature(query: UnionTail): string {
+  if (!query.limit && !query.offset) return '';
+  return fragmentListSignature(query.orderBy);
+}
+
+function embeddedSubqueriesSignature(query: ParsedQuery): string {
+  return (query.embeddedSubqueries ?? []).map(querySignature).join('||');
+}
+
+/** 入れ子のクエリの比較用シグネチャ（LIMIT が無いときの ORDER BY は除外） */
 function querySignature(query: ParsedQuery): string {
-  const idMap = buildTableIdMap(query.tables);
-  const nameMap = buildTableNameMap(query.tables);
   const parts = [
     query.statementType,
     query.distinct ? 'distinct' : '',
     query.columns.map(columnSignature).join(','),
     [...query.tables.map(tableKey)].sort().join(','),
-    [...query.joins.map((j) => joinSignature(j, idMap, nameMap))].sort().join(','),
+    joinsSignature(query),
     conditionSignature(query.where),
     conditionSignature(query.having),
-    fragmentSetSignature(query.groupBy),
+    query.groupByModifier ? fragmentListSignature(query.groupBy) : fragmentSetSignature(query.groupBy),
     limitSignature(query),
-    (query.setClauses ?? []).map(setClauseSignature).sort().join(','),
+    nestedOrderSignature(query),
+    embeddedSubqueriesSignature(query),
+    setClausesSignature(query.setClauses ?? []),
     (query.deleteTargets ?? [])
       .map((d) => normalizeExpr(d.name))
       .sort()
       .join(','),
     (query.unionBranches ?? []).map(unionBranchSignature).join('||'),
+    query.unionTail
+      ? `tail:${limitSignature(query.unionTail)}:${nestedOrderSignature(query.unionTail)}`
+      : '',
     (query.ctes ?? []).map(cteSignature).sort().join('||'),
+    normalizeExpr(query.groupByModifier),
   ];
   return parts.join('##');
 }
 
 function orderBySignature(query: ParsedQuery): string {
-  return fragmentListSignature(query.orderBy);
+  return fragmentListSignature(resultTail(query).orderBy);
 }
 
 function diffSortedLists(
@@ -587,6 +852,34 @@ function category(
   };
 }
 
+/**
+ * 修飾なしの `*` は FROM 句に書いた順にテーブルの列を並べ、USING / NATURAL の結合列を 1 つにまとめる。
+ * 列の式が同じ `*` でも、テーブルの並びや USING の有無が違えば出力列が変わる。
+ */
+function starExpansionDetails(a: ParsedQuery, b: ParsedQuery): string[] {
+  const hasBareStar = (q: ParsedQuery) => q.columns.some((c) => c.expression.trim() === '*');
+  if (!hasBareStar(a) && !hasBareStar(b)) return [];
+
+  const shape = (q: ParsedQuery): string => {
+    const idMap = buildTableIdMap(q.tables);
+    const tables = q.tables.map((t) => idMap.get(t.id) ?? t.id);
+    const merged = q.joins.map((j) => {
+      if (j.isNatural) return 'natural';
+      return /^using\s*\(/i.test(j.condition.trim()) ? normalizeExpr(j.condition) : '';
+    });
+    return [tables.join(', '), merged.filter(Boolean).join(' ')].filter(Boolean).join(' / ');
+  };
+
+  const shapeA = shape(a);
+  const shapeB = shape(b);
+  if (shapeA === shapeB) return [];
+  return [
+    '`*` が展開する列の並び（FROM 句のテーブル順、USING / NATURAL でまとまる列）が異なります',
+    `A: ${shapeA}`,
+    `B: ${shapeB}`,
+  ];
+}
+
 function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
   const aIdMap = buildTableIdMap(a.tables);
   const bIdMap = buildTableIdMap(b.tables);
@@ -602,7 +895,7 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
   const bCols = b.columns.map(columnSignature);
   const columnDiff =
     aCols.join('\0') === bCols.join('\0')
-      ? category('columns', [])
+      ? category('columns', starExpansionDetails(a, b))
       : category('columns', [
           `A: ${aCols.join(', ') || '(なし)'}`,
           `B: ${bCols.join(', ') || '(なし)'}`,
@@ -615,14 +908,23 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
 
   const aTables = a.tables.map(tableKey).sort();
   const bTables = b.tables.map(tableKey).sort();
-  const tableDetails = diffSortedLists(aTables, bTables, (k) => k.replace(/^table:/, '').replace(/^derived:/, '派生:'));
+  const tableDetails = formatTableDetails(diffSortedLists(aTables, bTables));
 
   const aJoins = a.joins.map((j) => joinSignature(j, aIdMap, aNameMap)).sort();
   const bJoins = b.joins.map((j) => joinSignature(j, bIdMap, bNameMap)).sort();
-  const joinDetails = diffSortedLists(aJoins, bJoins, (sig) => {
-    const parts = sig.split('|');
-    return parts.slice(0, 4).join(' / ') || sig;
-  });
+  let joinDetails: string[] = [];
+  if (joinsSignature(a) !== joinsSignature(b)) {
+    joinDetails = diffSortedLists(aJoins, bJoins, (sig) => {
+      const parts = sig.split('|');
+      return parts.slice(0, 4).join(' / ') || sig;
+    });
+    if (joinDetails.length === 0) {
+      // 結合の 1 つずつは同じでも、どの結合の結果に外部結合するかで行が変わる
+      joinDetails = [
+        '結合の組み立てが異なります（外部結合で行を残す側のテーブル、または外部結合と内部結合の順序）',
+      ];
+    }
+  }
 
   const whereA = conditionSignature(a.where);
   const whereB = conditionSignature(b.where);
@@ -634,38 +936,62 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
 
   const groupA = [...a.groupBy.map((g) => normalizeExpr(g.text))].sort();
   const groupB = [...b.groupBy.map((g) => normalizeExpr(g.text))].sort();
+  const rollupA = normalizeExpr(a.groupByModifier);
+  const rollupB = normalizeExpr(b.groupByModifier);
+  // WITH ROLLUP は列の並び順どおりに小計を作るので、付いているときは順序も比べる
+  const groupTextA = (rollupA ? a.groupBy.map((g) => normalizeExpr(g.text)) : groupA).join(', ');
+  const groupTextB = (rollupB ? b.groupBy.map((g) => normalizeExpr(g.text)) : groupB).join(', ');
   const groupDetails =
-    groupA.join('\0') === groupB.join('\0')
+    groupTextA === groupTextB && rollupA === rollupB
       ? []
-      : diffScalar('GROUP BY', groupA.join(', ') || '(なし)', groupB.join(', ') || '(なし)');
+      : diffScalar(
+          'GROUP BY',
+          [groupTextA, rollupA].filter(Boolean).join(' ') || '(なし)',
+          [groupTextB, rollupB].filter(Boolean).join(' ') || '(なし)',
+        );
 
-  const orderA = a.orderBy.map((o) => normalizeExpr(o.text));
-  const orderB = b.orderBy.map((o) => normalizeExpr(o.text));
+  const tailA = resultTail(a);
+  const tailB = resultTail(b);
+  const orderA = tailA.orderBy.map((o) => normalizeExpr(o.text));
+  const orderB = tailB.orderBy.map((o) => normalizeExpr(o.text));
   const orderDetails =
     orderA.join('\0') === orderB.join('\0')
       ? []
       : diffScalar('ORDER BY', orderA.join(', ') || '(なし)', orderB.join(', ') || '(なし)');
 
   const limitDetails =
-    limitSignature(a) === limitSignature(b)
+    limitSignature(tailA) === limitSignature(tailB)
       ? []
       : diffScalar(
           'LIMIT',
-          [a.limit && `LIMIT ${a.limit}`, a.offset && `OFFSET ${a.offset}`].filter(Boolean).join(' ') ||
+          [tailA.limit && `LIMIT ${tailA.limit}`, tailA.offset && `OFFSET ${tailA.offset}`]
+            .filter(Boolean)
+            .join(' ') ||
             '(なし)',
-          [b.limit && `LIMIT ${b.limit}`, b.offset && `OFFSET ${b.offset}`].filter(Boolean).join(' ') ||
+          [tailB.limit && `LIMIT ${tailB.limit}`, tailB.offset && `OFFSET ${tailB.offset}`]
+            .filter(Boolean)
+            .join(' ') ||
             '(なし)',
         );
 
-  const aSets = (a.setClauses ?? []).map(setClauseSignature).sort();
-  const bSets = (b.setClauses ?? []).map(setClauseSignature).sort();
-  const setDetails =
-    aSets.join('\0') === bSets.join('\0')
+  const setLabelsA = (a.setClauses ?? []).map((s) => normalizeExpr(s.label) || setClauseSignature(s));
+  const setLabelsB = (b.setClauses ?? []).map((s) => normalizeExpr(s.label) || setClauseSignature(s));
+  let setDetails: string[] = [];
+  if (setClausesSignature(a.setClauses ?? []) !== setClausesSignature(b.setClauses ?? [])) {
+    setDetails = diffSortedLists(setLabelsA, setLabelsB);
+    if (setDetails.length === 0) {
+      setDetails = [
+        '代入の順序が異なります（ほかの代入先の列を読む式があるため、順序によって結果が変わります）',
+        `A: ${setLabelsA.join(', ')}`,
+        `B: ${setLabelsB.join(', ')}`,
+      ];
+    }
+  }
+
+  const embeddedDetails =
+    embeddedSubqueriesSignature(a) === embeddedSubqueriesSignature(b)
       ? []
-      : diffSortedLists(
-          (a.setClauses ?? []).map((s) => normalizeExpr(s.label) || setClauseSignature(s)),
-          (b.setClauses ?? []).map((s) => normalizeExpr(s.label) || setClauseSignature(s)),
-        );
+      : ['式の中のサブクエリ（SELECT 列・関数の引数・SET の右辺など）の内容が異なります'];
 
   const aDel = (a.deleteTargets ?? []).map((d) => normalizeExpr(d.name)).sort();
   const bDel = (b.deleteTargets ?? []).map((d) => normalizeExpr(d.name)).sort();
@@ -717,6 +1043,7 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
     category('cte', cteDetails),
     category('set', setDetails),
     category('deleteTargets', deleteDetails),
+    category('other', embeddedDetails),
   ];
 
   const hasContent: Record<DiffCategoryId, boolean> = {
@@ -728,13 +1055,14 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
     where: !!(a.where || b.where) || whereDetails.length > 0,
     having: !!(a.having || b.having) || havingDetails.length > 0,
     groupBy: a.groupBy.length > 0 || b.groupBy.length > 0 || groupDetails.length > 0,
-    orderBy: a.orderBy.length > 0 || b.orderBy.length > 0 || orderDetails.length > 0,
-    limit: !!(a.limit || b.limit || a.offset || b.offset) || limitDetails.length > 0,
+    orderBy: tailA.orderBy.length > 0 || tailB.orderBy.length > 0 || orderDetails.length > 0,
+    limit: !!(tailA.limit || tailB.limit || tailA.offset || tailB.offset) || limitDetails.length > 0,
     union: !!(a.unionBranches?.length || b.unionBranches?.length) || unionDetails.length > 0,
     cte: !!(a.ctes?.length || b.ctes?.length) || cteDetails.length > 0,
     set: !!(a.setClauses?.length || b.setClauses?.length) || setDetails.length > 0,
     deleteTargets:
       !!(a.deleteTargets?.length || b.deleteTargets?.length) || deleteDetails.length > 0,
+    other: false,
   };
 
   return all.filter((c) => hasContent[c.id] || c.status === 'different');
@@ -1030,8 +1358,8 @@ function detectWhereToOn(a: ParsedQuery, b: ParsedQuery): ReviewHint | null {
   // WHERE↔ON 以外の差分があるときはヒントを出さない
   if (fragmentSetSignature(a.groupBy) !== fragmentSetSignature(b.groupBy)) return null;
   if (conditionSignature(a.having) !== conditionSignature(b.having)) return null;
-  if (limitSignature(a) !== limitSignature(b)) return null;
-  if (fragmentListSignature(a.orderBy) !== fragmentListSignature(b.orderBy)) return null;
+  if (limitSignature(resultTail(a)) !== limitSignature(resultTail(b))) return null;
+  if (orderBySignature(a) !== orderBySignature(b)) return null;
 
   const tablesA = a.tables.map(physicalTableKey).sort().join('\0');
   const tablesB = b.tables.map(physicalTableKey).sort().join('\0');
@@ -1098,7 +1426,8 @@ function orderedJoinChainSignature(query: ParsedQuery): string {
 }
 
 export function hasLimitWithoutOrder(query: ParsedQuery): boolean {
-  return !!(query.limit || query.offset) && query.orderBy.length === 0;
+  const tail = resultTail(query);
+  return !!(tail.limit || tail.offset) && tail.orderBy.length === 0;
 }
 
 const LIMIT_WITHOUT_ORDER_HINT: ReviewHint = {
@@ -1126,7 +1455,7 @@ function detectLimitWithoutOrderHint(
 ): ReviewHint | null {
   // 両側とも LIMIT/OFFSET あり・ORDER BY なしのときだけ JOIN 順を問題にする
   if (!hasLimitWithoutOrder(normalizedA) || !hasLimitWithoutOrder(normalizedB)) return null;
-  if (limitSignature(normalizedA) !== limitSignature(normalizedB)) return null;
+  if (limitSignature(resultTail(normalizedA)) !== limitSignature(resultTail(normalizedB))) return null;
   if (joinSignatureList(normalizedA) !== joinSignatureList(normalizedB)) return null;
   if (orderedJoinChainSignature(normalizedA) === orderedJoinChainSignature(normalizedB)) {
     return null;
@@ -1174,6 +1503,37 @@ function detectMatchedViaEffectiveInner(
   return joinGraphFingerprint(normalizedA) === joinGraphFingerprint(normalizedB);
 }
 
+const RESIDUAL_TOKEN_PREVIEW = 8;
+
+function formatResidualTokens(tokens: string[]): string {
+  const shown = tokens.slice(0, RESIDUAL_TOKEN_PREVIEW).join(' ');
+  return tokens.length > RESIDUAL_TOKEN_PREVIEW ? `${shown} …` : shown;
+}
+
+/**
+ * カテゴリ比較で差分が出なかったときだけ、元 SQL の字句の過不足を確かめる。
+ * パーサが表示用文字列にしない構文の違いを「同じ」と判定しないための確認で、
+ * 過不足があれば「その他の記述」カテゴリの差分として足す。
+ */
+function applyResidualTokenGuard(
+  categories: DiffCategoryResult[],
+  queryA: ParsedQuery,
+  queryB: ParsedQuery,
+): void {
+  if (categories.some((c) => c.id !== 'orderBy' && c.status === 'different')) return;
+  const { onlyA, onlyB } = residualTokenDiff(queryA, queryB);
+  if (onlyA.length === 0 && onlyB.length === 0) return;
+
+  const details = ['カテゴリ別の比較が扱わない記述に違いがあります。結果が同じとは判定できません'];
+  if (onlyA.length > 0) details.push(`A のみ: ${formatResidualTokens(onlyA)}`);
+  if (onlyB.length > 0) details.push(`B のみ: ${formatResidualTokens(onlyB)}`);
+
+  const index = categories.findIndex((c) => c.id === 'other');
+  const result = category('other', details);
+  if (index >= 0) categories[index] = result;
+  else categories.push(result);
+}
+
 /**
  * 2つの ParsedQuery を比較し、実行結果に影響しうる構文差分を返す。
  * 実データは使わず、エイリアス解決後の構造比較による推定。
@@ -1188,6 +1548,7 @@ export function compareQueryResults(
   const b = resolveForResultSetDiff(queryB);
 
   const categories = compareTopLevel(a, b);
+  applyResidualTokenGuard(categories, queryA, queryB);
   const orderCategory = categories.find((c) => c.id === 'orderBy');
   const nonOrderDiffs = categories.filter((c) => c.id !== 'orderBy' && c.status === 'different');
   const orderDiffers = orderCategory?.status === 'different';

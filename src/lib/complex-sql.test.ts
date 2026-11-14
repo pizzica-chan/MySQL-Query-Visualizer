@@ -685,8 +685,17 @@ describe('複雑な SQL の比較で偽陽性を出さない', () => {
     expect(diff.equalForResultSet, `${pair.name}: 結果セットを同じと誤判定`).toBe(false);
   });
 
+  it('テーブル名の大文字小文字だけが違う SQL は「同じ」と言わない（Linux の MySQL では別のテーブル）', () => {
+    const a = parseMySqlQuery('SELECT u.id FROM USERS u');
+    const b = parseMySqlQuery('SELECT u.id FROM users u');
+    expect(a.success && b.success).toBe(true);
+    if (!a.success || !b.success) return;
+    expect(compareQueryResults(a.query, b.query).equalForResultSet).toBe(false);
+  });
+
+  // テーブル名は大文字小文字を区別するので、整形の違いはキーワード・別名・列名・空白で確かめる
   it('整形しただけの SQL は「同じ」と判定できる', () => {
-    const messy = `select U.ID,u.name from USERS U inner join ORDERS O on O.user_id=U.ID where U.STATUS='active' and O.TOTAL>100 order by 1`;
+    const messy = `select U.ID,u.name from users U inner join orders O on O.user_id=U.ID where U.STATUS='active' and O.TOTAL>100 order by 1`;
     const tidy = `SELECT u.id,
        u.name
   FROM users u

@@ -476,5 +476,16 @@ export function remapParsedQuerySpans(
       sourceSpan: remapSourceSpan(map, branch.sourceSpan),
       query: remapParsedQuerySpans(map, branch.query, originalSql),
     })),
+    embeddedSubqueries: query.embeddedSubqueries?.map((sub) =>
+      remapParsedQuerySpans(map, sub, originalSql),
+    ),
+    unionTail: query.unionTail
+      ? {
+          ...query.unionTail,
+          orderBy: query.unionTail.orderBy.map((o) => remapSqlFragment(map, o)),
+          limitSpan: remapSourceSpan(map, query.unionTail.limitSpan),
+          offsetSpan: remapSourceSpan(map, query.unionTail.offsetSpan),
+        }
+      : undefined,
   };
 }

@@ -134,19 +134,61 @@ describe('合接クエリの正規化', () => {
     );
   });
 
-  it('冗長な自己結合を畳み込む（集合として）', () => {
+  it('同じ等式を持つ冗長な結合を畳み込む（集合として）', () => {
     expectStatus(
-      `SELECT DISTINCT a.id FROM users a, users b WHERE a.id = b.id`,
-      `SELECT DISTINCT a.id FROM users a`,
+      `SELECT DISTINCT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id`,
+      `SELECT DISTINCT u.id FROM users u
+       INNER JOIN orders o ON o.user_id = u.id
+       INNER JOIN orders o2 ON o2.user_id = u.id`,
       'proven-equivalent',
     );
   });
 
-  it('冗長な自己結合は DISTINCT なしなら重複数まで保証しない', () => {
+  it('同じ等式を持つ冗長な結合は DISTINCT なしなら重複数まで保証しない', () => {
     expectStatus(
-      `SELECT a.id FROM users a, users b WHERE a.id = b.id`,
-      `SELECT a.id FROM users a`,
+      `SELECT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id`,
+      `SELECT u.id FROM users u
+       INNER JOIN orders o ON o.user_id = u.id
+       INNER JOIN orders o2 ON o2.user_id = u.id`,
       'proven-equivalent-set-only',
+    );
+  });
+});
+
+/**
+ * MySQL の `=` は推移律と反射律を満たさないことがある。
+ * 型の違う列の比較（'1.0' = 1 と 1 = '1' は真、'1.0' = '1' は偽）と NULL（NULL = NULL は真にならない）
+ */
+describe('等号を推移的・反射的には扱わない', () => {
+  it('推移律で導ける等式を足したクエリは証明しない', () => {
+    expectStatus(
+      `SELECT DISTINCT a.id FROM a INNER JOIN b ON a.s = b.n INNER JOIN c ON b.n = c.s`,
+      `SELECT DISTINCT a.id FROM a INNER JOIN b ON a.s = b.n INNER JOIN c ON b.n = c.s AND a.s = c.s`,
+      'not-proven',
+    );
+  });
+
+  it('等式でつながる別の列を出力するクエリは証明しない', () => {
+    expectStatus(
+      `SELECT DISTINCT o.user_id FROM users u INNER JOIN orders o ON o.user_id = u.id`,
+      `SELECT DISTINCT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id`,
+      'not-proven',
+    );
+  });
+
+  it('自分自身との等式で結ぶ自己結合は、結合しないクエリと同じとは証明しない（id が NULL の行が消える）', () => {
+    expectStatus(
+      `SELECT DISTINCT a.id FROM users a, users b WHERE a.id = b.id`,
+      `SELECT DISTINCT a.id FROM users a`,
+      'not-proven',
+    );
+  });
+
+  it('テーブル名の大文字小文字が違えば証明しない（Linux の MySQL では別のテーブル）', () => {
+    expectStatus(
+      `SELECT DISTINCT u.id FROM Users u INNER JOIN orders o ON o.user_id = u.id`,
+      `SELECT DISTINCT u.id FROM users u INNER JOIN orders o ON o.user_id = u.id`,
+      'not-proven',
     );
   });
 

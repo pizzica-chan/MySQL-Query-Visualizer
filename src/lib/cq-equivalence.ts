@@ -8,6 +8,13 @@
  *   - 修飾済みの単純な列参照だけの SELECT
  * に限れば合接クエリとなり、準同型写像の相互存在で等価性を判定できる（Chandra-Merlin）。
  *
+ * `=` は推移的な等号として扱わず、書かれた等式そのものを対称な述語として比べる。
+ * MySQL の `=` は型が違うと推移律が成り立たず（`'1.0' = 1` と `1 = '1'` は真、`'1.0' = '1'` は偽）、
+ * NULL では反射律も成り立たない（`a.id = a.id` は id が NULL の行で真にならない）。
+ * 等式から列を同じ変数にまとめると、`a.s = b.n AND b.n = c.s` に `a.s = c.s` を足したクエリや、
+ * `users a, users b WHERE a.id = b.id` と `users a` を「同じ」と証明してしまう。
+ * 等式を述語のまま扱えば、`=` がどう評価されても準同型による証明は成り立つ。
+ *
  * 安全側の原則:
  *   1. 許可リスト方式。少しでも対象外の構文があれば即 not-proven
  *   2. 探索予算を超えたら not-proven（タイムアウトで「同じ」と言わない）
@@ -35,6 +42,9 @@ export interface CqEquivalenceResult {
 const NOT_PROVEN = (reason: string): CqEquivalenceResult => ({ status: 'not-proven', reason });
 
 const ALLOWED_JOIN_TYPES = new Set(['INNER JOIN', 'JOIN', 'STRAIGHT JOIN', 'CROSS JOIN']);
+/** 等式の述語に使う関係名。テーブル名は識別子なので `=` とは重ならない */
+const EQUALITY_RELATION = '=';
+
 const EMPTY_JOIN_CONDITIONS = new Set(['', '(no condition)']);
 
 const IDENT = String.raw`(?:\`[^\`]+\`|[A-Za-z_][A-Za-z0-9_$]*)`;
@@ -102,28 +112,6 @@ function isLexicallyInScope(rawSql: string | undefined): boolean {
   return true;
 }
 
-class UnionFind {
-  private parent = new Map<string, string>();
-
-  find(key: string): string {
-    const seen: string[] = [];
-    let current = key;
-    while (this.parent.has(current) && this.parent.get(current) !== current) {
-      seen.push(current);
-      current = this.parent.get(current)!;
-    }
-    if (!this.parent.has(current)) this.parent.set(current, current);
-    for (const node of seen) this.parent.set(node, current);
-    return current;
-  }
-
-  union(a: string, b: string): void {
-    const rootA = this.find(a);
-    const rootB = this.find(b);
-    if (rootA !== rootB) this.parent.set(rootA, rootB);
-  }
-}
-
 interface BuilderAtom {
   atomId: string;
   relation: string;
@@ -148,8 +136,10 @@ function lookupQualifier(scope: Scope | undefined, qualifier: string): string | 
 
 interface RawCq {
   atoms: BuilderAtom[];
-  /** 変数クラス代表 → リテラル */
-  constOf: Map<string, string>;
+  /** 列どうしの等式（変数キーの組） */
+  equalities: Array<[string, string]>;
+  /** 列とリテラルの等式（変数キー, リテラル） */
+  constBindings: Array<[string, string]>;
   /** 出力列ごとの変数キー */
   head: string[];
   headNames: string[];
@@ -160,7 +150,6 @@ interface RawCq {
 
 class CqBuilder {
   atoms: BuilderAtom[] = [];
-  uf = new UnionFind();
   equalities: Array<[string, string]> = [];
   constBindings: Array<[string, string]> = [];
   headKeys: string[] = [];
@@ -171,7 +160,9 @@ class CqBuilder {
   addTable(table: TableRef, scope: Scope): string | null {
     if (table.isDerived) return null;
     const atomId = `a${this.nextAtom++}`;
-    const relation = normIdent(table.schema ? `${table.schema}.${table.table}` : table.table);
+    // テーブル名は大文字小文字を区別する。Linux の MySQL（lower_case_table_names=0）では
+    // `Users` と `users` は別のテーブル
+    const relation = (table.schema ? `${table.schema}.${table.table}` : table.table).replace(/`/g, '').trim();
     this.atoms.push({ atomId, relation, columns: new Map() });
 
     const keys: string[] = [];
@@ -339,30 +330,22 @@ function buildCq(query: ParsedQuery): BuildSuccess | BuildFailure {
   const failure = addQueryBody(builder, query, undefined, false);
   if (failure) return { ok: false, reason: failure };
 
-  for (const [a, b] of builder.equalities) builder.uf.union(a, b);
-
   const constOf = new Map<string, string>();
   for (const [key, literal] of builder.constBindings) {
-    const rep = builder.uf.find(key);
-    const existing = constOf.get(rep);
+    const existing = constOf.get(key);
     if (existing !== undefined && existing !== literal) {
       return { ok: false, reason: '同じ列に異なる定数が束縛されています' };
     }
-    constOf.set(rep, literal);
+    constOf.set(key, literal);
   }
-
-  const atoms: BuilderAtom[] = builder.atoms.map((atom) => ({
-    atomId: atom.atomId,
-    relation: atom.relation,
-    columns: new Map([...atom.columns].map(([col, key]) => [col, builder.uf.find(key)])),
-  }));
 
   return {
     ok: true,
     cq: {
-      atoms,
-      constOf,
-      head: builder.headKeys.map((key) => builder.uf.find(key)),
+      atoms: builder.atoms,
+      equalities: builder.equalities,
+      constBindings: builder.constBindings,
+      head: builder.headKeys,
       headNames: builder.headNames,
       distinct: query.distinct,
       hasExists: builder.hasExists,
@@ -412,8 +395,6 @@ function materialize(cq: RawCq, relationColumns: Map<string, string[]>): Materia
   const varOfRep = new Map<string, number>();
 
   const termForRep = (rep: string): Term => {
-    const literal = cq.constOf.get(rep);
-    if (literal !== undefined) return { kind: 'const', value: literal };
     let id = varOfRep.get(rep);
     if (id === undefined) {
       id = nextVar++;
@@ -431,6 +412,18 @@ function materialize(cq: RawCq, relationColumns: Map<string, string[]>): Materia
     });
     return { relation: atom.relation, terms };
   });
+
+  // `=` は対称なので両方の向きを入れる。`a = b` と `b = a` は同じ述語に写せる
+  const equality = (left: Term, right: Term): MaterialAtom[] => [
+    { relation: EQUALITY_RELATION, terms: [left, right] },
+    { relation: EQUALITY_RELATION, terms: [right, left] },
+  ];
+  for (const [left, right] of cq.equalities) {
+    atoms.push(...equality(termForRep(left), termForRep(right)));
+  }
+  for (const [key, literal] of cq.constBindings) {
+    atoms.push(...equality(termForRep(key), { kind: 'const', value: literal }));
+  }
 
   return { atoms, head: cq.head.map(termForRep) };
 }

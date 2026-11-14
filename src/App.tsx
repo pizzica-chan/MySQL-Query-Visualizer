@@ -97,6 +97,13 @@ export default function App() {
   }, [aSynced, bSynced, parsedA, parsedB]);
 
   const runParse = useCallback(() => {
+    // 未入力は解析エラーではない。エラーにすると、サンプル読み込みボタンのある初期表示が
+    // 開いて 0.4 秒後に「解析エラー」へ置き換わる
+    if (!sql.trim()) {
+      setParsed(null);
+      setError(undefined);
+      return;
+    }
     const result = parseMySqlQuery(sql);
     if (result.success) {
       setParsed(result.query);

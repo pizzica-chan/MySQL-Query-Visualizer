@@ -581,4 +581,39 @@ describe('join-effective-inner', () => {
       expect(line).toContain('後続の INNER JOIN により');
     });
   });
+
+  /**
+   * 未結合行（b の列がすべて NULL の行）でも真になりうる条件。
+   * これを根拠に実質 INNER と表示すると、行が残る LEFT JOIN を「必ず絞り込む」と説明してしまう。
+   */
+  describe('未結合行でも成り立つ条件は実質 INNER の根拠にしない', () => {
+    const base = 'SELECT a.id FROM table_a a LEFT JOIN table_b b ON b.a_id = a.id';
+
+    it.each([
+      ['NOT の内側の AND（OR と同じ）', `${base} WHERE NOT (b.col = 1 AND a.flag = 2)`],
+      ['ISNULL()', `${base} WHERE ISNULL(b.col)`],
+      ['CASE で NULL を別の値にする', `${base} WHERE CASE WHEN b.col IS NULL THEN 1 ELSE 0 END = 1`],
+      ['IF で NULL を別の値にする', `${base} WHERE IF(b.col IS NULL, 1, 0) = 1`],
+      ['IN のリスト側にだけ参照がある', `${base} WHERE a.col IN (b.col, 1)`],
+      ['IS NOT TRUE', `${base} WHERE (b.col = 1) IS NOT TRUE`],
+      ['NOT の内側の IS NOT NULL', `${base} WHERE NOT (b.id IS NOT NULL)`],
+      ['NOT IN サブクエリ（空なら真）', `${base} WHERE b.col NOT IN (SELECT x.col FROM x)`],
+      ['後続 INNER JOIN の ON が OR', `${base} INNER JOIN table_c c ON c.b_id = b.id OR c.a_id = a.id`],
+      ['後続 INNER JOIN の ON が COALESCE', `${base} INNER JOIN table_c c ON c.id = COALESCE(b.c_id, a.c_id)`],
+      ['後続 INNER JOIN の ON が IS NULL', `${base} INNER JOIN table_c c ON c.a_id = a.id AND b.id IS NULL`],
+    ])('%s', (_name, sql) => {
+      expect(analyzeEffectiveInnerJoins(parseSql(sql))).toEqual([]);
+    });
+
+    it.each([
+      ['NOT の内側の比較（NULL のまま）', `${base} WHERE NOT (b.col = 1)`],
+      ['NOT の内側の OR（AND と同じ）', `${base} WHERE NOT (b.col = 1 OR a.flag = 2)`],
+      ['IS NOT NULL', `${base} WHERE b.id IS NOT NULL`],
+      ['IN サブクエリ', `${base} WHERE b.col IN (SELECT x.col FROM x)`],
+      ['INTERVAL を含む日付計算', `${base} WHERE b.created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)`],
+      ['後続 INNER JOIN の ON の AND の一方', `${base} INNER JOIN table_c c ON c.b_id = b.id AND c.kind = 1`],
+    ])('未結合行では成り立たない条件は従来どおり根拠にする: %s', (_name, sql) => {
+      expect(analyzeEffectiveInnerJoins(parseSql(sql))).toHaveLength(1);
+    });
+  });
 });

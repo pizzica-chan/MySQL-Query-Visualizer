@@ -211,6 +211,9 @@ export function applyAliasResolution(
       ...branch,
       query: applyAliasResolution(branch.query, true, options),
     })),
+    embeddedSubqueries: query.embeddedSubqueries?.map((sub) =>
+      applyAliasResolution(sub, true, options),
+    ),
   };
 }
 

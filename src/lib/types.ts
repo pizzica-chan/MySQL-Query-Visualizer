@@ -19,6 +19,8 @@ export type JoinType =
 
 export interface CteRef {
   name: string;
+  /** `WITH c (p, q) AS (…)` の列名リスト。本体の出力列にこの順で名前を付ける */
+  columns?: string[];
   query: ParsedQuery;
   sourceSpan?: SourceSpan;
 }
@@ -111,6 +113,12 @@ export interface DeleteTarget {
   label: string;
 }
 
+/** UNION 全体に掛かる ORDER BY / LIMIT / OFFSET */
+export type UnionTail = Pick<
+  ParsedQuery,
+  'orderBy' | 'limit' | 'limitSpan' | 'offset' | 'offsetSpan' | 'limitCommaOffset'
+>;
+
 export interface ParsedQuery {
   rawSql: string;
   statementType: 'SELECT' | 'UPDATE' | 'DELETE';
@@ -124,6 +132,8 @@ export interface ParsedQuery {
   setClauses?: SetClause[];
   deleteTargets?: DeleteTarget[];
   groupBy: SqlFragment[];
+  /** GROUP BY に付く修飾子（`WITH ROLLUP`）。付くと小計行が増え、列の並び順も結果を決める */
+  groupByModifier?: string;
   orderBy: SqlFragment[];
   limit?: string;
   limitSpan?: SourceSpan;
@@ -138,8 +148,19 @@ export interface ParsedQuery {
   straightJoinHintSpan?: SourceSpan;
   /** UNION / UNION ALL 等の各ブランチ（2本以上のとき） */
   unionBranches?: UnionBranch[];
+  /**
+   * UNION 全体に掛かる ORDER BY / LIMIT。UNION のときの orderBy / limit は先頭ブランチだけのもので、
+   * 結果全体の並び順と行数はこちらが決める。指定が無ければ undefined
+   */
+  unionTail?: UnionTail;
   /** WITH 句で定義された CTE */
   ctes?: CteRef[];
+  /**
+   * 式の中に書かれたサブクエリ（SELECT 列・関数の引数・ORDER BY・SET の右辺など）。出現順。
+   * 式の表示は `(SELECT 1列 FROM t)` のように要約するので、中身の比較にはこちらを使う。
+   * 条件木の nestedQuery として持つサブクエリは含めない。
+   */
+  embeddedSubqueries?: ParsedQuery[];
 }
 
 export interface ParseError {

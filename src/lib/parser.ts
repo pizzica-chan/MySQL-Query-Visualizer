@@ -5,6 +5,7 @@ import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { formatJoinConditionLabel } from './join-condition';
 import {
+  maskNonCode,
   preprocessSqlForParser,
   remapParsedQuerySpans,
 } from './sql-preprocess';
@@ -26,6 +27,7 @@ import type {
   SqlFragment,
   SourceSpan,
   TableRef,
+  UnionTail,
 } from './types';
 
 const parser = new Parser();
@@ -33,11 +35,17 @@ const parser = new Parser();
 let nodeCounter = 0;
 /** 前処理後 SQL 上で NATURAL 由来の JOIN キーワード開始オフセット */
 let naturalJoinStarts: number[] = [];
+/** 前処理後の SQL。AST の位置（loc）はこの文字列上のオフセットで、NATURAL の判定と ORDER BY の範囲に使う */
 let processedSqlForNatural = '';
 /** SELECT 直後の STRAIGHT_JOIN ヒントを剥がした SELECT 開始オフセット */
 let straightJoinHintSelectStarts: number[] = [];
 /** 元 SQL 上の SELECT … STRAIGHT_JOIN 範囲（straightJoinHintSelectStarts と同じ順） */
 let straightJoinHintOriginalSpans: SourceSpan[] = [];
+/**
+ * exprToString が要約したサブクエリの AST。いま組み立てているクエリの分だけを持つ
+ * （collectEmbeddedSubqueries がクエリごとに差し替える）
+ */
+let embeddedSubqueryAsts: any[] = [];
 
 function nextId(prefix: string): string {
   nodeCounter += 1;
@@ -50,6 +58,28 @@ function resetIds(): void {
   processedSqlForNatural = '';
   straightJoinHintSelectStarts = [];
   straightJoinHintOriginalSpans = [];
+  embeddedSubqueryAsts = [];
+}
+
+function noteEmbeddedSubquery(ast: any): void {
+  if (!embeddedSubqueryAsts.includes(ast)) embeddedSubqueryAsts.push(ast);
+}
+
+/**
+ * build の間に exprToString が要約したサブクエリを解析し、embeddedSubqueries として持たせる。
+ * 要約した文字列だけでは `(SELECT MAX(x) FROM t)` と `(SELECT MIN(x) FROM t)` の区別が付かない。
+ */
+function collectEmbeddedSubqueries(build: () => ParsedQuery): ParsedQuery {
+  const outer = embeddedSubqueryAsts;
+  embeddedSubqueryAsts = [];
+  try {
+    const query = build();
+    const collected = embeddedSubqueryAsts;
+    if (collected.length === 0) return query;
+    return { ...query, embeddedSubqueries: collected.map((ast) => buildNestedSelect(ast)) };
+  } finally {
+    embeddedSubqueryAsts = outer;
+  }
 }
 
 function formatIdentifier(name: unknown): string {
@@ -157,10 +187,25 @@ function formatCastTarget(target: any): string {
   return params.length > 0 ? `${dataType}(${params.join(',')})` : dataType;
 }
 
+/**
+ * ウィンドウ枠。`ROWS BETWEEN a AND b` は BETWEEN の二項式、
+ * `ROWS UNBOUNDED PRECEDING` は { type: 'rows', expr } の形で来る
+ */
+function formatWindowFrame(frame: any): string {
+  if (!frame) return '';
+  if (frame.type !== 'binary_expr' && typeof frame.type === 'string' && frame.expr) {
+    return `${frame.type} ${exprToString(frame.expr)}`;
+  }
+  return exprToString(frame);
+}
+
 /** 分析関数の OVER 句。落とすと同じ関数呼び出しに見えてしまう */
 function formatOverClause(over: any): string {
-  const spec = over?.as_window_specification?.window_specification;
-  if (!spec) return over?.as_window_specification?.name ? ` OVER ${over.as_window_specification.name}` : '';
+  const named = over?.as_window_specification;
+  // `OVER w`（WINDOW 句で定義した名前の参照）は文字列で来る
+  if (typeof named === 'string') return named ? ` OVER ${named}` : '';
+  const spec = named?.window_specification;
+  if (!spec) return named?.name ? ` OVER ${named.name}` : '';
 
   const parts: string[] = [];
   const partitionBy = toArray<any>(spec.partitionby)
@@ -173,12 +218,28 @@ function formatOverClause(over: any): string {
     .filter((text) => text.trim().length > 0);
   if (orderBy.length > 0) parts.push(`ORDER BY ${orderBy.join(', ')}`);
 
+  // 枠（ROWS BETWEEN 1 PRECEDING AND CURRENT ROW など）は集計する行の範囲を決める
+  const frame = formatWindowFrame(spec.window_frame_clause);
+  if (frame) parts.push(frame.toUpperCase());
+
   return ` OVER (${parts.join(' ')})`;
+}
+
+/** 式に付く COLLATE と、CONVERT(x USING charset) の USING。表示から外すと別の比較・変換が同じ式に見える */
+function formatExprSuffix(node: any): string {
+  let out = '';
+  const collation = node?.collate?.collate?.name;
+  if (collation) out += ` COLLATE ${formatIdentifier(collation)}`;
+  if (typeof node?.suffix === 'string' && node.suffix) out += ` ${node.suffix}`;
+  return out;
 }
 
 function exprToString(node: any): string {
   if (!node) return '';
+  return `${exprToStringCore(node)}${formatExprSuffix(node)}`;
+}
 
+function exprToStringCore(node: any): string {
   // 元 SQL の括弧を落とすと (a + b) * 2 が a + b * 2 になり、表示が別の意味になる
   const wrap = (text: string): string => (node.parentheses ? `(${text})` : text);
 
@@ -205,6 +266,15 @@ function exprToString(node: any): string {
         .map((a: any) => exprToString(a))
         .join(', ');
     case 'binary_expr': {
+      const betweenBounds =
+        /^(NOT\s+)?BETWEEN$/i.test(String(node.operator ?? '')) && node.right?.type === 'expr_list'
+          ? toArray<any>(node.right.value)
+          : [];
+      if (betweenBounds.length === 2) {
+        return wrap(
+          `${exprToString(node.left)} ${node.operator} ${exprToString(betweenBounds[0])} AND ${exprToString(betweenBounds[1])}`,
+        );
+      }
       // ESCAPE を落とすと LIKE の意味が変わって見える
       return wrap(
         `${exprToString(node.left)} ${node.operator} ${exprToString(node.right)}${formatEscapeClause(node)}`,
@@ -254,6 +324,7 @@ function exprToString(node: any): string {
     case 'subquery': {
       const inner = node.subquery?.ast ?? node.subquery ?? node.ast;
       if (inner?.type === 'select') {
+        noteEmbeddedSubquery(inner);
         return summarizeSelect(inner);
       }
       return '(subquery)';
@@ -262,7 +333,10 @@ function exprToString(node: any): string {
       // `SET col = (SELECT …)` や SELECT 列のスカラーサブクエリは、
       // type を持たず ast だけを抱えたノードで来る。素通しすると AST の JSON が表示に出る
       const inner = extractSubquerySelectAst(node);
-      if (inner) return summarizeSelect(inner);
+      if (inner) {
+        noteEmbeddedSubquery(inner);
+        return summarizeSelect(inner);
+      }
       if (node.value !== undefined) return String(node.value);
       if (node.raw) return node.raw;
       return JSON.stringify(node);
@@ -468,10 +542,14 @@ function parseWithClause(withClauses: any[] | null | undefined): CteRef[] {
     const innerAst = entry.stmt?.ast;
     const query =
       innerAst?.type === 'select'
-        ? buildSelectParsed(innerAst)
+        ? buildNestedSelect(innerAst)
         : buildSelectParsed({ type: 'select', columns: ['*'], from: [] });
+    const columns = toArray<any>(entry.columns)
+      .map((column: any) => formatIdentifier(column?.column ?? column))
+      .filter(Boolean);
     return {
       name,
+      columns: columns.length > 0 ? columns : undefined,
       query,
       sourceSpan: toSourceSpan(entry.loc),
     };
@@ -533,7 +611,7 @@ function parseComparisonWithSubquery(node: any): ConditionNode {
         label: `${left} ${node.operator} ${summarizeSelect(subAst)}`,
         operator: node.operator,
         left,
-        nestedQuery: buildSelectParsed(subAst),
+        nestedQuery: buildNestedSelect(subAst),
       },
       node,
     );
@@ -592,7 +670,7 @@ function parseConditionTree(node: any): ConditionNode | undefined {
               label: `${left} ${node.operator} ${summarizeSelect(subAst)}`,
               operator: node.operator,
               left,
-              nestedQuery: buildSelectParsed(subAst),
+              nestedQuery: buildNestedSelect(subAst),
             },
             node,
           );
@@ -643,7 +721,7 @@ function parseConditionTree(node: any): ConditionNode | undefined {
           id: nextId('cond'),
           type: 'subquery',
           label: summarizeSelect(subAst ?? node),
-          nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
+          nestedQuery: subAst ? buildNestedSelect(subAst) : undefined,
         },
         node,
       );
@@ -659,7 +737,7 @@ function parseConditionTree(node: any): ConditionNode | undefined {
             id: nextId('cond'),
             type: 'exists',
             label: subAst ? `${op} ${summarizeSelect(subAst)}` : `${op} (subquery)`,
-            nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
+            nestedQuery: subAst ? buildNestedSelect(subAst) : undefined,
           },
           node,
         );
@@ -728,7 +806,7 @@ function parseConditionTree(node: any): ConditionNode | undefined {
             id: nextId('cond'),
             type: 'exists',
             label: subAst ? `EXISTS ${summarizeSelect(subAst)}` : 'EXISTS (subquery)',
-            nestedQuery: subAst ? buildSelectParsed(subAst) : undefined,
+            nestedQuery: subAst ? buildNestedSelect(subAst) : undefined,
           },
           node,
         );
@@ -801,12 +879,19 @@ function parseColumns(columns: any[]): SelectColumn[] {
   });
 }
 
+const PARENTHESIZED_JOIN_MESSAGE =
+  '括弧でまとめた JOIN（例: a LEFT JOIN (b JOIN c ON …) ON …）には対応していません';
+
 function buildTableRef(entry: any, index: number): TableRef {
   const sourceSpan = toSourceSpan(entry.loc);
 
+  // `a LEFT JOIN (b JOIN c ON …) ON …` は括弧の中が配列で来る。
+  // 1 つのテーブルとして読むと b と c が図から消え、`table_1` という実在しない名前が出る
+  if (Array.isArray(entry.expr)) throw new Error(PARENTHESIZED_JOIN_MESSAGE);
+
   if (entry.expr?.ast?.type === 'select') {
     const alias = entry.as ?? entry.alias ?? `derived_${index}`;
-    const derivedQuery = buildSelectParsed(entry.expr.ast);
+    const derivedQuery = buildNestedSelect(entry.expr.ast);
     const span = toSourceSpan(entry.expr?.loc) ?? derivedQuery.sourceSpan;
     return {
       id: nextId('tbl'),
@@ -948,6 +1033,8 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
   const tables: TableRef[] = [];
   const joins: JoinEdge[] = [];
 
+  // `FROM (a JOIN b ON …)` のように FROM 句全体を括弧で囲むと、配列ではなく 1 つのオブジェクトで来る
+  if (from && !Array.isArray(from)) throw new Error(PARENTHESIZED_JOIN_MESSAGE);
   if (!from || from.length === 0) return { tables, joins };
 
   from.forEach((entry, index) => {
@@ -982,7 +1069,19 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
   return { tables, joins };
 }
 
+/** 1 本の SELECT（UNION の 1 ブランチ）を解析する。UNION と WITH は呼び出し側が扱う */
 function buildSelectParsed(ast: any): ParsedQuery {
+  return collectEmbeddedSubqueries(() => buildSelectParsedCore(ast));
+}
+
+function groupByModifierText(ast: any): string | undefined {
+  const modifiers = toArray<any>(ast?.groupby?.modifiers)
+    .map((m: any) => String(m?.value ?? '').trim().toUpperCase())
+    .filter(Boolean);
+  return modifiers.length > 0 ? modifiers.join(' ') : undefined;
+}
+
+function buildSelectParsedCore(ast: any): ParsedQuery {
   const { tables, joins } = parseFromClause(ast.from);
 
   let where = parseConditionTree(ast.where);
@@ -998,7 +1097,7 @@ function buildSelectParsed(ast: any): ParsedQuery {
 
   const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
     text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
-    sourceSpan: orderByEntrySourceSpan(o),
+    sourceSpan: orderByEntrySourceSpan(o, processedSqlForNatural),
   }));
 
   const { limit, offset, limitSpan, offsetSpan, limitCommaOffset } = parseLimitOffset(ast);
@@ -1014,6 +1113,7 @@ function buildSelectParsed(ast: any): ParsedQuery {
     having,
     columns: parseColumns(ast.columns),
     groupBy,
+    groupByModifier: groupByModifierText(ast),
     orderBy,
     limit,
     limitSpan,
@@ -1026,6 +1126,15 @@ function buildSelectParsed(ast: any): ParsedQuery {
   };
 }
 
+/**
+ * 入れ子の SELECT（派生テーブル・CTE の本体・サブクエリ）を解析する。
+ * buildSelectParsed だけだと 2 本目以降の UNION ブランチと WITH 句を捨ててしまうので、
+ * 最上位と同じ手順で組み立てる。
+ */
+function buildNestedSelect(ast: any): ParsedQuery {
+  return parseSelectQuery(ast, '');
+}
+
 function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
   const ctes = parseWithClause(ast.with);
   const branches = collectUnionBranches(ast);
@@ -1033,6 +1142,7 @@ function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
   main.rawSql = rawSql;
 
   if (branches.length > 1) {
+    main.unionTail = parseUnionTail(ast, branches[branches.length - 1]!.ast);
     main.unionBranches = branches.map((branch, index) => {
       const branchQuery = applyCtesToQuery(buildSelectParsed(branch.ast), ctes);
       const sourceSpan = toSourceSpan(branch.ast?.loc);
@@ -1050,6 +1160,38 @@ function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
   }
 
   return main;
+}
+
+/**
+ * UNION 全体に掛かる ORDER BY / LIMIT。node-sql-parser は書き方で置き場所を変える。
+ * - `(SELECT …) UNION (SELECT …) ORDER BY … LIMIT …` は先頭の AST の _orderby / _limit
+ * - `SELECT … UNION SELECT … ORDER BY … LIMIT …` は括弧の無い最後のブランチの orderby / limit
+ * 括弧で囲んだ最後のブランチの ORDER BY / LIMIT は、そのブランチだけに掛かる
+ */
+function parseUnionTail(root: any, last: any): UnionTail | undefined {
+  if (root._orderby || root._limit) {
+    return parseLimitAndOrder({ orderby: root._orderby, limit: root._limit });
+  }
+  if (!last?.parentheses_symbol && (last?.orderby || last?.limit)) {
+    return parseLimitAndOrder(last);
+  }
+  return undefined;
+}
+
+/** SQL に書かれた UNION / EXCEPT / INTERSECT の数（maskNonCode 済みの SQL を渡す） */
+function countSetOperatorKeywords(masked: string): number {
+  return masked.match(/\b(?:UNION|EXCEPT|INTERSECT)\b/gi)?.length ?? 0;
+}
+
+/** AST が持つ集合演算の数。サブクエリ・派生テーブル・CTE の中も数える */
+function countSetOperatorsInAst(node: any, seen: Set<unknown> = new Set()): number {
+  if (!node || typeof node !== 'object' || seen.has(node)) return 0;
+  seen.add(node);
+  let count = !Array.isArray(node) && node._next ? 1 : 0;
+  for (const [key, value] of Object.entries(node)) {
+    if (key !== 'loc') count += countSetOperatorsInAst(value, seen);
+  }
+  return count;
 }
 
 function parseSetClauses(set: any[]): SetClause[] {
@@ -1070,6 +1212,10 @@ function parseSetClauses(set: any[]): SetClause[] {
 }
 
 function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
+  return collectEmbeddedSubqueries(() => parseUpdateAstCore(ast, rawSql));
+}
+
+function parseUpdateAstCore(ast: any, rawSql: string): ParsedQuery {
   const { tables, joins } = parseFromClause(ast.table);
 
   let where = parseConditionTree(ast.where);
@@ -1077,7 +1223,7 @@ function parseUpdateAst(ast: any, rawSql: string): ParsedQuery {
 
   const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
     text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
-    sourceSpan: orderByEntrySourceSpan(o),
+    sourceSpan: orderByEntrySourceSpan(o, processedSqlForNatural),
   }));
 
   const { limit, offset, limitSpan, offsetSpan, limitCommaOffset } = parseLimitOffset(ast);
@@ -1189,13 +1335,17 @@ function parseLimitAndOrder(ast: any): {
 } {
   const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
     text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
-    sourceSpan: orderByEntrySourceSpan(o),
+    sourceSpan: orderByEntrySourceSpan(o, processedSqlForNatural),
   }));
 
   return { orderBy, ...parseLimitOffset(ast) };
 }
 
 function parseDeleteAst(ast: any, rawSql: string): ParsedQuery {
+  return collectEmbeddedSubqueries(() => parseDeleteAstCore(ast, rawSql));
+}
+
+function parseDeleteAstCore(ast: any, rawSql: string): ParsedQuery {
   const { tables, joins } = parseFromClause(ast.from);
 
   let where = parseConditionTree(ast.where);
@@ -1238,9 +1388,18 @@ export function parseMySqlQuery(sql: string): ParseResult {
       straightJoinHintOriginalSpans: straightSpans,
       processedToOriginal,
     } = preprocessSqlForParser(trimmed);
+    // 位置（sourceSpan）は呼び出し元が渡した sql 上のオフセットで返す。
+    // 解析は前後の空白を取り除いた文字列で行うので、先頭の空白の分だけ後ろへずらす。
+    // ずらさないと、空行や字下げで始まる SQL でエディタの強調位置がその分だけ手前にずれる
+    const leadingTrim = sql.length - sql.trimStart().length;
+    const toInputOffset = (offset: number): number => offset + leadingTrim;
+
     naturalJoinStarts = starts;
     straightJoinHintSelectStarts = straightStarts;
-    straightJoinHintOriginalSpans = straightSpans;
+    straightJoinHintOriginalSpans = straightSpans.map((span) => ({
+      start: toInputOffset(span.start),
+      end: toInputOffset(span.end),
+    }));
     processedSqlForNatural = preprocessed;
     const ast = parser.astify(preprocessed, {
       database: 'MySQL',
@@ -1264,20 +1423,32 @@ export function parseMySqlQuery(sql: string): ParseResult {
       };
     }
 
-    const remap = (query: ParsedQuery) => remapParsedQuerySpans(processedToOriginal, query, trimmed);
+    const processedToInput = leadingTrim > 0 ? processedToOriginal.map(toInputOffset) : processedToOriginal;
+    const remap = (query: ParsedQuery) => remapParsedQuerySpans(processedToInput, query, sql);
 
     if (first.type === 'select') {
-      const query = parseSelectQuery(first, trimmed);
+      // `SELECT … UNION (SELECT …)` は右側のブランチがエラーにならずに AST から消える。
+      // サブクエリの中でも同じで、そのまま解析すると UNION の無い SELECT として表示・比較してしまう
+      if (countSetOperatorKeywords(maskNonCode(preprocessed)) > countSetOperatorsInAst(first)) {
+        return {
+          success: false,
+          error: {
+            message:
+              'UNION の一部のブランチを解析できませんでした。右側だけを括弧で囲む書き方（SELECT … UNION (SELECT …)）には対応していません。両側を括弧で囲むか、括弧を外してください',
+          },
+        };
+      }
+      const query = parseSelectQuery(first, sql);
       return { success: true, query: remap(query) };
     }
 
     if (first.type === 'update') {
-      const query = parseUpdateAst(first, trimmed);
+      const query = parseUpdateAst(first, sql);
       return { success: true, query: remap(query) };
     }
 
     if (first.type === 'delete') {
-      const query = parseDeleteAst(first, trimmed);
+      const query = parseDeleteAst(first, sql);
       return { success: true, query: remap(query) };
     }
 
