@@ -706,6 +706,28 @@ body {
   text-align: left;
 }
 
+.error-detail {
+  max-width: 480px;
+  width: 100%;
+  text-align: left;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.error-detail summary {
+  cursor: pointer;
+}
+
+.error-detail code {
+  display: block;
+  margin-top: 8px;
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
 .error-hint {
   font-size: 0.82rem !important;
   color: var(--text-dim) !important;

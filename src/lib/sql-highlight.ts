@@ -110,20 +110,33 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * 引用符なしの識別子に使える文字。MySQL は ASCII の英数字・$・_ に加えて U+0080〜U+FFFF を認める
+ * （MySQL 8.4 リファレンス 11.2 Schema Object Names）。ASCII だけで判定すると、`テーブル1` の 1 を数値の色にする
+ */
+const WORD_CHAR = /[\w$\u0080-￿]/;
+
 function isWordChar(ch: string | undefined): boolean {
-  return ch !== undefined && /[\w$]/.test(ch);
+  return ch !== undefined && WORD_CHAR.test(ch);
 }
 
+/**
+ * キーワードの正規表現は最初に 1 回だけ作り、sticky（y）で pos の位置から照合する。
+ * 文字ごとに作り直したり、残りの文字列を切り出したりすると、18 万文字の SQL で 1 文字の入力に 1 秒以上かかる
+ */
+const KEYWORD_PATTERNS = KEYWORDS.map(
+  (keyword) => new RegExp(`${keyword.replace(/\s+/g, '\\s+')}(?![\\w$\\u0080-\\uFFFF])`, 'iy'),
+);
+
+const NUMBER_PATTERN = /(\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
+
 function matchKeyword(text: string, pos: number): string | null {
-  const slice = text.slice(pos);
-  for (const keyword of KEYWORDS) {
-    const re = new RegExp(`^${keyword.replace(/\s+/g, '\\s+')}(?![\\w$])`, 'i');
-    const match = slice.match(re);
-    if (match) {
-      const before = pos > 0 ? text[pos - 1] : '';
-      if (isWordChar(before)) continue;
-      return match[0];
-    }
+  // 語の途中（直前が英数字）からはキーワードにしない
+  if (pos > 0 && isWordChar(text[pos - 1])) return null;
+  for (const pattern of KEYWORD_PATTERNS) {
+    pattern.lastIndex = pos;
+    const match = pattern.exec(text);
+    if (match) return match[0];
   }
   return null;
 }
@@ -149,7 +162,8 @@ function readBacktickIdentifier(text: string, pos: number): string {
 }
 
 function readNumber(text: string, pos: number): string | null {
-  const match = text.slice(pos).match(/^(\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/);
+  NUMBER_PATTERN.lastIndex = pos;
+  const match = NUMBER_PATTERN.exec(text);
   return match ? match[0] : null;
 }
 
@@ -170,6 +184,16 @@ export function tokenizeSql(sql: string): SqlHighlightToken[] {
   while (i < sql.length) {
     const ch = sql[i];
     const next = sql[i + 1];
+
+    // 語の途中の文字は、キーワードにも数値にも、コメントや文字列の始まりにもならない。語の終わりまでまとめて進める。
+    // 数字も同じで、u1 や order2 の数字を数値の色にしない
+    if (i > 0 && isWordChar(sql[i - 1]) && isWordChar(ch)) {
+      let end = i + 1;
+      while (end < sql.length && isWordChar(sql[end])) end++;
+      pushToken(tokens, 'plain', sql.slice(i, end));
+      i = end;
+      continue;
+    }
 
     if (isDashLineCommentStart(sql, i)) {
       pushToken(tokens, 'comment', readLineComment(sql, i));
@@ -201,7 +225,17 @@ export function tokenizeSql(sql: string): SqlHighlightToken[] {
       continue;
     }
 
-    const number = readNumber(sql, i);
+    // t.1st の .1 や 1 のように、修飾の点とその直後は数値にしない（0.5 の点は、数値の途中として先に読んでいる）
+    const qualifierDot = (ch === '.' && isWordChar(sql[i - 1])) || sql[i - 1] === '.';
+    const number = qualifierDot ? null : readNumber(sql, i);
+    // 1abc のように数字のあとに語の文字が続くものは、数字で始まる識別子（MySQL は識別子を数字で始めてよい）
+    if (number && isWordChar(sql[i + number.length])) {
+      let end = i + 1;
+      while (end < sql.length && isWordChar(sql[end])) end++;
+      pushToken(tokens, 'plain', sql.slice(i, end));
+      i = end;
+      continue;
+    }
     if (number) {
       pushToken(tokens, 'number', number);
       i += number.length;

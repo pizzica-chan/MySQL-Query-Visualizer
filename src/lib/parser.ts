@@ -1469,14 +1469,42 @@ export function parseMySqlQuery(sql: string): ParseResult {
       : undefined;
     if (!span) return { success: false, error: { message } };
     const { line, column } = lineColumnAt(sql, span.start);
+    const found = syntaxErrorFound(message);
+    // 見つかった文字は、パーサーの文（前処理で書き換えたあとの SQL）からではなく、元の SQL のエラーの範囲から取る
+    const foundText = sql.slice(span.start, span.end).trim();
+    const summary =
+      found === undefined
+        ? `${line} 行 ${column} 列で構文を解釈できません（${message}）`
+        : found === null
+          ? `${line} 行 ${column} 列で構文を解釈できません（SQL が途中で終わっています）`
+          : foundText
+            ? `${line} 行 ${column} 列の「${foundText}」で構文を解釈できません`
+            : `${line} 行 ${column} 列で構文を解釈できません`;
     return {
       success: false,
       error: {
-        message: `${line} 行 ${column} 列で構文を解釈できません（${message}）`,
+        message: summary,
+        ...(found === undefined ? {} : { detail: message }),
         position: span.start,
         span,
       },
     };
+  }
+}
+
+/**
+ * node-sql-parser（peggy）の構文エラーの文 `Expected "#", "$", ... but "x" found.` から、見つかった文字を取り出す。
+ * 入力の終わりで止まったときは null、この形の文でなければ undefined を返す。
+ * 文の大半は期待していた字句の一覧（数百文字の英語）で、そのまま出すと読めず、スクリーンリーダーも全部読み上げる
+ */
+export function syntaxErrorFound(message: string): string | null | undefined {
+  const match = /^Expected .* but (end of input|"((?:[^"\\]|\\.)*)") found\.$/s.exec(message);
+  if (!match) return undefined;
+  if (match[1] === 'end of input') return null;
+  try {
+    return JSON.parse(`"${match[2]}"`) as string;
+  } catch {
+    return match[2];
   }
 }
 

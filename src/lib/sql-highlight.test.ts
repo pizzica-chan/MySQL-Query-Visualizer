@@ -97,6 +97,39 @@ describe('sql-highlight', () => {
     expect(nameHtml).not.toMatch(/sql-hl--focus">[^<]*u\.email/);
   });
 
+  it('別名や列名の中の数字は数値の色にしない（u1、order2、t.1st）', () => {
+    const tokens = kinds('SELECT u1.id, t.1st, order2 FROM users u1, t WHERE u1.total > 10 AND x = .5 AND y = 1.5e3');
+    expect(tokens.filter((t) => t.kind === 'number').map((t) => t.text)).toEqual(['10', '.5', '1.5e3']);
+  });
+
+  it('ASCII 以外の文字を含む識別子と、数字で始まる識別子の数字は数値の色にしない', () => {
+    const tokens = kinds('SELECT テーブル1.列2, 1st_col, 1e5, 2 FROM テーブル1 WHERE 列2 > 3');
+    expect(tokens.filter((t) => t.kind === 'number').map((t) => t.text)).toEqual(['1e5', '2', '3']);
+  });
+
+  it('ASCII 以外の文字が続く語はキーワードにしない（SELECT日付）', () => {
+    const tokens = kinds('SELECT SELECT日付 FROM t');
+    expect(tokens.filter((t) => t.kind === 'keyword').map((t) => t.text)).toEqual(['SELECT', 'FROM']);
+  });
+
+  it('語の途中のキーワードはキーワードにしない（selection、fromage、u_on）', () => {
+    const tokens = kinds('SELECT selection, fromage, u_on FROM t');
+    expect(tokens.filter((t) => t.kind === 'keyword').map((t) => t.text)).toEqual(['SELECT', 'FROM']);
+  });
+
+  it('長い SQL でも短い時間で色分けする（文字ごとに正規表現を作り直さない）', () => {
+    const sql = Array.from(
+      { length: 1500 },
+      (_, i) => `SELECT u${i}.id, u${i}.name FROM users u${i} JOIN orders o${i} ON o${i}.user_id = u${i}.id WHERE o${i}.total > ${i}`,
+    ).join('\nUNION ALL\n');
+    const started = performance.now();
+    const restored = tokenizeSql(sql).map((t) => t.text).join('');
+    const elapsed = performance.now() - started;
+    expect(restored).toBe(sql);
+    // 直す前は 1 秒を超えていた。遅い CI でも通るよう、余裕を持たせる
+    expect(elapsed).toBeLessThan(400);
+  });
+
   it('原文を欠落なく復元できる', () => {
     const sql = "SELECT * FROM t WHERE x >= 1 AND name = 'a''b' -- end";
     const restored = tokenizeSql(sql).map((t) => t.text).join('');

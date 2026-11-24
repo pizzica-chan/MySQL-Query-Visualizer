@@ -181,6 +181,21 @@ describe('App — 共有リンク', () => {
   });
 });
 
+describe('App — 構文エラーの表示', () => {
+  it('エディタの下には要約だけを出し、期待していた字句の一覧は右側の詳細に分ける', () => {
+    renderAndSettle();
+    act(() => typeInto(host.querySelector('textarea')!, 'SELECT a,, b FROM t'));
+    act(() => {
+      vi.advanceTimersByTime(AFTER_DEBOUNCE_MS);
+    });
+    const alert = host.querySelector('.parse-error-text')!.textContent!;
+    expect(alert).toContain('1 行 10 列の「,」で構文を解釈できません');
+    expect(alert).not.toContain('Expected');
+    expect(host.querySelector('.error-state .error-message')!.textContent).not.toContain('Expected');
+    expect(host.querySelector('.error-state details.error-detail code')!.textContent).toContain('Expected');
+  });
+});
+
 describe('App — 読めない共有リンク', () => {
   afterEach(() => {
     window.history.replaceState(null, '', window.location.pathname);

@@ -45,6 +45,38 @@ describe('構文エラーの位置', () => {
   });
 });
 
+describe('構文エラーの文', () => {
+  it('期待していた字句の一覧は文に入れず、詳細に分ける', () => {
+    const error = errorOf('SELECT a,, b FROM t');
+    expect(error.message).toBe('1 行 10 列の「,」で構文を解釈できません');
+    expect(error.detail).toMatch(/^Expected .* but "," found\.$/s);
+  });
+
+  it('入力の途中で終わったときは、そのことを書く', () => {
+    const error = errorOf('SELECT * FROM t WHERE');
+    expect(error.message).toBe('1 行 21 列で構文を解釈できません（SQL が途中で終わっています）');
+    expect(error.detail).toContain('end of input');
+  });
+
+  it('見つかった文字は、前処理で書き換える前の SQL から取る', () => {
+    const error = errorOf('SELECT a FROM t NATURAL JOIN u WHERE ) = 1');
+    expect(error.message).toContain('の「)」で構文を解釈できません');
+  });
+
+  it('SQL ケース集の構文エラーは、どれも短い文になる', async () => {
+    const { SQL_TEST_CASES } = await import('./fixtures/sql-cases');
+    let checked = 0;
+    for (const { sql } of SQL_TEST_CASES) {
+      const result = parseMySqlQuery(sql);
+      if (result.success || !result.error.span) continue;
+      checked += 1;
+      expect(result.error.message, sql).not.toContain('Expected');
+      expect(result.error.message.length, sql).toBeLessThan(80);
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
 describe('lineColumnAt', () => {
   it('1 始まりの行と列を返す', () => {
     expect(lineColumnAt('abc\ndef', 0)).toEqual({ line: 1, column: 1 });

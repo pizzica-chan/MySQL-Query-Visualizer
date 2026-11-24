@@ -165,6 +165,8 @@ export interface ParsedQuery {
 
 export interface ParseError {
   message: string;
+  /** パーサーが出した元の文（期待していた字句の一覧）。message には要約だけを入れ、これは詳細として見せる */
+  detail?: string;
   /** 構文エラーの開始位置（入力 SQL 上のオフセット） */
   position?: number;
   /** 構文エラーの範囲（入力 SQL 上）。エディタで該当箇所に印を付けるのに使う */

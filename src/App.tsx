@@ -1,25 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { JoinDiagram } from './components/JoinDiagram';
-import { QueryEffectBanner } from './components/QueryEffectPanel';
+import { AnalysisResult, type TabId } from './components/AnalysisResult';
 import { QueryResultDiffPanel } from './components/QueryResultDiffPanel';
 import {
   IconAnalyze,
   IconCompare,
-  IconJoin,
   IconLink,
   IconMonitor,
   IconMoon,
-  IconNarrative,
-  IconNested,
   IconSpinner,
-  IconStructure,
   IconSun,
   LogoMark,
 } from './components/Icons';
 import { SqlEditor, type EditorStatus } from './components/SqlEditor';
 import { WelcomePanel } from './components/WelcomePanel';
-import { SubqueryDetail } from './components/SubqueryDetail';
-import { UnionJoinPanel } from './components/UnionPanel';
 import { useCaretSourceLink } from './hooks/useCaretSourceLink';
 import { useThemePreference } from './hooks/useTheme';
 import { applyAliasResolution } from './lib/alias-resolver';
@@ -42,25 +35,16 @@ import {
   parseMySqlQuery,
 } from './lib/parser';
 import { compareQueryResults } from './lib/query-result-diff';
-import { collectSubqueryRefsExcludingUnionBranches, hasUnion, type SubqueryRef } from './lib/query-utils';
+import { collectSubqueryRefsExcludingUnionBranches, type SubqueryRef } from './lib/query-utils';
 import { setThemePreference, type ThemePreference } from './lib/theme';
 import type { ParseError, ParsedQuery, SourceSpan } from './lib/types';
 import type { OnSourceSpanSelect } from './lib/source-link';
-
-type TabId = 'structure' | 'narrative' | 'joins' | 'nested';
 
 const BASE_TABS: { id: TabId; label: string }[] = [
   { id: 'structure', label: 'SQL構造' },
   { id: 'narrative', label: '作用説明' },
   { id: 'joins', label: 'JOIN 図' },
 ];
-
-const TAB_ICONS: Record<TabId, typeof IconStructure> = {
-  structure: IconStructure,
-  narrative: IconNarrative,
-  joins: IconJoin,
-  nested: IconNested,
-};
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof IconSun }[] = [
   { value: 'system', label: '自動（OS の設定に従う）', icon: IconMonitor },
@@ -147,11 +131,6 @@ export default function App() {
   const handleSourceSpanSelect: OnSourceSpanSelect = useCallback((span) => {
     setActiveSourceSpan(span ?? null);
   }, []);
-
-  const sourceLinkProps = {
-    activeSourceSpan,
-    onSourceSpanSelect: handleSourceSpanSelect,
-  };
 
   // 自己結合の別名は残す。u1 / u2 を同じ実テーブル名へ潰すと
   // 「users の行をすべて残し users を LEFT JOIN」のように説明が意味をなさなくなる。
@@ -455,99 +434,29 @@ export default function App() {
             )}
 
             {parsed && displayQuery && (
-              <>
-                <nav className="tab-bar">
-                  {tabs.map((tab) => {
-                    const TabIcon = TAB_ICONS[tab.id];
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        className={`tab${activeTab === tab.id ? ' tab--active' : ''}`}
-                        onClick={() => setActiveTab(tab.id)}
-                      >
-                        <TabIcon size={15} />
-                        {tab.label}
-                        {tab.id === 'nested' && <span className="tab-count">{nestedInfo.subqueries.length}</span>}
-                      </button>
-                    );
-                  })}
-                  <label
-                    className="option-toggle tab-bar-options"
-                    title="オフのときも、別名にマウスを載せると実テーブル名が表示されます"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={resolveAliases}
-                      onChange={(e) => setResolveAliases(e.target.checked)}
-                    />
-                    <span>別名を実テーブル名で表示</span>
-                  </label>
-                </nav>
-
-                <div className="tab-content">
-                  {activeTab === 'structure' && (
-                    <QueryEffectBanner
-                      query={displayQuery}
-                      variant="structure"
-                      resolveAliases={resolveAliases}
-                      {...sourceLinkProps}
-                    />
-                  )}
-                  {activeTab === 'narrative' && (
-                    <QueryEffectBanner query={displayQuery} variant="narrative" resolveAliases={resolveAliases} />
-                  )}
-                  <div
-                    className={`tab-pane${activeTab === 'joins' ? '' : ' tab-pane--hidden'}`}
-                    aria-hidden={activeTab !== 'joins'}
-                  >
-                    {hasUnion(displayQuery) && displayQuery.unionBranches ? (
-                      <UnionJoinPanel
-                        branches={displayQuery.unionBranches}
-                        resolveAliases={resolveAliases}
-                        isActive={activeTab === 'joins'}
-                        {...sourceLinkProps}
-                      />
-                    ) : (
-                      <JoinDiagram
-                        tables={displayQuery.tables}
-                        joins={displayQuery.joins}
-                        resolveAliases={resolveAliases}
-                        query={displayQuery}
-                        isActive={activeTab === 'joins'}
-                        {...sourceLinkProps}
-                      />
-                    )}
-                  </div>
-                  {activeTab === 'nested' && nestedInfo.showTab && (
-                    <div className="nested-tab">
-                      <section className="nested-section">
-                        <h3>サブクエリ ({nestedInfo.subqueries.length})</h3>
-                        <p className="nested-section-desc">
-                          WHERE / EXISTS / IN / FROM 句内のサブクエリを個別に解析しています
-                        </p>
-                        <div className="nested-subquery-list">
-                          {nestedInfo.subqueries.map(({ query, title }, index) => (
-                            <SubqueryDetail
-                              key={`${query.tables.map((t) => t.id).join('-')}-${title}-${index}`}
-                              query={query}
-                              title={title}
-                              resolveAliases={resolveAliases}
-                              {...sourceLinkProps}
-                            />
-                          ))}
-                        </div>
-                      </section>
-                    </div>
-                  )}
-                </div>
-              </>
+              <AnalysisResult
+                query={displayQuery}
+                tabs={tabs}
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
+                subqueries={nestedInfo.subqueries}
+                resolveAliases={resolveAliases}
+                onResolveAliasesChange={setResolveAliases}
+                activeSourceSpan={activeSourceSpan}
+                onSourceSpanSelect={handleSourceSpanSelect}
+              />
             )}
 
             {error && !parsed && (
               <div className="error-state">
                 <h2>解析エラー</h2>
                 <p className="error-message">{error.message}</p>
+                {error.detail && (
+                  <details className="error-detail">
+                    <summary>パーサーの詳細（期待していた字句の一覧）</summary>
+                    <code>{error.detail}</code>
+                  </details>
+                )}
                 <p className="error-hint">
                   MySQL 形式の SELECT / UPDATE / DELETE 文を入力してください。INSERT など上記以外の文種は未対応です。
                 </p>

@@ -72,3 +72,7 @@ SQL 前後比較（`query-result-diff.ts`）は、構文カテゴリのシグネ
 - **エディタのカーソル連動は DOM の `data-span-start` / `data-span-end` で要素を探す**（`useCaretSourceLink`）。新しい表示要素を SQL と連動させるときは `sourceSelectableProps` を使えば、クリックの連動とカーソルの連動の両方の対象になる。非表示のタブ（`.tab-pane--hidden`）の要素は対象外。
 
 - **テストや `npm run check:browser` の確認項目を足したら、直す前のコードで失敗することを確かめる**。別の経路で同じ状態になって、修正がなくても通る項目を書いてしまうことがある（JOIN 図の中だけの描き直しを確かめるつもりの項目が、App 全体の描き直しで通っていた）。
+
+- **単一解析の右側（`AnalysisResult`）は `memo` で包み、SQL の入力中は描き直さない**。大きな SQL では右側の DOM が 20 万要素を超え、1 文字ごとに描き直すと入力が数秒止まる。props に渡すのは、入力中に変わらない値（`useMemo` の結果、`useState` の setter、`useCallback`）だけにする。その場で作るオブジェクトや関数（`{...}` や `() => ...`）を渡すと、描くたびに値が変わるので、memo で描き直しを止められない。`App.render-count.test.tsx` で確かめている。
+
+- **エディタの色分け（`sql-highlight.ts`）は、入力の 1 文字ごとに SQL 全体に対して実行する**。文字ごとに正規表現を作ったり、残りの文字列を `slice` で切り出したりしない。正規表現は最初に 1 回だけ作り、sticky（`y`）で位置を指定して照合する。
