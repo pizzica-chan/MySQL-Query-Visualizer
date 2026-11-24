@@ -3,7 +3,8 @@
 // このアプリは MySQL のみなので MySQL 専用ビルドを直接読む（オフライン配布の JS を大幅に軽くする）
 import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
-import { formatJoinConditionLabel } from './join-condition';
+import { NO_JOIN_CONDITION, formatJoinConditionLabel } from './join-condition';
+import { isWordChar } from './sql-lex';
 import {
   maskNonCode,
   preprocessSqlForParser,
@@ -923,7 +924,7 @@ function parseJoinCondition(on: any): {
   parts?: { left: string; operator: string; right: string };
   conditionRoot?: ConditionNode;
 } {
-  if (!on) return { condition: '(no condition)' };
+  if (!on) return { condition: NO_JOIN_CONDITION };
 
   let conditionRoot = parseConditionTree(on);
   if (conditionRoot) conditionRoot = enrichConditionTree(conditionRoot);
@@ -989,7 +990,7 @@ function parseUsingJoinCondition(
   conditionRoot?: ConditionNode;
 } {
   const columns = using.map(parseUsingColumnName).filter(Boolean);
-  if (columns.length === 0) return { condition: '(no condition)' };
+  if (columns.length === 0) return { condition: NO_JOIN_CONDITION };
 
   const comparisons = columns.map((col) => buildUsingComparison(col, source, target));
   const conditionRoot = enrichConditionTree(
@@ -1036,6 +1037,9 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
   // `FROM (a JOIN b ON …)` のように FROM 句全体を括弧で囲むと、配列ではなく 1 つのオブジェクトで来る
   if (from && !Array.isArray(from)) throw new Error(PARENTHESIZED_JOIN_MESSAGE);
   if (!from || from.length === 0) return { tables, joins };
+  // DUAL は、参照するテーブルが無いときに書ける仮のテーブル名で、FROM が無いのと同じ（MySQL 8.4 リファレンス 15.2.13）。
+  // テーブルとして読むと、名前が無いので `table_0` という実在しない名前が図や説明に出る
+  from = from.filter((entry) => entry?.type !== 'dual');
 
   from.forEach((entry, index) => {
     const tableRef = buildTableRef(entry, index);
@@ -1049,7 +1053,7 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
     const isNatural = isNaturalJoinEntry(entry, prevEntry);
     let { condition, parts, conditionRoot } = parseJoinConditionFromEntry(entry, prevTable, tableRef);
 
-    if (isNatural && condition === '(no condition)') {
+    if (isNatural && condition === NO_JOIN_CONDITION) {
       condition = 'NATURAL JOIN';
     }
 
@@ -1464,10 +1468,12 @@ export function parseMySqlQuery(sql: string): ParseResult {
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'SQLの解析に失敗しました';
-    const span = processedToInputForError
+    const rawSpan = processedToInputForError
       ? syntaxErrorSpan(err, processedToInputForError, sql)
       : undefined;
-    if (!span) return { success: false, error: { message } };
+    if (!rawSpan) return { success: false, error: { message: translateParserMessage(message) } };
+    // パーサーは 1 文字だけを指すので、語の途中で切れていたら語の終わりまで広げる（「ROW」を「R」とだけ示さない）
+    const span = extendSpanToWordEnd(sql, rawSpan);
     const { line, column } = lineColumnAt(sql, span.start);
     const found = syntaxErrorFound(message);
     // 見つかった文字は、パーサーの文（前処理で書き換えたあとの SQL）からではなく、元の SQL のエラーの範囲から取る
@@ -1490,6 +1496,26 @@ export function parseMySqlQuery(sql: string): ParseResult {
       },
     };
   }
+}
+
+/** span の始まりが語（識別子・キーワード）の文字なら、終わりを語の終わりまで広げる */
+function extendSpanToWordEnd(sql: string, span: SourceSpan): SourceSpan {
+  if (!isWordChar(sql[span.start])) return span;
+  let end = Math.max(span.end, span.start);
+  while (end < sql.length && isWordChar(sql[end])) end++;
+  return end === span.end ? span : { start: span.start, end };
+}
+
+/**
+ * 位置を持たない英語のエラーの文のうち、意味の分かるものを日本語にする。分からないものはそのまま返す。
+ * `t AS OF ...` のように予約語を別名の位置に書くと、node-sql-parser は位置の無いエラーを投げる
+ */
+export function translateParserMessage(message: string): string {
+  const reserved = /^Error: "(.+)" is a reserved word, can not as alias clause$/.exec(message);
+  if (reserved) {
+    return `「${reserved[1]}」は予約語なので、そのままでは別名に使えません。別名にするならバッククォート（\`）で囲んでください`;
+  }
+  return message;
 }
 
 /**

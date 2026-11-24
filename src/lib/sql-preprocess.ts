@@ -1,5 +1,6 @@
 import {
   isDashLineCommentStart,
+  isWordChar,
   maskNonCode,
   readBacktickIdentifierEnd,
   readBalancedParenEnd,
@@ -78,6 +79,46 @@ function originalOffsetsForInsertion(
     const mapped = origStart + i;
     return mapped < origLast ? mapped : origLast;
   });
+}
+
+/**
+ * 引用符なしの識別子のうち、ASCII 以外の文字を含むもの（テーブル、ユーザー2 など）。
+ * MySQL は U+0080〜U+FFFF を識別子に認めるが（MySQL 8.4 リファレンス 11.2）、node-sql-parser は
+ * 漢字と一部のラテン文字しか認めず、カタカナやひらがなのテーブル名で構文エラーになる。
+ * 文字・数字・結合文字だけの並びに限る。全角の空白や記号を含む並びは書き換えず、パーサーのエラーで位置を示す
+ */
+const NON_ASCII_IDENTIFIER_RE = /[\w$\p{L}\p{N}\p{M}]+/gu;
+
+/**
+ * ASCII 以外の文字を含む識別子をバッククォートで囲む。囲んでも識別子の名前は変わらない。
+ * 文字列・コメント・すでに囲んである識別子の中と、ユーザー変数（@名前）は書き換えない
+ */
+function quoteNonAsciiIdentifiers(state: ProcessState, recorded: RecordedStarts): void {
+  const masked = maskNonCode(state.sql);
+  const runs: Array<{ start: number; end: number }> = [];
+  for (const match of masked.matchAll(NON_ASCII_IDENTIFIER_RE)) {
+    const text = match[0];
+    const start = match.index;
+    if (!/[^\x00-\x7f]/.test(text)) continue;
+    // U+10000 以降（サロゲートペア）は MySQL の識別子に使えないので、パーサーのエラーに任せる
+    if (/[\ud800-\udfff]/.test(text)) continue;
+    if (masked[start - 1] === '@') continue;
+    runs.push({ start, end: start + text.length });
+  }
+  for (const { start, end } of runs.reverse()) {
+    const map = state.processedToOriginal;
+    // 開きのバッククォートは識別子の先頭の文字に、閉じは末尾の文字に対応させる。範囲が元の識別子とちょうど重なる
+    state.processedToOriginal = [
+      ...map.slice(0, start),
+      map[start]!,
+      ...map.slice(start, end),
+      map[end - 1]!,
+      ...map.slice(end),
+    ];
+    state.sql = state.sql.slice(0, start) + '`' + state.sql.slice(start, end) + '`' + state.sql.slice(end);
+    adjustRecordedStarts(recorded.lists, end, 1);
+    adjustRecordedStarts(recorded.lists, start, 1);
+  }
 }
 
 function spliceProcessed(
@@ -281,6 +322,53 @@ function stripStatementOptionModifiers(
   }
 }
 
+/** 複数テーブルの DELETE の対象に書くテーブル名（スキーマ付き・バッククォート付き・末尾の .* を含む） */
+// \x60 \u306F\u30D0\u30C3\u30AF\u30AF\u30A9\u30FC\u30C8\u3002\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8\u6587\u5B57\u5217\u306E\u4E2D\u306B\u66F8\u3051\u306A\u3044\u306E\u3067\u3001\u6B63\u898F\u8868\u73FE\u306E\u30A8\u30B9\u30B1\u30FC\u30D7\u3067\u66F8\u304F
+const DELETE_TARGET_ID = String.raw`(?:\x60(?:[^\x60]|\x60\x60)+\x60|[\w$\u0080-\uFFFF]+)`;
+const DELETE_TARGET = `${DELETE_TARGET_ID}(?:\\.${DELETE_TARGET_ID})?(?:\\.\\*)?`;
+const DELETE_TARGET_LIST = `${DELETE_TARGET}(?:\\s*,\\s*${DELETE_TARGET})*`;
+const DELETE_TARGET_RE = new RegExp(DELETE_TARGET, 'g');
+/** DELETE FROM t1, t2 USING ... の形 */
+const DELETE_USING_RE = new RegExp(`DELETE(\\s+)FROM\\s+(${DELETE_TARGET_LIST})\\s+USING\\b`, 'iy');
+/** DELETE t1, t2 FROM ... の形 */
+const DELETE_TARGETS_FROM_RE = new RegExp(`DELETE\\s+(${DELETE_TARGET_LIST})\\s+FROM\\b`, 'iy');
+
+/**
+ * 複数テーブルの DELETE を、node-sql-parser が読める形に書き換える。どちらも MySQL では同じ意味になる
+ * （MySQL 8.4 リファレンス 15.2.2 DELETE Statement）。
+ * - DELETE FROM t1, t2 USING t1 JOIN t2 ... → DELETE t1, t2 FROM t1 JOIN t2 ...
+ * - 対象のテーブル名の後ろの .*（DELETE t1.* FROM ...）を外す
+ * 対象の並びの間にコメントがあるなど、形が合わないときは書き換えず、パーサーのエラーに任せる
+ */
+function rewriteMultiTableDelete(state: ProcessState, recorded: RecordedStarts): void {
+  const masked = maskNonCode(state.sql);
+  const edits: Array<{ start: number; end: number; inserted: string }> = [];
+  for (const start of findWholeWordStarts(masked, 'DELETE')) {
+    DELETE_USING_RE.lastIndex = start;
+    const using = DELETE_USING_RE.exec(state.sql);
+    DELETE_TARGETS_FROM_RE.lastIndex = start;
+    const plain = using ? null : DELETE_TARGETS_FROM_RE.exec(state.sql);
+    const match = using ?? plain;
+    if (!match) continue;
+    const targets = match[using ? 2 : 1]!;
+    const targetsStart = start + match[0].indexOf(targets, using ? 'DELETE'.length + match[1]!.length + 'FROM'.length : 'DELETE'.length);
+    for (const target of targets.matchAll(DELETE_TARGET_RE)) {
+      if (!target[0].endsWith('.*')) continue;
+      const end = targetsStart + target.index + target[0].length;
+      edits.push({ start: end - 2, end, inserted: '' });
+    }
+    if (using) {
+      const fromStart = start + 'DELETE'.length + match[1]!.length;
+      edits.push({ start: fromStart, end: fromStart + 'FROM'.length, inserted: '' });
+      const usingEnd = start + match[0].length;
+      edits.push({ start: usingEnd - 'USING'.length, end: usingEnd, inserted: 'FROM' });
+    }
+  }
+  for (const { start, end, inserted } of edits.sort((a, b) => b.start - a.start)) {
+    spliceProcessed(state, start, end, inserted, recorded);
+  }
+}
+
 export function preprocessSqlForParser(sql: string): PreprocessResult {
   const state = initState(sql);
   const naturalJoinStarts: number[] = [];
@@ -294,6 +382,7 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
   ], recorded);
 
   stripStatementOptionModifiers(state, straightJoinHintSelectStarts, straightJoinHintOriginalSpans, recorded);
+  rewriteMultiTableDelete(state, recorded);
 
   applyRegexReplacementsInCode(state, [
     {
@@ -305,6 +394,8 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
       recordStartAt: (processedStart) => naturalJoinStarts.push(processedStart),
     },
   ], recorded);
+
+  quoteNonAsciiIdentifiers(state, recorded);
 
   return {
     sql: state.sql,
@@ -354,10 +445,6 @@ function remapConditionNode(
   };
 }
 
-function isIdentChar(ch: string | undefined): boolean {
-  return ch !== undefined && /[\w$]/.test(ch);
-}
-
 function skipSqlTrivia(sql: string, pos: number): number {
   let i = pos;
   while (i < sql.length) {
@@ -390,7 +477,7 @@ function aliasEquals(a: string, b: string): boolean {
 
 function isAsKeywordAt(sql: string, pos: number): number | null {
   if (sql.slice(pos, pos + 2).toUpperCase() !== 'AS') return null;
-  if (isIdentChar(sql[pos + 2])) return null;
+  if (isWordChar(sql[pos + 2])) return null;
   return pos + 2;
 }
 
@@ -412,7 +499,7 @@ function matchAliasTokenAt(sql: string, pos: number, alias: string): number | nu
   const end = pos + alias.length;
   if (end > sql.length) return null;
   if (!aliasEquals(sql.slice(pos, end), alias)) return null;
-  if (isIdentChar(sql[end])) return null;
+  if (isWordChar(sql[end])) return null;
   return end;
 }
 

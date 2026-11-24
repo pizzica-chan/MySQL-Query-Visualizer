@@ -9,7 +9,13 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { computeIndentEdit, type IndentEdit } from '../lib/editor-indent';
-import { lineColumnAt } from '../lib/parser';
+import {
+  DELETE_SAMPLE_SQL,
+  SAMPLE_SQL,
+  UNION_SAMPLE_SQL,
+  UPDATE_SAMPLE_SQL,
+  lineColumnAt,
+} from '../lib/parser';
 import { IconAlert, IconCheckCircle, IconSpinner } from './Icons';
 import { highlightSqlToLineHtml } from '../lib/sql-highlight';
 import type { SourceSpan } from '../lib/types';
@@ -18,10 +24,6 @@ import { SampleLoadButtons } from './SampleLoadButtons';
 interface SqlEditorProps {
   value: string;
   onChange: (value: string) => void;
-  onLoadSample?: () => void;
-  onLoadUpdateSample?: () => void;
-  onLoadDeleteSample?: () => void;
-  onLoadUnionSample?: () => void;
   error?: string;
   /** 構文エラーの範囲。該当箇所に波線を引き、行番号を赤くする */
   errorSpan?: SourceSpan;
@@ -58,10 +60,6 @@ function lineIndexAt(text: string, offset: number): number {
 export function SqlEditor({
   value,
   onChange,
-  onLoadSample,
-  onLoadUpdateSample,
-  onLoadDeleteSample,
-  onLoadUnionSample,
   error,
   errorSpan,
   focusSpan = null,
@@ -79,6 +77,13 @@ export function SqlEditor({
   const pendingSelectionRef = useRef<{ start: number; end: number } | null>(null);
   /** Esc の直後の Tab だけは字下げせず、通常どおりフォーカスを移す（キーボードだけで抜けられるように） */
   const tabReleasedRef = useRef(false);
+  /**
+   * サンプルで置き換える前の SQL。「元に戻す」を出しているあいだだけ持つ。
+   * nativeUndo は、ブラウザの「元に戻す」（Ctrl+Z）の履歴に残せたか
+   */
+  const [replaced, setReplaced] = useState<{ previous: string; inserted: string; nativeUndo: boolean } | null>(
+    null,
+  );
   const hintId = useId();
   const errorId = useId();
 
@@ -138,6 +143,12 @@ export function SqlEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
+  // 置き換えたあとに編集したり、共有リンクなどで別の SQL に差し替わったりしたら「元に戻す」を消す。
+  // 残すと、編集した内容まで置き換え前の SQL に戻してしまう
+  useEffect(() => {
+    if (replaced && value !== replaced.inserted) setReplaced(null);
+  }, [value, replaced]);
+
   const applyEdit = useCallback(
     (textarea: HTMLTextAreaElement, edit: IndentEdit) => {
       // execCommand で入れると、ブラウザの「元に戻す」（Ctrl+Z）で字下げを取り消せる。
@@ -158,6 +169,58 @@ export function SqlEditor({
     },
     [onChange],
   );
+
+  /**
+   * SQL 全体を text に置き換える。execCommand で入れると、ブラウザの「元に戻す」（Ctrl+Z）で前の SQL に戻せる。
+   * 値を直接差し替えると元に戻す履歴が消え、さらに 300ms 後には保存も上書きされるので、入力していた SQL を取り戻せない。
+   * フォーカスは置き換える前の要素（押したボタン）に戻す。エディタに残すと、カーソル連動が働いて右側に枠が付く。
+   * 返り値は、ブラウザの「元に戻す」の履歴に残せたか（execCommand を使えない環境では値を直接差し替える）
+   */
+  const replaceAll = useCallback(
+    (text: string): boolean => {
+      const textarea = textareaRef.current;
+      if (!textarea || textarea.value === text) return false;
+      const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(0, textarea.value.length);
+      let inserted = false;
+      try {
+        inserted = document.execCommand?.('insertText', false, text) ?? false;
+      } catch {
+        inserted = false;
+      }
+      const nativeUndo = inserted && textarea.value === text;
+      if (nativeUndo) {
+        textarea.setSelectionRange(0, 0);
+      } else {
+        pendingSelectionRef.current = { start: 0, end: 0 };
+        onChange(text);
+      }
+      textarea.scrollTop = 0;
+      syncScroll(textarea);
+      if (returnFocus && returnFocus !== textarea) returnFocus.focus({ preventScroll: true });
+      return nativeUndo;
+    },
+    [onChange, syncScroll],
+  );
+
+  const loadSample = useCallback(
+    (text: string) => {
+      const previous = textareaRef.current?.value ?? value;
+      if (previous === text) return;
+      const nativeUndo = replaceAll(text);
+      // 空の入力を置き換えたときは、戻す先が無いので出さない
+      setReplaced(previous.trim() ? { previous, inserted: text, nativeUndo } : null);
+    },
+    [replaceAll, value],
+  );
+
+  const undoReplace = useCallback(() => {
+    if (!replaced) return;
+    setReplaced(null);
+    replaceAll(replaced.previous);
+    textareaRef.current?.focus();
+  }, [replaced, replaceAll]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -205,24 +268,17 @@ export function SqlEditor({
     scrollToOffset(errorSpan.start);
   }, [errorSpan, scrollToOffset]);
 
-  const canShowSamples =
-    showSamples &&
-    onLoadSample &&
-    onLoadUpdateSample &&
-    onLoadDeleteSample &&
-    onLoadUnionSample;
-
   return (
     <div className={`sql-editor${compact ? ' sql-editor--compact' : ''}`}>
-      {(label || canShowSamples) && (
+      {(label || showSamples) && (
         <div className="sql-editor-toolbar">
           <span className="sql-editor-label">{label ?? 'SQL'}</span>
-          {canShowSamples && (
+          {showSamples && (
             <SampleLoadButtons
-              onSelect={onLoadSample}
-              onUpdate={onLoadUpdateSample}
-              onUnion={onLoadUnionSample}
-              onDelete={onLoadDeleteSample}
+              onSelect={() => loadSample(SAMPLE_SQL)}
+              onUpdate={() => loadSample(UPDATE_SAMPLE_SQL)}
+              onUnion={() => loadSample(UNION_SAMPLE_SQL)}
+              onDelete={() => loadSample(DELETE_SAMPLE_SQL)}
             />
           )}
         </div>
@@ -284,6 +340,21 @@ export function SqlEditor({
           <span className="visually-hidden">。Esc を押してから Tab を押すと、次の項目へ移動します</span>
         </span>
       </div>
+      </div>
+      {/* 置き換えの知らせは読み上げたいので、領域は常に置いておき、中身だけを出し入れする */}
+      <div className="sql-editor-notice-region" role="status">
+        {replaced && (
+          <div className="sql-editor-notice">
+            <span className="sql-editor-notice-text">
+              {replaced.nativeUndo
+                ? 'サンプルの SQL に置き換えました。前の SQL は「元に戻す」か Ctrl+Z で戻せます'
+                : 'サンプルの SQL に置き換えました。前の SQL は「元に戻す」で戻せます'}
+            </span>
+            <button type="button" className="btn btn--ghost sql-editor-notice-undo" onClick={undoReplace}>
+              元に戻す
+            </button>
+          </div>
+        )}
       </div>
       {error && (
         <div className="parse-error" role="alert" id={errorId}>

@@ -1,4 +1,5 @@
 import type { ConditionNode, JoinEdge, JoinType, ParsedQuery, TableRef } from './types';
+import { NO_JOIN_CONDITION, joinConditionDisplayText } from './join-condition';
 import { maskNonCode } from './sql-lex';
 
 export interface EffectiveInnerReason {
@@ -103,7 +104,16 @@ export function isInnerJoinType(type: JoinType): boolean {
 export function joinHasOnCondition(join: JoinEdge): boolean {
   if (join.conditionRoot) return true;
   const condition = join.condition.trim();
-  return condition.length > 0 && condition !== '(no condition)';
+  return condition.length > 0 && condition !== NO_JOIN_CONDITION;
+}
+
+/**
+ * すべての行の組み合わせ（直積）を作る結合か。ON / USING の無い CROSS JOIN のほか、
+ * ON の無い INNER JOIN・JOIN・STRAIGHT_JOIN とカンマ結合も、MySQL では CROSS JOIN と同じ結果になる
+ * （MySQL 8.4 リファレンス 15.2.13.2 JOIN Clause）
+ */
+export function isCartesianJoin(join: JoinEdge): boolean {
+  return (join.type === 'CROSS JOIN' || isInnerJoinType(join.type)) && !joinHasOnCondition(join);
 }
 
 /**
@@ -460,7 +470,7 @@ export function formatEffectiveInnerJoinScopeLine(
 ): string {
   const nullableLabel = tableDisplayLabel(nullableTable);
   const cause = formatEffectiveInnerCausePhrase(reasons);
-  return `${preservedLabel} と ${nullableLabel}は実質 INNER JOIN — 結合条件「${join.condition}」を満たす組み合わせのみ残る。SQL上は ${join.type}（${nullableLabel}が無い行も${preservedLabel}は残る）だが、${cause}${nullableLabel}が無い行も除外される`;
+  return `${preservedLabel} と ${nullableLabel}は実質 INNER JOIN — 結合条件「${joinConditionDisplayText(join.condition)}」を満たす組み合わせのみ残る。SQL上は ${join.type}（${nullableLabel}が無い行も${preservedLabel}は残る）だが、${cause}${nullableLabel}が無い行も除外される`;
 }
 
 export function effectiveInnerAnalysisByJoinId(

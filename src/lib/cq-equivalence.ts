@@ -20,6 +20,7 @@
  *   2. 探索予算を超えたら not-proven（タイムアウトで「同じ」と言わない）
  *   3. 証明できたときだけ結果を上げる。既存の構文差分判定は書き換えない
  */
+import { NO_JOIN_CONDITION } from './join-condition';
 import { maskNonCode } from './sql-lex';
 import type { ConditionNode, JoinEdge, ParsedQuery, TableRef } from './types';
 
@@ -45,7 +46,7 @@ const ALLOWED_JOIN_TYPES = new Set(['INNER JOIN', 'JOIN', 'STRAIGHT JOIN', 'CROS
 /** 等式の述語に使う関係名。テーブル名は識別子なので `=` とは重ならない */
 const EQUALITY_RELATION = '=';
 
-const EMPTY_JOIN_CONDITIONS = new Set(['', '(no condition)']);
+const EMPTY_JOIN_CONDITIONS = new Set(['', NO_JOIN_CONDITION]);
 
 const IDENT = String.raw`(?:\`[^\`]+\`|[A-Za-z_][A-Za-z0-9_$]*)`;
 const COLUMN_REF_RE = new RegExp(`^(${IDENT}(?:\\.${IDENT})*)\\.(${IDENT})$`);

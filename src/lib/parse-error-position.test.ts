@@ -63,6 +63,30 @@ describe('構文エラーの文', () => {
     expect(error.message).toContain('の「)」で構文を解釈できません');
   });
 
+  it('語の先頭で解釈できなくなったときは、1 文字ではなく語全体を示す', () => {
+    const sql = 'VALUES ROW(1, 2)';
+    const error = errorOf(sql);
+    expect(error.message).toBe('1 行 8 列の「ROW」で構文を解釈できません');
+    expect(sql.slice(error.span!.start, error.span!.end)).toBe('ROW');
+
+    // 引用符なしの識別子には U+0080 以降の文字も使える（MySQL 8.4 リファレンス 11.2）。
+    // 前処理でバッククォートを足した識別子でも、元の SQL の語を示す
+    const japanese = 'SELECT a FROM t WHERE x = 1 テスト列 = 2';
+    const japaneseError = errorOf(japanese);
+    expect(japaneseError.message).toBe('1 行 29 列の「テスト列」で構文を解釈できません');
+    expect(japanese.slice(japaneseError.span!.start, japaneseError.span!.end)).toBe('テスト列');
+  });
+
+  it('語でない文字（記号・引用符）は 1 文字のまま示す', () => {
+    expect(errorOf("'abc FROM t").message).toBe("1 行 1 列の「'」で構文を解釈できません");
+    expect(errorOf('SELECT a,, b FROM t').span).toEqual({ start: 9, end: 10 });
+  });
+
+  it('予約語を別名の位置に書いたときの英語の文を、日本語にする', () => {
+    const error = errorOf('SELECT * FROM t AS OF TIMESTAMP NOW()');
+    expect(error.message).toBe('「OF」は予約語なので、そのままでは別名に使えません。別名にするならバッククォート（`）で囲んでください');
+  });
+
   it('SQL ケース集の構文エラーは、どれも短い文になる', async () => {
     const { SQL_TEST_CASES } = await import('./fixtures/sql-cases');
     let checked = 0;

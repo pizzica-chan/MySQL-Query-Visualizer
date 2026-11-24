@@ -1228,4 +1228,56 @@ HAVING SUM(oi.qty) > 5`,
       if (texts.join(' | ') !== 't.x   DESC | t.y\n  ASC') throw new Error(`spans: ${JSON.stringify(texts)}`);
     },
   },
+  {
+    name: 'カンマ結合と ON の無い JOIN（条件の無い結合）',
+    category: 'basic',
+    sql: 'SELECT a.id, b.id, c.id FROM a, b JOIN c WHERE a.id = b.a_id',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.tables.length !== 3) throw new Error(`tables ${q.tables.length}`);
+      if (q.joins.length !== 2) throw new Error(`joins ${q.joins.length}`);
+    },
+  },
+  {
+    name: 'FROM DUAL はテーブルとして扱わない',
+    category: 'edge',
+    sql: 'SELECT 1 + 1 AS two FROM DUAL',
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.tables.length !== 0) throw new Error(`tables ${q.tables.map((t) => t.table).join(', ')}`);
+    },
+  },
+  {
+    name: '日本語（カタカナ・ひらがな・漢字）の識別子を引用符なしで書く',
+    category: 'edge',
+    sql: `SELECT ユーザー.名前, 注文.金額 AS きんがく
+FROM ユーザー
+JOIN 注文 ON 注文.ユーザーid = ユーザー.id
+WHERE ユーザー.状態 = '有効' AND @変数 IS NULL -- コメントの中の テーブル
+ORDER BY きんがく`,
+    expectSuccess: true,
+    assert: (q) => {
+      const names = q.tables.map((t) => t.table).join(', ');
+      if (names !== 'ユーザー, 注文') throw new Error(`tables ${names}`);
+      const span = q.tables[1]?.sourceSpan;
+      const text = span ? q.rawSql.slice(span.start, span.end).trim() : '';
+      if (text !== '注文') throw new Error(`table span ${JSON.stringify(text)}`);
+      if (q.columns[1]?.alias !== 'きんがく') throw new Error(`alias ${q.columns[1]?.alias}`);
+    },
+  },
+  {
+    name: '複数テーブルの DELETE（USING の形と、対象の .*）',
+    category: 'delete',
+    sql: `DELETE FROM t1, t2.* USING t1
+JOIN t2 ON t1.id = t2.t1_id
+LEFT JOIN t3 ON t3.id = t2.t3_id
+WHERE t3.id IS NULL`,
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.statementType !== 'DELETE') throw new Error(q.statementType);
+      if (q.tables.length !== 3) throw new Error(`tables ${q.tables.length}`);
+      const targets = (q.deleteTargets ?? []).map((t) => t.name).join(', ');
+      if (targets !== 't1, t2') throw new Error(`targets ${targets}`);
+    },
+  },
 ];

@@ -308,6 +308,74 @@ describe('App — アプリを開いたタブで共有リンクを開く', () =>
   });
 });
 
+describe('App — サンプルの読み込みと元に戻す', () => {
+  function clickSample(label: string, editorIndex = 0) {
+    const editor = host.querySelectorAll('.sql-editor')[editorIndex]!;
+    const button = [...editor.querySelectorAll<HTMLButtonElement>('.sample-load-btn')].find(
+      (b) => b.textContent?.trim() === label,
+    )!;
+    act(() => {
+      button.focus();
+      button.click();
+    });
+  }
+
+  function undoButton() {
+    return [...host.querySelectorAll<HTMLButtonElement>('.sql-editor-notice button')].find(
+      (b) => b.textContent === '元に戻す',
+    );
+  }
+
+  it('入力していた SQL をサンプルで置き換えたら、「元に戻す」で前の SQL に戻せる', () => {
+    renderAndSettle();
+    const textarea = host.querySelector('textarea')!;
+    act(() => typeInto(textarea, 'SELECT mine FROM t'));
+    clickSample('UPDATE');
+    expect(textarea.value).toMatch(/^UPDATE/);
+    // happy-dom には execCommand が無く、値を直接差し替える。この場合は Ctrl+Z では戻せないので案内しない
+    expect(host.querySelector('.sql-editor-notice')!.textContent).not.toContain('Ctrl+Z');
+
+    act(() => undoButton()!.click());
+    expect(textarea.value).toBe('SELECT mine FROM t');
+    expect(undoButton()).toBeUndefined();
+    act(() => {
+      vi.advanceTimersByTime(AFTER_DEBOUNCE_MS);
+    });
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!).sql).toBe('SELECT mine FROM t');
+  });
+
+  it('空の入力にサンプルを入れたときは「元に戻す」を出さない', () => {
+    renderAndSettle();
+    clickSample('SELECT');
+    expect(host.querySelector('textarea')!.value).toMatch(/^SELECT/);
+    expect(undoButton()).toBeUndefined();
+  });
+
+  it('置き換えたあとに編集したら「元に戻す」を消す（編集した内容を戻さないため）', () => {
+    renderAndSettle();
+    const textarea = host.querySelector('textarea')!;
+    act(() => typeInto(textarea, 'SELECT mine FROM t'));
+    clickSample('SELECT');
+    expect(undoButton()).toBeDefined();
+    act(() => typeInto(textarea, `${textarea.value}\nLIMIT 1`));
+    expect(undoButton()).toBeUndefined();
+  });
+
+  it('比較モードの SQL A でも、置き換え前の SQL に戻せる', () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ mode: 'compare', sql: '', sqlA: 'SELECT a FROM t', sqlB: 'SELECT b FROM t', resolveAliases: false }),
+    );
+    renderAndSettle();
+    clickSample('DELETE');
+    const [a, b] = host.querySelectorAll('textarea');
+    expect(a!.value).toMatch(/^DELETE/);
+    act(() => undoButton()!.click());
+    expect(a!.value).toBe('SELECT a FROM t');
+    expect(b!.value).toBe('SELECT b FROM t');
+  });
+});
+
 describe('App — エディタのキー操作', () => {
   function renderWithSql(sql: string) {
     window.localStorage.setItem(

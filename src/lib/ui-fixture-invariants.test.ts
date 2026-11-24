@@ -7,7 +7,10 @@
 import { describe, expect, it } from 'vitest';
 import { aliasTooltipFor } from './effect-text-highlight';
 import { SQL_TEST_CASES } from './fixtures/sql-cases';
+import { NO_JOIN_CONDITION } from './join-condition';
+import { buildJoinFlowLayout } from './join-flow-layout';
 import { parseMySqlQuery } from './parser';
+import { buildQueryEffect } from './query-effect';
 import { collectAllNestedQueries } from './query-utils';
 import { highlightSqlToLineHtml } from './sql-highlight';
 import type { ParsedQuery, SourceSpan } from './types';
@@ -58,6 +61,18 @@ describe('画面のための処理 — 共有の SQL ケース集の全件', () 
       expect(span.start).toBeGreaterThanOrEqual(0);
       expect(span.end).toBeGreaterThanOrEqual(span.start);
       expect(span.end).toBeLessThanOrEqual(sql.length);
+    }
+  });
+
+  it.each(successCases)('$name — 作用説明・SQL構造・JOIN 図の線に、条件の無い結合を表す内部の印を出さない', ({ sql }) => {
+    const result = parseMySqlQuery(sql);
+    if (!result.success) throw new Error(result.error.message);
+    for (const scope of [result.query, ...collectAllNestedQueries(result.query)]) {
+      for (const mode of ['sql', 'japanese'] as const) {
+        expect(JSON.stringify(buildQueryEffect(scope, mode))).not.toContain(NO_JOIN_CONDITION);
+      }
+      const { edges } = buildJoinFlowLayout(scope.tables, scope.joins, false, scope);
+      for (const edge of edges) expect(String(edge.data?.condition ?? '')).not.toContain(NO_JOIN_CONDITION);
     }
   });
 

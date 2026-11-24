@@ -16,6 +16,7 @@ SQL の送信や外部 API 通信は行わず、**完全オフライン**で動�
 - サンプル読み込み（SELECT / UPDATE / DELETE / UNION）
   - SELECT: 多段 JOIN・派生テーブル・相関 EXISTS / IN / NOT IN
   - UNION: ブランチごとに JOIN・集約・派生テーブル・サブクエリ
+  - 入力していた SQL をサンプルで置き換えたときは、エディタの下の「元に戻す」か Ctrl+Z で前の SQL に戻せる
 
 ### モード
 
@@ -158,11 +159,13 @@ npm run check:browser # ビルド + 実際の Chrome で dist/ を操作して�
 
 - **SELECT**（UNION / サブクエリ / 派生テーブル含む）
 - **UPDATE**（JOIN 付き、SET 句）
-- **DELETE**（複数テーブル指定）
+- **DELETE**（複数テーブル指定。`DELETE t1 FROM …` と `DELETE FROM t1 USING …` のどちらの書き方も読む）
 
 ### SQL 構文（主要）
 
-- JOIN: INNER / LEFT / RIGHT / FULL / CROSS / **STRAIGHT_JOIN**、**NATURAL JOIN**、**JOIN USING**、暗黙 JOIN（カンマ区切り）
+- JOIN: INNER / LEFT / RIGHT / FULL / CROSS / **STRAIGHT_JOIN**、**NATURAL JOIN**、**JOIN USING**、暗黙 JOIN（カンマ区切り）。ON の無い結合は、すべての行の組み合わせ（直積）として説明します
+- 日本語などの ASCII 以外の文字を使った識別子（引用符なしの `FROM 注文` も読む）
+- `FROM DUAL`（FROM の無い SELECT と同じに扱う）
 - **WITH（CTE）** — 定義の解析と FROM 参照の紐付け、作用説明での表示
 - WHERE / HAVING: 比較、IN、BETWEEN、LIKE、IS NULL、EXISTS、NOT、AND / OR
 - GROUP BY / ORDER BY / LIMIT / OFFSET / DISTINCT

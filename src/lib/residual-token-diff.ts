@@ -191,6 +191,22 @@ function equalizeUsingJoins(root: ParsedQuery, tokens: string[]): string[] {
   return out;
 }
 
+/**
+ * 複数テーブルの DELETE の、対象の並びの書き方の違い。`DELETE FROM t1 USING t1 JOIN …` と
+ * `DELETE t1 FROM t1 JOIN …` は同じ文で、対象の `t1.*` の `.*` もあってもなくても同じ。
+ * 対象の並び（最初のテーブル参照より前）の中の USING と `.*` だけを数えない。対象のテーブルはカテゴリ比較で比べる
+ */
+function multiTableDeleteRanges(query: ParsedQuery, masked: string): Range[] {
+  if (query.statementType !== 'DELETE' || !query.deleteTargets?.length) return [];
+  const headerEnd = query.tables[0]?.sourceSpan?.start;
+  if (headerEnd === undefined) return [];
+  const header = masked.slice(0, headerEnd);
+  return [...header.matchAll(/\bUSING\b|\.\s*\*/gi)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+}
+
 function tokenize(query: ParsedQuery, ignoredNames: Set<string>): string[] {
   const sql = query.rawSql;
   const masked = maskNonCode(sql);
@@ -198,6 +214,7 @@ function tokenize(query: ParsedQuery, ignoredNames: Set<string>): string[] {
     ...indexHintRanges(masked),
     ...lockingClauseRanges(masked),
     ...topLevelOrderByRange(query, masked),
+    ...multiTableDeleteRanges(query, masked),
   ];
   const tokens: string[] = [];
   /** 直前の字句が語かどうか。直後に `.` が来たら修飾子（テーブル名・別名）なので取り消す */

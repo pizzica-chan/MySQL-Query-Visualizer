@@ -135,6 +135,16 @@ async function editorChecks(b) {
   await b.key('Enter', { keyCode: 13, modifiers: 2 });
   await sleep(100);
   check('Ctrl+Enter で待たずに解析し、改行は入れない', (await b.eval(`!!document.querySelector('.tab-bar')`)) && (await b.eval(`${textarea()}.value`)) === 'SELECT id FROM users');
+
+  // サンプルのボタンは入力中の SQL を置き換える。誤って押しても、前の SQL を取り戻せること
+  await b.eval(`(() => { const x = [...document.querySelectorAll('.sql-editor .sample-load-btn')].find((x) => x.textContent.trim() === 'UPDATE'); x.focus(); x.click(); })()`);
+  await sleep(500);
+  const replaced = await b.eval(`({ value: ${textarea()}.value, notice: !!document.querySelector('.sql-editor-notice'), focusOnButton: document.activeElement.classList.contains('sample-load-btn'), ctrlZ: document.querySelector('.sql-editor-notice')?.textContent.includes('Ctrl+Z') })`);
+  check('サンプルで置き換えたら「元に戻す」と Ctrl+Z の案内を出し、フォーカスはボタンに残す', replaced.value.startsWith('UPDATE') && replaced.notice && replaced.ctrlZ && replaced.focusOnButton, JSON.stringify(replaced).slice(0, 120));
+  await b.eval(`${textarea()}.focus()`);
+  await b.key('z', { code: 'KeyZ', keyCode: 90, modifiers: 2 });
+  await sleep(500);
+  check('サンプルで置き換えたあと、Ctrl+Z で前の SQL に戻せる', (await b.eval(`${textarea()}.value`)) === 'SELECT id FROM users' && !(await b.eval(`!!document.querySelector('.sql-editor-notice')`)));
 }
 
 async function samplesAndThemeChecks(b) {
@@ -228,6 +238,9 @@ async function layoutChecks(b) {
   await sleep(500);
   const width = await b.eval(`({ page: document.documentElement.scrollWidth, window: window.innerWidth })`);
   check('幅 390px で横にはみ出さない', width.page <= width.window + 1, JSON.stringify(width));
+  // 幅が足りないとき、タブの並びの表示オプションが縮み、1 文字ごとに改行して表示されていた
+  const option = await b.eval(`(() => { const el = document.querySelector('.tab-bar-options span'); return el ? { height: el.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(el).lineHeight) } : null; })()`);
+  check('幅 390px でも、タブの並びの表示オプションは 1 行で出す', option !== null && option.height <= option.lineHeight * 1.5, JSON.stringify(option));
   await b.screenshot(join(outDir, 'mobile.png'));
 }
 

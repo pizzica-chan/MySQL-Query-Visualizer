@@ -338,4 +338,25 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     b: '(SELECT a FROM t) UNION (SELECT a FROM u) ORDER BY a DESC',
     expect: 'order-only',
   },
+  // --- 前処理で書き換える構文（書き換えの前後で同じ結果になる） ---
+  same(
+    '複数テーブルの DELETE の USING の形と FROM の形',
+    'DELETE FROM t1 USING t1 JOIN t2 ON t1.id = t2.id WHERE t2.x = 1',
+    'DELETE t1 FROM t1 JOIN t2 ON t1.id = t2.id WHERE t2.x = 1',
+  ),
+  same(
+    'DELETE の対象の .* の有無',
+    'DELETE t1.*, t2.* FROM t1 JOIN t2 ON t1.id = t2.id',
+    'DELETE t1, t2 FROM t1 JOIN t2 ON t1.id = t2.id',
+  ),
+  different(
+    '複数テーブルの DELETE で、削除する対象が違う',
+    'DELETE FROM t1 USING t1 JOIN t2 ON t1.id = t2.id',
+    'DELETE FROM t2 USING t1 JOIN t2 ON t1.id = t2.id',
+  ),
+  same(
+    '日本語の識別子を引用符で囲むかどうか',
+    'SELECT ユーザー.名前 FROM ユーザー WHERE ユーザー.状態 = 1',
+    'SELECT `ユーザー`.`名前` FROM `ユーザー` WHERE `ユーザー`.`状態` = 1',
+  ),
 ];

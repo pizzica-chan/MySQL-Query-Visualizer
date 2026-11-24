@@ -4,11 +4,12 @@ import { getUpdateTargetTables } from './query-utils';
 import {
   effectiveInnerAnalysisByJoinId,
   formatEffectiveInnerJoinScopeLine,
+  isCartesianJoin,
   isInnerLikeJoin,
-  joinHasOnCondition,
   type EffectiveInnerAnalysis,
   type EffectiveInnerReason,
 } from './join-effective-inner';
+import { joinConditionDisplayText } from './join-condition';
 import { resolveJoinLayoutSources } from './join-graph-layout';
 import { hasUnion } from './query-utils';
 
@@ -643,10 +644,11 @@ function describeJoinJapanese(
     return formatEffectiveInnerJoinScopeLine(join, preservedLabel, effectiveInner.nullableTable, effectiveInner.reasons);
   }
 
-  if (join.type === 'CROSS JOIN' && !joinHasOnCondition(join)) {
-    return sourceLabels.length > 1
-      ? `${sourcesText} と ${right} の直積（すべての組み合わせ）`
-      : `${left} と ${right} の直積（すべての組み合わせ）`;
+  // ON / USING の無い INNER JOIN（カンマ結合を含む）と STRAIGHT_JOIN も、MySQL では CROSS JOIN と同じく
+  // すべての行の組み合わせを作る。「結合条件を満たす組み合わせのみ残る」と書くと、条件があるように読める
+  if (isCartesianJoin(join)) {
+    const order = join.type === 'STRAIGHT JOIN' ? '（FROM 句の記述順で結合）' : '';
+    return `${left} と ${right} の直積（すべての組み合わせ）${order}`;
   }
 
   if (sourceLabels.length > 1) {
@@ -662,7 +664,8 @@ function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
   const sourceLabels = joinSourceLabels(join, tables);
   const right = tableName(join, tables, join.targetId);
   const left = sourceLabels.length === 1 ? sourceLabels[0]! : sourceLabels.join('、');
-  return `CROSS JOIN — ${left} と ${right} のすべての組み合わせ`;
+  if (join.type === 'CROSS JOIN') return `CROSS JOIN — ${left} と ${right} のすべての組み合わせ`;
+  return `${formatJoinDisplayType(join)} — ${left} と ${right} のすべての組み合わせ（結合条件が無いので CROSS JOIN と同じ）`;
 }
 
 function inConditionPhrase(node: ConditionNode): string {
@@ -829,7 +832,7 @@ function buildJoinConditionEffectNode(join: JoinEdge, mode: QueryEffectMode): Co
   return {
     id: `join-cond-${join.id}`,
     type: 'leaf',
-    text: join.condition,
+    text: joinConditionDisplayText(join.condition),
     sourceSpan: join.sourceSpan,
   };
 }
@@ -901,6 +904,8 @@ function isJoinRowFilter(
   join: JoinEdge,
   effectiveInner?: { nullableTable: TableRef; reasons: EffectiveInnerReason[] },
 ): boolean {
+  // 直積は行を絞り込まない。ON の無い INNER JOIN を「結合条件」の節に入れると、条件の無い項目が並ぶ
+  if (isCartesianJoin(join)) return false;
   if (isInnerLikeJoin(join)) return true;
   return Boolean(effectiveInner);
 }
@@ -1013,7 +1018,7 @@ function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSe
     } else {
       const classification = classifyTablePresenceRequirement(query);
       const optionalJoins = query.joins.filter((join) => {
-        if (join.type === 'CROSS JOIN') return false;
+        if (isCartesianJoin(join)) return false;
         const effectiveInner = effectiveInnerForJoin(join, query, effectiveInnerByJoin);
         return !isJoinRowFilter(join, effectiveInner);
       });
@@ -1026,7 +1031,7 @@ function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSe
       );
       pushStraightJoinHintLine(lines, query);
       for (const join of query.joins) {
-        if (join.type === 'CROSS JOIN' && !joinHasOnCondition(join)) {
+        if (isCartesianJoin(join)) {
           lines.push({ text: crossJoinPhrase(join, query.tables) });
         }
       }

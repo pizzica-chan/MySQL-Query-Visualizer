@@ -5,6 +5,7 @@ import {
   joinHasOnCondition,
   normalizeEffectiveInnerJoins,
 } from './join-effective-inner';
+import { NO_JOIN_CONDITION, NO_JOIN_CONDITION_LABEL } from './join-condition';
 import { joinTreeSignature, type JoinCondition, type JoinKind } from './join-tree';
 import { residualTokenDiff } from './residual-token-diff';
 import { maskNonCode, readBacktickIdentifierEnd, readQuotedStringEnd } from './sql-lex';
@@ -929,7 +930,8 @@ function compareTopLevel(a: ParsedQuery, b: ParsedQuery): DiffCategoryResult[] {
   if (joinsSignature(a) !== joinsSignature(b)) {
     joinDetails = diffSortedLists(aJoins, bJoins, (sig) => {
       const parts = sig.split('|');
-      return parts.slice(0, 4).join(' / ') || sig;
+      // 条件の無い結合は、パーサーの内部の印ではなく画面用の言葉で出す
+      return parts.slice(0, 4).map((part) => (part === NO_JOIN_CONDITION ? NO_JOIN_CONDITION_LABEL : part)).join(' / ') || sig;
     });
     if (joinDetails.length === 0) {
       // 結合の 1 つずつは同じでも、どの結合の結果に外部結合するかで行が変わる

@@ -618,6 +618,9 @@ body {
 
 .tab-bar {
   display: flex;
+  /* 幅が足りないときは、右端の表示オプションを次の行へ送る。折り返さないと、オプションの文字列だけが
+     縮み、1 文字ごとに改行して表示される */
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 4px;
   padding: 12px 16px 0;
@@ -2392,6 +2395,7 @@ body {
 .tab-bar-options {
   margin-left: auto;
   padding-bottom: 8px;
+  white-space: nowrap;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -3090,4 +3094,40 @@ kbd {
   .sql-editor-keys {
     display: none;
   }
+}
+
+/* サンプルで置き換えたあとの「元に戻す」の知らせ */
+/* 領域は読み上げのために常に置くので、空のあいだは .sql-editor の gap（8px）を打ち消して余白を増やさない。
+   display: none にすると、中身を入れたときに読み上げられないことがある */
+.sql-editor-notice-region:empty {
+  margin-top: -8px;
+}
+
+.sql-editor--compact .sql-editor-notice-region:empty {
+  margin-top: -6px;
+}
+
+.sql-editor-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: rgba(var(--accent-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  overflow-wrap: anywhere;
+}
+
+.sql-editor-notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sql-editor-notice-undo {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 0.75rem;
 }

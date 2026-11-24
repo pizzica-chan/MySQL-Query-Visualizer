@@ -1,6 +1,7 @@
 import type { SourceSpan } from './types';
 import {
   isDashLineCommentStart,
+  isWordChar,
   readBacktickIdentifierEnd,
   readBlockCommentEnd,
   readHashLineCommentEnd,
@@ -108,16 +109,6 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-}
-
-/**
- * 引用符なしの識別子に使える文字。MySQL は ASCII の英数字・$・_ に加えて U+0080〜U+FFFF を認める
- * （MySQL 8.4 リファレンス 11.2 Schema Object Names）。ASCII だけで判定すると、`テーブル1` の 1 を数値の色にする
- */
-const WORD_CHAR = /[\w$\u0080-￿]/;
-
-function isWordChar(ch: string | undefined): boolean {
-  return ch !== undefined && WORD_CHAR.test(ch);
 }
 
 /**

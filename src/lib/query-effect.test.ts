@@ -219,6 +219,30 @@ describe('query-effect', () => {
     expect(lineTexts(jpScope).some((l) => l.includes('直積'))).toBe(true);
   });
 
+  it.each([
+    ['カンマ結合', 'SELECT * FROM t1, t2 WHERE t1.id = t2.id'],
+    ['ON の無い INNER JOIN', 'SELECT * FROM t1 INNER JOIN t2'],
+    ['ON の無い JOIN', 'SELECT * FROM t1 JOIN t2'],
+  ])('%s は、条件を満たす組み合わせではなく直積として説明する', (_label, sql) => {
+    const result = parseMySqlQuery(sql);
+    if (!result.success) throw new Error(result.error.message);
+    const jpLines = lineTexts(buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'scope'));
+    expect(jpLines.some((l) => l.includes('t1 と t2 の直積'))).toBe(true);
+    expect(jpLines.some((l) => l.includes('満たす組み合わせのみ残る'))).toBe(false);
+
+    // SQL構造では「結合条件」の節に入れず、すべての組み合わせを作ることを書く
+    expect(joinFilterNodes(sql)).toHaveLength(0);
+    const sqlLines = lineTexts(buildQueryEffect(result.query, 'sql').sections.find((s) => s.kind === 'scope'));
+    expect(sqlLines.some((l) => l.includes('すべての組み合わせ（結合条件が無いので CROSS JOIN と同じ）'))).toBe(true);
+  });
+
+  it('ON の無い STRAIGHT_JOIN は、記述順で結合する直積として説明する', () => {
+    const result = parseMySqlQuery('SELECT * FROM t1 STRAIGHT_JOIN t2');
+    if (!result.success) throw new Error(result.error.message);
+    const jpLines = lineTexts(buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'scope'));
+    expect(jpLines).toContain('t1 と t2 の直積（すべての組み合わせ）（FROM 句の記述順で結合）');
+  });
+
   it('SELECT の表示対象はエイリアス解決の有無に関わらず実テーブル名とエイリアスを併記する', () => {
     const result = parseMySqlQuery(SAMPLE_SQL);
     expect(result.success).toBe(true);

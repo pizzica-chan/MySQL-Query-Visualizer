@@ -17,6 +17,7 @@ import { SourceLinkContext, useSourceLink } from '../contexts/source-link-contex
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
 import { useColorScheme } from '../hooks/useTheme';
 import { effectiveInnerAnalysisByJoinId } from '../lib/join-effective-inner';
+import { joinConditionDisplayText } from '../lib/join-condition';
 import { formatJoinTableLink } from '../lib/join-graph-layout';
 import {
   computeJoinFocusHighlight,
@@ -429,7 +430,7 @@ function JoinDiagramFlow({
                     <span className="join-effective-inner-tag">実質 INNER JOIN</span>
                   )}
                   <span className="join-tables">{formatJoinTableLink(j, tables)}</span>
-                  <code {...conditionProps}>{j.condition}</code>
+                  <code {...conditionProps}>{joinConditionDisplayText(j.condition)}</code>
                 </li>
               );
             })}

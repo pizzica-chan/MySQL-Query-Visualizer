@@ -400,10 +400,6 @@ export default function App() {
             <SqlEditor
               value={sql}
               onChange={setSql}
-              onLoadSample={() => setSql(SAMPLE_SQL)}
-              onLoadUpdateSample={() => setSql(UPDATE_SAMPLE_SQL)}
-              onLoadDeleteSample={() => setSql(DELETE_SAMPLE_SQL)}
-              onLoadUnionSample={() => setSql(UNION_SAMPLE_SQL)}
               error={error?.message}
               errorSpan={single.from === sql ? error?.span : undefined}
               focusSpan={activeSourceSpan}
@@ -473,10 +469,6 @@ export default function App() {
                 onChange={setSqlA}
                 label="SQL A（変更前）"
                 showSamples
-                onLoadSample={() => setSqlA(SAMPLE_SQL)}
-                onLoadUpdateSample={() => setSqlA(UPDATE_SAMPLE_SQL)}
-                onLoadDeleteSample={() => setSqlA(DELETE_SAMPLE_SQL)}
-                onLoadUnionSample={() => setSqlA(UNION_SAMPLE_SQL)}
                 error={syncedErrorA?.message}
                 errorSpan={syncedErrorA?.span}
                 onRunNow={runCompareNow}

@@ -4,6 +4,7 @@ import { effectiveInnerAnalysisByJoinId } from './join-effective-inner';
 import { formatJoinDisplayType } from './parser';
 import type { JoinEdge, JoinType, ParsedQuery, SourceSpan, TableRef } from './types';
 import { formatTableLabel } from './alias-resolver';
+import { joinConditionDisplayText } from './join-condition';
 import {
   computeJoinNodePositions,
   resolveJoinLayoutSources,
@@ -304,7 +305,7 @@ export function buildJoinFlowLayout(
         markerEnd: { type: MarkerType.ArrowClosed, color },
         interactionWidth: 24,
         data: {
-          condition: j.condition,
+          condition: joinConditionDisplayText(j.condition),
           joinType: formatJoinDisplayType(j),
           effectiveInner: isPrimary ? effectiveInner : false,
           compact,
