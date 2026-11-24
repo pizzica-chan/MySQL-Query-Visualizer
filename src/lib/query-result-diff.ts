@@ -80,7 +80,16 @@ export interface ResultDiffSummary {
   tone: 'same' | 'order-only' | 'review-needed' | 'different';
   /** サマリー見出し */
   title: string;
-  resultSet: { status: 'same' | 'different' | 'uncertain'; label: string };
+  resultSet: {
+    status: 'same' | 'different' | 'uncertain';
+    label: string;
+    /**
+     * status が same のときの根拠。proven は合接クエリ範囲での等価証明、
+     * syntax-match は構文カテゴリがすべて一致したことによる推定。
+     * 画面ではこの 2 つを色とバッジで分ける（推定の「同じ」を証明と同じ強さで読ませない）
+     */
+    basis?: 'proven' | 'syntax-match';
+  };
   order: { status: 'same' | 'different' | 'not-specified'; label: string };
   /** LIMIT+ORDER BY など、サマリーだけでは分かりにくいときの補足 */
   note?: string;
@@ -173,15 +182,18 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
 
   let resultSetStatus: ResultDiffSummary['resultSet']['status'];
   let resultSetLabel: string;
+  let resultSetBasis: ResultDiffSummary['resultSet']['basis'];
   if (limitWithoutOrderCaution) {
     resultSetStatus = 'uncertain';
     resultSetLabel = '要確認';
   } else if (diff.equalForResultSet) {
     resultSetStatus = 'same';
     resultSetLabel = '同じ';
+    resultSetBasis = 'syntax-match';
   } else if (proven) {
     resultSetStatus = 'same';
     resultSetLabel = '同じ（証明済み）';
+    resultSetBasis = 'proven';
   } else if (provenSetOnly) {
     resultSetStatus = 'uncertain';
     resultSetLabel = '重複を除けば同じ';
@@ -243,6 +255,7 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     resultSet: {
       status: resultSetStatus,
       label: resultSetLabel,
+      ...(resultSetBasis ? { basis: resultSetBasis } : {}),
     },
     order,
     note,

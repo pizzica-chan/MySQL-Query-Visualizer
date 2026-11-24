@@ -3,8 +3,6 @@ interface SampleLoadButtonsProps {
   onUpdate: () => void;
   onUnion: () => void;
   onDelete: () => void;
-  /** welcome 画面などで SELECT を強調する */
-  highlightSelect?: boolean;
 }
 
 const SAMPLES = [
@@ -19,7 +17,6 @@ export function SampleLoadButtons({
   onUpdate,
   onUnion,
   onDelete,
-  highlightSelect = false,
 }: SampleLoadButtonsProps) {
   const handlers = { onSelect, onUpdate, onUnion, onDelete };
 
@@ -31,9 +28,7 @@ export function SampleLoadButtons({
           <button
             key={sample.id}
             type="button"
-            className={`btn sample-load-btn${
-              highlightSelect && sample.id === 'select' ? ' btn--primary' : ' btn--ghost'
-            }`}
+            className="btn btn--ghost sample-load-btn"
             onClick={handlers[sample.handler]}
             title={sample.title}
           >

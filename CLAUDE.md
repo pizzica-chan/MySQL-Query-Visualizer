@@ -20,6 +20,7 @@ npm run dev                  # 開発サーバー (http://localhost:5173)
 npm test                     # ユニットテスト一式（vitest）
 npm run build                # tsc -b && vite build（オフライン配布向け）
 npm run test:dist            # ビルド + オフライン監査 + JOIN 図描画テスト
+npm run check:browser        # ビルド + ヘッドレス Chrome で dist/ を操作（Tab・IME・クリップボード・hashchange など happy-dom で見られない動き）
 npm run ensure-dist          # push 前: 再ビルド + 検証 + dist 同期チェック
 ```
 
@@ -30,7 +31,7 @@ npm run ensure-dist          # push 前: 再ビルド + 検証 + dist 同期チ�
 ```
 src/lib/        解析・比較のロジック（UI 非依存。テストはここに集中している）
 src/components/ 表示（React Flow による JOIN 図、各タブ）
-src/hooks/      React Flow の state 同期
+src/hooks/      React Flow の state 同期、配色の購読、エディタのカーソル位置と表示の連動
 src/lib/fixtures/ 全テストが共有する SQL ケース集と不変条件アサーション
 ```
 
@@ -63,3 +64,13 @@ SQL 前後比較（`query-result-diff.ts`）は、構文カテゴリのシグネ
 - **vitest の既定 environment は `node`**。DOM が要るテストはファイル先頭に `// @vitest-environment happy-dom` を書く。
 
 - **新しい SQL 構文への対応は `src/lib/fixtures/sql-cases.ts` にケースを足す**。複数のテストファイルがこのフィクスチャを横断で回すので、1 箇所足せば解析の不変条件・正規化・オフライン監査すべてに乗る。
+
+- **ホバーで要素の位置や当たり判定を変えない**（`transform` で持ち上げる、線の当たり判定のパスを細くする、など）。要素の端にあるマウスが外れてホバーが切れ、戻ってまたホバーする、を繰り返してカーソルや表示が点滅する（JOIN 図の線で ea1722e が直した）。ホバーで変えるのは色・枠・影だけにする。
+
+- **JOIN 図の線と矢印の色は CSS 変数にしない**。React Flow は矢印マーカーの id に色の文字列を使うので、`var(...)` を渡すと id が壊れる。テーマごとの色は `themedJoinColor` / `themedJoinEdge`（`join-flow-layout.ts`）で 16 進の色を差し替える。ミニマップや背景の点など props で渡す色も同じ。
+
+- **テーブルの別名の大文字小文字は OS で変わる**。MySQL のテーブルの別名は、Unix では既定で区別し、Windows と macOS では区別しない（MySQL 8.4 リファレンス 11.2.3）。「同じ別名が 1 つだけか」のように重複を数える判定では、区別しない側で数える。
+
+- **エディタのカーソル連動は DOM の `data-span-start` / `data-span-end` で要素を探す**（`useCaretSourceLink`）。新しい表示要素を SQL と連動させるときは `sourceSelectableProps` を使えば、クリックの連動とカーソルの連動の両方の対象になる。非表示のタブ（`.tab-pane--hidden`）の要素は対象外。
+
+- **テストや `npm run check:browser` の確認項目を足したら、直す前のコードで失敗することを確かめる**。別の経路で同じ状態になって、修正がなくても通る項目を書いてしまうことがある（JOIN 図の中だけの描き直しを確かめるつもりの項目が、App 全体の描き直しで通っていた）。

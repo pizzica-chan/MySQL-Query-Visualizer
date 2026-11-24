@@ -22,6 +22,22 @@
   --group-and: #6b9fd4;
   --group-or: #d4b06a;
   --group-not: #d47a7a;
+  /* 半透明の塗りに使う RGB 成分。rgba(var(--accent-rgb), 0.1) の形で使い、テーマごとに元の色だけ差し替える */
+  --accent-rgb: 107, 159, 212;
+  --success-rgb: 125, 184, 138;
+  --warning-rgb: 212, 176, 106;
+  --danger-rgb: 212, 122, 122;
+  --bg-elevated-rgb: 40, 44, 52;
+  /* SQL・説明文の字句の色 */
+  --hl-gold: #d4b06a;
+  --hl-blue: #b8d4f0;
+  --hl-green: #b8dcc0;
+  --hl-purple: #c8b8e8;
+  --hl-red: #e8b4b4;
+  --hl-gray: #6a7585;
+  /* エディタの行番号の幅 */
+  --editor-gutter: 3rem;
+  color-scheme: dark;
   /* 作用説明タブ — タイポグラフィ階層 */
   --effect-fs-banner: 1.0625rem;
   --effect-fs-desc: 0.875rem;
@@ -35,12 +51,64 @@
   --effect-lh-tight: 1.4;
   --effect-lh-body: 1.55;
   --effect-lh-relaxed: 1.65;
-  --radius: 6px;
-  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
+  /* 影。ダークでは濃く、ライトでは薄く */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.32), 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow-focus: 0 0 0 3px rgba(var(--accent-rgb), 0.35);
+  /* 画面の背景に敷く淡い光 */
+  --backdrop-glow: rgba(var(--accent-rgb), 0.1);
   --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Yu Gothic UI', sans-serif;
   --font-mono: 'Cascadia Code', 'Consolas', 'MS Gothic', monospace;
   /* SQL 入力 — リガチャ・日本語フォントによる >= → ≧ 等の字形変換を避ける */
   --font-mono-input: 'Cascadia Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+}
+
+/*
+ * ライトテーマ。data-theme は src/lib/theme.ts が「自動」の設定も OS の設定に合わせて
+ * light / dark に解決してから付けるので、ここに書くのは light の 1 ブロックだけでよい
+ */
+:root[data-theme='light'] {
+  --bg-base: #eef1f5;
+  --bg-panel: #f8f9fb;
+  --bg-elevated: #ffffff;
+  --bg-surface: #eef1f6;
+  --bg-inset: #e4e8ee;
+  --bg-leaf: #edf1f7;
+  --bg-hover: #dfe5ed;
+  --border: #d3d9e2;
+  --border-visible: #bfc7d3;
+  --border-strong: #95a0b0;
+  --border-focus: #2f6db3;
+  --text: #1c2330;
+  --text-muted: #465163;
+  --text-dim: #687284;
+  --accent: #2f6db3;
+  --accent-hover: #255a96;
+  --accent-subtle: rgba(47, 109, 179, 0.1);
+  --success: #2c7f45;
+  --warning: #8f6209;
+  --danger: #b03f3f;
+  --group-and: #2f6db3;
+  --group-or: #8f6209;
+  --group-not: #b03f3f;
+  --accent-rgb: 47, 109, 179;
+  --success-rgb: 44, 127, 69;
+  --warning-rgb: 176, 124, 20;
+  --danger-rgb: 176, 63, 63;
+  --bg-elevated-rgb: 255, 255, 255;
+  --hl-gold: #8a5300;
+  --hl-blue: #1d5a9a;
+  --hl-green: #22754a;
+  --hl-purple: #6f45ad;
+  --hl-red: #9e3a3a;
+  --hl-gray: #7a8494;
+  --shadow-sm: 0 1px 2px rgba(28, 35, 48, 0.06);
+  --shadow-md: 0 6px 20px rgba(28, 35, 48, 0.08), 0 1px 3px rgba(28, 35, 48, 0.06);
+  --backdrop-glow: rgba(var(--accent-rgb), 0.08);
+  color-scheme: light;
 }
 
 *,
@@ -255,16 +323,6 @@ body {
   padding: 6px 10px;
 }
 
-.welcome-state .sample-load {
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.welcome-state .sample-load-buttons {
-  justify-content: center;
-}
-
 .btn {
   font-family: var(--font-sans);
   font-size: 0.82rem;
@@ -323,7 +381,8 @@ body {
   position: absolute;
   inset: 0;
   margin: 0;
-  padding: 16px;
+  /* 左の余白に行番号を描く。textarea と同じ値にしないと文字の位置がずれる */
+  padding: 16px 16px 16px calc(var(--editor-gutter) + 10px);
   overflow: hidden;
   pointer-events: none;
   white-space: pre-wrap;
@@ -346,35 +405,82 @@ body {
 }
 
 .sql-hl--keyword {
-  color: #d4b06a;
+  color: var(--hl-gold);
   font-weight: 600;
 }
 
 .sql-hl--string {
-  color: #c8b8e8;
+  color: var(--hl-purple);
 }
 
 .sql-hl--comment {
-  color: #6a7585;
+  color: var(--hl-gray);
   font-style: italic;
 }
 
 .sql-hl--number {
-  color: #b8dcc0;
+  color: var(--hl-green);
 }
 
 .sql-hl--identifier {
-  color: #b8d4f0;
+  color: var(--hl-blue);
 }
 
 .sql-hl--operator {
-  color: #e8b4b4;
+  color: var(--hl-red);
 }
 
 .sql-hl--focus {
-  background: rgba(107, 159, 212, 0.32);
+  background: rgba(var(--accent-rgb), 0.32);
   border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(107, 159, 212, 0.55);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.55);
+}
+
+.sql-hl--error {
+  background: rgba(var(--danger-rgb), 0.18);
+  text-decoration: underline wavy var(--danger);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+
+/* 行番号の欄の背景。行番号そのものはハイライト層の各行（.sql-line::before）が描く */
+.sql-editor-body::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--editor-gutter);
+  border-right: 1px solid var(--border);
+  background: var(--bg-inset);
+  border-radius: var(--radius) 0 0 var(--radius);
+  pointer-events: none;
+}
+
+/* 1 行を 1 つのブロックにする。折り返した行もブロックの高さが伸びるので、行番号が次の行とずれない */
+.sql-line {
+  display: block;
+  position: relative;
+}
+
+.sql-line:empty::after {
+  content: '\200b';
+}
+
+.sql-line::before {
+  content: attr(data-line);
+  position: absolute;
+  left: calc(-1 * (var(--editor-gutter) + 10px));
+  width: calc(var(--editor-gutter) - 8px);
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  user-select: none;
+}
+
+.sql-line--error::before {
+  color: var(--danger);
+  font-weight: 700;
 }
 
 .source-selectable {
@@ -383,13 +489,20 @@ body {
 }
 
 .source-selectable:hover {
-  outline: 1px dashed rgba(107, 159, 212, 0.75);
+  outline: 1px dashed rgba(var(--accent-rgb), 0.75);
   outline-offset: 2px;
 }
 
 .source-selectable--active {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* エディタのカーソル位置に対応する要素。クリックで選んだ要素（--active）より控えめにする */
+.source-selectable--caret:not(.source-selectable--active) {
+  outline: 1px solid rgba(var(--accent-rgb), 0.85);
+  outline-offset: 2px;
+  background-color: rgba(var(--accent-rgb), 0.08);
 }
 
 .table-node.source-selectable {
@@ -408,7 +521,7 @@ body {
 
 .condition-leaf.source-selectable:hover,
 .condition-group.source-selectable:hover {
-  background: rgba(107, 159, 212, 0.08);
+  background: rgba(var(--accent-rgb), 0.08);
   border-radius: var(--radius-sm);
 }
 
@@ -416,7 +529,7 @@ body {
   flex: 1;
   width: 100%;
   min-height: 0;
-  padding: 16px;
+  padding: 16px 16px 16px calc(var(--editor-gutter) + 10px);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -444,7 +557,7 @@ body {
 }
 
 .sql-textarea--highlight::selection {
-  background: rgba(107, 159, 212, 0.35);
+  background: rgba(var(--accent-rgb), 0.35);
   color: transparent;
   -webkit-text-fill-color: transparent;
 }
@@ -464,20 +577,22 @@ body {
 }
 
 .parse-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   font-size: 0.82rem;
   color: var(--danger);
   background: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
+  overflow-wrap: anywhere;
 }
 
-.display-options {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 10px 16px 0;
-  flex-shrink: 0;
+.parse-error-jump {
+  padding: 3px 10px;
+  font-size: 0.75rem;
 }
 
 .option-toggle {
@@ -503,6 +618,7 @@ body {
 
 .tab-bar {
   display: flex;
+  align-items: flex-end;
   gap: 4px;
   padding: 12px 16px 0;
   border-bottom: 1px solid var(--border);
@@ -549,6 +665,7 @@ body {
 }
 
 .welcome-state,
+.pending-state,
 .error-state,
 .empty-state {
   display: flex;
@@ -560,6 +677,12 @@ body {
   padding: 24px;
   gap: 16px;
   color: var(--text-muted);
+}
+
+.pending-state {
+  flex-direction: row;
+  gap: 8px;
+  font-size: 0.88rem;
 }
 
 .welcome-hint {
@@ -609,19 +732,19 @@ body {
 }
 
 .result-diff-summary--same {
-  border-color: rgba(125, 184, 138, 0.45);
-  background: rgba(125, 184, 138, 0.08);
+  border-color: rgba(var(--success-rgb), 0.45);
+  background: rgba(var(--success-rgb), 0.08);
 }
 
 .result-diff-summary--order-only,
 .result-diff-summary--review-needed {
-  border-color: rgba(212, 176, 106, 0.45);
-  background: rgba(212, 176, 106, 0.08);
+  border-color: rgba(var(--warning-rgb), 0.45);
+  background: rgba(var(--warning-rgb), 0.08);
 }
 
 .result-diff-summary--different {
-  border-color: rgba(212, 122, 122, 0.45);
-  background: rgba(212, 122, 122, 0.08);
+  border-color: rgba(var(--danger-rgb), 0.45);
+  background: rgba(var(--danger-rgb), 0.08);
 }
 
 .result-diff-summary-title {
@@ -657,11 +780,11 @@ body {
 }
 
 .result-diff-summary-row-value--same {
-  color: #7db88a;
+  color: var(--success);
 }
 
 .result-diff-summary-row-value--different {
-  color: #d47a7a;
+  color: var(--danger);
 }
 
 .result-diff-summary-row-value--uncertain {
@@ -688,7 +811,7 @@ body {
 .result-diff-effective-inner-note {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid rgba(125, 184, 138, 0.25);
+  border-top: 1px solid rgba(var(--success-rgb), 0.25);
   font-size: 0.82rem;
   color: var(--text-dim);
   line-height: 1.5;
@@ -697,26 +820,26 @@ body {
 .result-diff-proof-note {
   margin-top: 12px;
   padding: 10px 12px;
-  border: 1px solid rgba(125, 184, 138, 0.4);
+  border: 1px solid rgba(var(--success-rgb), 0.4);
   border-left-width: 3px;
   border-radius: var(--radius);
-  background: rgba(125, 184, 138, 0.1);
+  background: rgba(var(--success-rgb), 0.1);
   font-size: 0.83rem;
   color: var(--text-muted);
   line-height: 1.55;
 }
 
 .result-diff-summary--review-needed .result-diff-proof-note {
-  border-color: rgba(212, 176, 106, 0.45);
-  background: rgba(212, 176, 106, 0.1);
+  border-color: rgba(var(--warning-rgb), 0.45);
+  background: rgba(var(--warning-rgb), 0.1);
 }
 
 .result-diff-limit-warning {
   margin-top: 12px;
   padding: 10px 12px;
-  border: 1px solid rgba(212, 176, 106, 0.5);
+  border: 1px solid rgba(var(--warning-rgb), 0.5);
   border-radius: var(--radius);
-  background: rgba(212, 176, 106, 0.12);
+  background: rgba(var(--warning-rgb), 0.12);
   font-size: 0.84rem;
   color: var(--text-muted);
   line-height: 1.55;
@@ -734,10 +857,10 @@ body {
 }
 
 .result-diff-hint {
-  border: 1px solid rgba(212, 176, 106, 0.4);
+  border: 1px solid rgba(var(--warning-rgb), 0.4);
   border-radius: var(--radius);
   padding: 12px 14px;
-  background: rgba(212, 176, 106, 0.06);
+  background: rgba(var(--warning-rgb), 0.06);
 }
 
 .result-diff-hint-title {
@@ -782,7 +905,7 @@ body {
 }
 
 .result-diff-item--different {
-  border-color: rgba(212, 122, 122, 0.35);
+  border-color: rgba(var(--danger-rgb), 0.35);
 }
 
 .result-diff-item-header {
@@ -807,12 +930,12 @@ body {
 
 .result-diff-badge--different {
   color: var(--danger);
-  background: rgba(212, 122, 122, 0.15);
+  background: rgba(var(--danger-rgb), 0.15);
 }
 
 .result-diff-badge--same {
   color: var(--success);
-  background: rgba(125, 184, 138, 0.15);
+  background: rgba(var(--success-rgb), 0.15);
 }
 
 .result-diff-details {
@@ -877,7 +1000,7 @@ body {
   flex-direction: column;
   gap: 6px;
   padding: 6px 10px;
-  background: rgba(40, 44, 52, 0.92);
+  background: rgba(var(--bg-elevated-rgb), 0.92);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   backdrop-filter: blur(4px);
@@ -948,7 +1071,7 @@ body {
 }
 
 .join-diagram .react-flow__edge-path.join-edge-path--source-linked {
-  filter: drop-shadow(0 0 3px rgba(107, 159, 212, 0.85));
+  filter: drop-shadow(0 0 3px rgba(var(--accent-rgb), 0.85));
 }
 
 /* JOIN 図フォーカス — primary = クリック対象、related = 関連オブジェクト */
@@ -964,36 +1087,36 @@ body {
   border-color: var(--accent);
   border-left-width: 4px;
   box-shadow:
-    0 0 0 2px rgba(107, 159, 212, 0.55),
-    0 4px 14px rgba(107, 159, 212, 0.28);
+    0 0 0 2px rgba(var(--accent-rgb), 0.55),
+    0 4px 14px rgba(var(--accent-rgb), 0.28);
 }
 
 .table-node.join-focus--related {
-  border-color: rgba(107, 159, 212, 0.75);
-  border-left-color: rgba(107, 159, 212, 0.85);
-  box-shadow: 0 0 0 1px rgba(107, 159, 212, 0.35);
+  border-color: rgba(var(--accent-rgb), 0.75);
+  border-left-color: rgba(var(--accent-rgb), 0.85);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.35);
 }
 
 .join-diagram .react-flow__edge-path.join-focus--primary {
   stroke-width: 3.5 !important;
-  filter: drop-shadow(0 0 4px rgba(107, 159, 212, 0.95));
+  filter: drop-shadow(0 0 4px rgba(var(--accent-rgb), 0.95));
 }
 
 .join-diagram .react-flow__edge-path.join-focus--related {
   stroke-width: 3 !important;
-  filter: drop-shadow(0 0 2px rgba(107, 159, 212, 0.55));
+  filter: drop-shadow(0 0 2px rgba(var(--accent-rgb), 0.55));
 }
 
 .join-edge-type-label.join-focus--primary,
 .join-edge-condition-label.join-focus--primary {
   box-shadow:
-    0 0 0 2px rgba(107, 159, 212, 0.65),
-    0 2px 8px rgba(107, 159, 212, 0.35);
+    0 0 0 2px rgba(var(--accent-rgb), 0.65),
+    0 2px 8px rgba(var(--accent-rgb), 0.35);
 }
 
 .join-edge-type-label.join-focus--related,
 .join-edge-condition-label.join-focus--related {
-  box-shadow: 0 0 0 1px rgba(107, 159, 212, 0.45);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.45);
   opacity: 0.95;
 }
 
@@ -1101,7 +1224,7 @@ body {
 
 .join-diagram .react-flow__edge:hover .react-flow__edge-path {
   stroke-width: 3 !important;
-  filter: drop-shadow(0 0 2px rgba(107, 159, 212, 0.45));
+  filter: drop-shadow(0 0 2px rgba(var(--accent-rgb), 0.45));
 }
 
 .join-diagram .react-flow__edge:hover .join-edge-labels {
@@ -1181,13 +1304,13 @@ body {
   display: inline-block;
   width: 36px;
   height: 0;
-  border-top: 2.5px dashed #6b9fd4;
+  border-top: 2.5px dashed var(--accent);
   flex-shrink: 0;
 }
 
 .join-legend-line--effective-inner {
   border-top-style: dashed;
-  border-top-color: #6b9fd4;
+  border-top-color: var(--accent);
 }
 
 .join-type-badge--effective-inner {
@@ -1199,8 +1322,8 @@ body {
   font-weight: 600;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
-  background: rgba(107, 159, 212, 0.15);
-  color: #6b9fd4;
+  background: rgba(var(--accent-rgb), 0.15);
+  color: var(--accent);
   white-space: nowrap;
 }
 
@@ -1393,8 +1516,8 @@ body {
 }
 
 .cond-part--left {
-  background: rgba(107, 159, 212, 0.15);
-  color: #b8d4f0;
+  background: rgba(var(--accent-rgb), 0.15);
+  color: var(--hl-blue);
 }
 
 .cond-part--op {
@@ -1404,8 +1527,8 @@ body {
 }
 
 .cond-part--right {
-  background: rgba(125, 184, 138, 0.15);
-  color: #b8dcc0;
+  background: rgba(var(--success-rgb), 0.15);
+  color: var(--hl-green);
 }
 
 .union-panel,
@@ -1709,20 +1832,20 @@ body {
 
 .query-effect-badge--select {
   color: var(--group-and);
-  border-color: rgba(107, 159, 212, 0.4);
-  background: rgba(107, 159, 212, 0.1);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.1);
 }
 
 .query-effect-badge--update {
   color: var(--warning);
-  border-color: rgba(212, 176, 106, 0.4);
-  background: rgba(212, 176, 106, 0.1);
+  border-color: rgba(var(--warning-rgb), 0.4);
+  background: rgba(var(--warning-rgb), 0.1);
 }
 
 .query-effect-badge--delete {
   color: var(--group-not);
-  border-color: rgba(212, 122, 122, 0.4);
-  background: rgba(212, 122, 122, 0.1);
+  border-color: rgba(var(--danger-rgb), 0.4);
+  background: rgba(var(--danger-rgb), 0.1);
 }
 
 .query-effect-branch {
@@ -1905,7 +2028,7 @@ body {
 .query-effect-presence-table--link.source-selectable:hover,
 .effect-join-filter-header--link.source-selectable:hover,
 .effect-condition-leaf--link.source-selectable:hover {
-  background: rgba(107, 159, 212, 0.08);
+  background: rgba(var(--accent-rgb), 0.08);
   border-radius: var(--radius-sm);
 }
 
@@ -1956,7 +2079,7 @@ body {
 
 .query-effect-sql-line--link.source-selectable:hover,
 .query-effect-sql-line--link.source-selectable--active {
-  background: rgba(107, 159, 212, 0.08);
+  background: rgba(var(--accent-rgb), 0.08);
   border-color: var(--border-visible);
   outline: none;
 }
@@ -1993,7 +2116,7 @@ body {
 }
 
 .effect-hl--keyword {
-  color: #d4b06a;
+  color: var(--hl-gold);
   font-weight: 600;
 }
 
@@ -2004,16 +2127,16 @@ body {
 }
 
 .effect-hl--table {
-  color: #b8d4f0;
+  color: var(--hl-blue);
   font-weight: 600;
 }
 
 .effect-hl--column {
-  color: #b8dcc0;
+  color: var(--hl-green);
 }
 
 .effect-hl--string {
-  color: #c8b8e8;
+  color: var(--hl-purple);
 }
 
 .effect-hl--emphasis {
@@ -2143,3 +2266,806 @@ body {
   word-break: break-all;
 }
 
+
+/* ── 比較の判定: 「同じ」の根拠を色とバッジで分ける ───────────────── */
+
+/* 証明済み: 実線の濃い枠 */
+.result-diff-summary--same.result-diff-summary--basis-proven {
+  border-width: 2px;
+  border-color: var(--success);
+  background: rgba(var(--success-rgb), 0.12);
+}
+
+/* 構文一致による推定: 破線の淡い枠。証明済みと同じ強さに見せない */
+.result-diff-summary--same.result-diff-summary--basis-syntax-match {
+  border-style: dashed;
+  border-color: rgba(var(--success-rgb), 0.55);
+  background: rgba(var(--success-rgb), 0.04);
+}
+
+.result-diff-summary-row-value--proven {
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: var(--success);
+  color: var(--bg-elevated);
+}
+
+.result-diff-basis {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
+.result-diff-basis--syntax-match {
+  border: 1px dashed rgba(var(--success-rgb), 0.7);
+  color: var(--text-muted);
+}
+
+.result-diff-basis-note {
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* 別名にマウスを載せると実テーブル名が出る印 */
+.effect-hl--alias {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-dim);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+/* ── ヘッダーの操作（共有リンク・テーマ） ─────────────────────── */
+
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.app-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-share-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.app-share-fallback {
+  width: min(320px, 60vw);
+  font-family: var(--font-mono-input);
+  font-size: 0.72rem;
+  padding: 4px 6px;
+  border: 1px solid var(--border-visible);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+}
+
+.app-theme-select {
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  padding: 5px 6px;
+  border: 1px solid var(--border-visible);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+}
+
+.btn--small {
+  padding: 5px 10px;
+  font-size: 0.78rem;
+}
+
+/* タブの並びの右端に置く表示オプション（別名の解決） */
+.tab-bar-options {
+  margin-left: auto;
+  padding-bottom: 8px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * デザインの層。上の部品ごとのルールのあとに置き、見た目だけを上書きする
+ * （配置と動きに関わるルールは上の各部品のルールが持つ）
+ * ══════════════════════════════════════════════════════════════ */
+
+body {
+  background:
+    radial-gradient(1100px 520px at 0% -10%, var(--backdrop-glow), transparent 60%),
+    radial-gradient(900px 480px at 100% 110%, var(--backdrop-glow), transparent 60%),
+    var(--bg-base);
+}
+
+.app {
+  background: transparent;
+}
+
+/*
+ * キーボード操作のフォーカスの枠。:where() で詳細度を 0 にし、部品ごとの枠の指定
+ * （クリックで選んだ要素の .source-selectable--active など）を上書きしないようにする
+ */
+:where(:focus-visible) {
+  outline: 2px solid rgba(var(--accent-rgb), 0.8);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* スクロールバーを細くして、パネルの中で目立たせない */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ── ヘッダー ─────────────────────────────── */
+
+.app-header {
+  background: rgba(var(--bg-elevated-rgb), 0.72);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  z-index: 5;
+}
+
+.app-header-inner {
+  padding: 10px 20px;
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.logo-mark {
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 6px rgba(var(--accent-rgb), 0.35));
+}
+
+.logo-mark-bg {
+  fill: var(--bg-inset);
+  stroke: rgba(var(--accent-rgb), 0.45);
+  stroke-width: 1;
+}
+
+.logo-mark-line {
+  stroke: var(--accent);
+}
+
+.logo-mark-table {
+  fill: var(--bg-surface);
+}
+
+.logo-mark-head {
+  fill: var(--accent);
+}
+
+.logo-mark-text {
+  stroke: var(--text-muted);
+}
+
+.app-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-title {
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+
+.app-tagline {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-header-actions {
+  gap: 14px;
+}
+
+/* 表示モードの切り替え: 溝の中で、選んだ側だけが明るい板になる */
+.app-mode-switch {
+  padding: 3px;
+  gap: 2px;
+  border-radius: 999px;
+  border-color: var(--border);
+  background: var(--bg-inset);
+}
+
+.app-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.app-mode-btn + .app-mode-btn {
+  border-left: none;
+}
+
+.app-mode-btn:hover {
+  color: var(--text);
+}
+
+.app-mode-btn--active {
+  background: var(--bg-elevated);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(var(--accent-rgb), 0.35);
+}
+
+.app-header-tools {
+  gap: 10px;
+}
+
+.app-share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-share-status {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(var(--success-rgb), 0.14);
+  color: var(--success);
+  font-weight: 600;
+}
+
+.app-theme-switch {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-inset);
+}
+
+.app-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-theme-btn:hover {
+  color: var(--text);
+}
+
+.app-theme-btn--active {
+  background: var(--bg-elevated);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── 2 枚のパネル ─────────────────────────── */
+
+.app-main {
+  gap: 14px;
+  padding: 14px;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-md);
+}
+
+.panel--input {
+  border-right: 1px solid var(--border);
+}
+
+/* ── エディタ ─────────────────────────────── */
+
+.sql-editor-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.sql-editor-card:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-focus);
+}
+
+.sql-editor-card--error {
+  border-color: rgba(var(--danger-rgb), 0.7);
+}
+
+.sql-editor-body,
+.sql-editor-body:focus-within {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.sql-editor-body::before {
+  border-radius: 0;
+}
+
+.sql-editor-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.sql-editor-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  min-height: 30px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-inset);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sql-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.sql-status--empty {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+
+.sql-status--pending {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+}
+
+.sql-status--ok {
+  background: rgba(var(--success-rgb), 0.15);
+  color: var(--success);
+}
+
+.sql-status--error {
+  background: rgba(var(--danger-rgb), 0.15);
+  color: var(--danger);
+}
+
+.sql-editor-position {
+  font-family: var(--font-mono-input);
+  font-variant-numeric: tabular-nums;
+}
+
+.sql-editor-keys {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sql-editor-keys-sep {
+  width: 10px;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 5px;
+  border: 1px solid var(--border-visible);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.parse-error {
+  align-items: center;
+  border-color: rgba(var(--danger-rgb), 0.4);
+  background: rgba(var(--danger-rgb), 0.08);
+  border-radius: var(--radius);
+}
+
+.parse-error-icon {
+  flex-shrink: 0;
+}
+
+.parse-error-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.icon-spin {
+  animation: icon-spin 0.9s linear infinite;
+}
+
+@keyframes icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-spin {
+    animation: none;
+  }
+}
+
+/* ── ボタン ─────────────────────────────── */
+
+.btn {
+  border-radius: var(--radius-sm);
+}
+
+.btn--primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent), var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── タブ ─────────────────────────────── */
+
+.tab-bar {
+  gap: 4px;
+  padding: 10px 14px;
+  align-items: center;
+}
+
+.tab {
+  gap: 7px;
+  padding: 7px 12px;
+  margin-bottom: 0;
+  border-bottom: none;
+  border-radius: var(--radius);
+  transition: background 0.15s, color 0.15s;
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+}
+
+.tab--active,
+.tab--active:hover {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tab-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.tab--active .tab-count {
+  background: var(--accent);
+  color: var(--bg-elevated);
+}
+
+.tab-bar-options {
+  padding-bottom: 0;
+  font-size: 0.78rem;
+}
+
+.tab-content {
+  padding: 18px;
+}
+
+/* ── 解析前の表示 ─────────────────────────── */
+
+.welcome-state {
+  justify-content: flex-start;
+  gap: 22px;
+  padding: 40px 28px 28px;
+  overflow-y: auto;
+}
+
+.welcome-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.welcome-illustration {
+  width: 200px;
+  height: auto;
+  margin-bottom: 6px;
+}
+
+.welcome-illustration-node rect:first-child {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+}
+
+.welcome-illustration-head {
+  fill: var(--accent);
+  opacity: 0.85;
+}
+
+.welcome-illustration-head--alt {
+  fill: var(--hl-gold);
+}
+
+.welcome-illustration-edge {
+  fill: none;
+  stroke: var(--success);
+  stroke-width: 2;
+}
+
+.welcome-illustration-edge--dashed {
+  stroke: var(--accent);
+  stroke-dasharray: 5 4;
+}
+
+.welcome-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.welcome-hint {
+  max-width: 420px;
+}
+
+.welcome-samples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.sample-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+/*
+ * ホバーでは位置を動かさず、枠と影だけを変える。transform で持ち上げると、カードの下の端にある
+ * マウスがカードから外れてホバーが切れ、元の位置に戻ってまたホバーする、を繰り返して点滅する
+ * （JOIN 図の線で同じ不具合を直した ea1722e と同じ形）
+ */
+.sample-card:hover {
+  border-color: rgba(var(--accent-rgb), 0.6);
+  box-shadow: var(--shadow-md);
+}
+
+.sample-card--primary {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.12), transparent), var(--bg-elevated);
+}
+
+.sample-card-label {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.03em;
+}
+
+.sample-card-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.welcome-features {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+  width: 100%;
+  max-width: 520px;
+  padding-top: 18px;
+  border-top: 1px dashed var(--border);
+  text-align: left;
+}
+
+.welcome-feature {
+  display: flex;
+  gap: 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.welcome-feature strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.welcome-feature-desc {
+  color: var(--text-dim);
+}
+
+.welcome-feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+}
+
+/* ── 結果のカード ─────────────────────────── */
+
+.query-effect,
+.result-diff-item,
+.subquery-detail {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.table-node {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+/* JOIN 図の描画領域を広げる（以前は 280px で、ノードが小さく描かれていた） */
+.join-diagram-flow-wrap,
+.join-diagram-flow-wrap .react-flow,
+.join-diagram .react-flow {
+  min-height: max(420px, 52vh);
+}
+
+.join-diagram--compact .react-flow,
+.join-diagram--compact .join-diagram-flow-wrap {
+  min-height: 220px;
+}
+
+.join-diagram .react-flow {
+  border-radius: var(--radius);
+  background:
+    radial-gradient(600px 300px at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 70%),
+    var(--bg-base);
+}
+
+/* ── 比較の判定 ─────────────────────────── */
+
+.result-diff-summary {
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-md);
+}
+
+.result-diff-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1.05rem;
+  margin-bottom: 14px;
+}
+
+.result-diff-summary-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.result-diff-summary--same .result-diff-summary-icon {
+  background: rgba(var(--success-rgb), 0.18);
+  color: var(--success);
+}
+
+.result-diff-summary--order-only .result-diff-summary-icon,
+.result-diff-summary--review-needed .result-diff-summary-icon {
+  background: rgba(var(--warning-rgb), 0.18);
+  color: var(--warning);
+}
+
+.result-diff-summary--different .result-diff-summary-icon {
+  background: rgba(var(--danger-rgb), 0.18);
+  color: var(--danger);
+}
+
+.result-diff-summary-rows {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: rgba(var(--bg-elevated-rgb), 0.6);
+}
+
+.result-diff-disclaimer {
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+/* ── 狭い画面 ─────────────────────────── */
+
+@media (max-width: 960px) {
+  .app-main {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .app-tagline {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .welcome-samples,
+  .welcome-features {
+    grid-template-columns: 1fr;
+  }
+
+  .sql-editor-keys {
+    display: none;
+  }
+}

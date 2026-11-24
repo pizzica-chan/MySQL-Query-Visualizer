@@ -165,7 +165,10 @@ export interface ParsedQuery {
 
 export interface ParseError {
   message: string;
+  /** 構文エラーの開始位置（入力 SQL 上のオフセット） */
   position?: number;
+  /** 構文エラーの範囲（入力 SQL 上）。エディタで該当箇所に印を付けるのに使う */
+  span?: SourceSpan;
 }
 
 export type ParseResult =

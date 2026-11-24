@@ -233,51 +233,75 @@ export function tokenizeSql(sql: string): SqlHighlightToken[] {
   return tokens;
 }
 
-function wrapHighlightSegment(kind: SqlHighlightKind, text: string, focused: boolean): string {
+/** エディタ上の印。focus は右側の表示と連動した範囲、error は構文エラーの範囲 */
+export interface SqlHighlightMarks {
+  focus?: SourceSpan;
+  error?: SourceSpan;
+}
+
+interface HighlightSegment {
+  text: string;
+  classes: string[];
+}
+
+function inSpan(span: SourceSpan | undefined, offset: number): boolean {
+  return Boolean(span && offset >= span.start && offset < span.end);
+}
+
+/** トークンを印の境界で切り分け、各片に付けるクラスを決める */
+function highlightSegments(sql: string, marks: SqlHighlightMarks): HighlightSegment[] {
+  const segments: HighlightSegment[] = [];
+  const markEdges = [marks.focus, marks.error]
+    .filter((span): span is SourceSpan => Boolean(span))
+    .flatMap((span) => [span.start, span.end]);
+  let pos = 0;
+
+  for (const { kind, text } of tokenizeSql(sql)) {
+    const tokenStart = pos;
+    const tokenEnd = pos + text.length;
+    pos = tokenEnd;
+    const cuts = [
+      tokenStart,
+      ...markEdges.filter((edge) => edge > tokenStart && edge < tokenEnd).sort((a, b) => a - b),
+      tokenEnd,
+    ];
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const from = cuts[i]!;
+      const to = cuts[i + 1]!;
+      if (from === to) continue;
+      const classes: string[] = [];
+      if (kind !== 'plain') classes.push(`sql-hl--${kind}`);
+      if (inSpan(marks.focus, from)) classes.push('sql-hl--focus');
+      if (inSpan(marks.error, from)) classes.push('sql-hl--error');
+      segments.push({ text: text.slice(from - tokenStart, to - tokenStart), classes });
+    }
+  }
+  return segments;
+}
+
+function wrapSegment({ text, classes }: HighlightSegment): string {
   const escaped = escapeHtml(text);
-  if (!focused && kind === 'plain') return escaped;
-  const classes: string[] = [];
-  if (kind !== 'plain') classes.push(`sql-hl--${kind}`);
-  if (focused) classes.push('sql-hl--focus');
+  if (classes.length === 0) return escaped;
   return `<span class="${classes.join(' ')}">${escaped}</span>`;
 }
 
-function renderTokenHighlight(
-  kind: SqlHighlightKind,
-  text: string,
-  tokenStart: number,
-  focusSpan?: SourceSpan,
-): string {
-  if (!focusSpan) {
-    return wrapHighlightSegment(kind, text, false);
-  }
-
-  const tokenEnd = tokenStart + text.length;
-  if (tokenEnd <= focusSpan.start || tokenStart >= focusSpan.end) {
-    return wrapHighlightSegment(kind, text, false);
-  }
-
-  const focusStart = Math.max(focusSpan.start, tokenStart) - tokenStart;
-  const focusEnd = Math.min(focusSpan.end, tokenEnd) - tokenStart;
-
-  const before = text.slice(0, focusStart);
-  const focused = text.slice(focusStart, focusEnd);
-  const after = text.slice(focusEnd);
-
-  return [
-    wrapHighlightSegment(kind, before, false),
-    wrapHighlightSegment(kind, focused, true),
-    wrapHighlightSegment(kind, after, false),
-  ].join('');
+export function highlightSqlToHtml(sql: string, focusSpan?: SourceSpan, errorSpan?: SourceSpan): string {
+  return highlightSegments(sql, { focus: focusSpan, error: errorSpan }).map(wrapSegment).join('');
 }
 
-export function highlightSqlToHtml(sql: string, focusSpan?: SourceSpan): string {
-  let pos = 0;
-  return tokenizeSql(sql)
-    .map(({ kind, text }) => {
-      const start = pos;
-      pos += text.length;
-      return renderTokenHighlight(kind, text, start, focusSpan);
-    })
-    .join('');
+/**
+ * 行ごとの HTML を返す（行番号付きのエディタ用）。
+ * 複数行にまたがるトークン（ブロックコメントや改行を含む文字列）は、行の境目で span を閉じて開き直す。
+ * 戻り値の長さは sql の行数（改行の数 + 1）に一致する
+ */
+export function highlightSqlToLineHtml(sql: string, marks: SqlHighlightMarks = {}): string[] {
+  const lines: string[] = [''];
+  for (const segment of highlightSegments(sql, marks)) {
+    const parts = segment.text.split('\n');
+    parts.forEach((part, index) => {
+      if (index > 0) lines.push('');
+      if (part) lines[lines.length - 1] += wrapSegment({ text: part, classes: segment.classes });
+    });
+  }
+  return lines;
 }

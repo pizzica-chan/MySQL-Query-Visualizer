@@ -15,6 +15,7 @@ import { JoinFlowEdge } from './JoinFlowEdge';
 import { JoinFocusContextProvider, useJoinFocus } from '../contexts/join-focus-context';
 import { SourceLinkContext, useSourceLink } from '../contexts/source-link-context';
 import { useJoinFlowState } from '../hooks/useJoinFlowState';
+import { useColorScheme } from '../hooks/useTheme';
 import { effectiveInnerAnalysisByJoinId } from '../lib/join-effective-inner';
 import { formatJoinTableLink } from '../lib/join-graph-layout';
 import {
@@ -34,6 +35,8 @@ import {
   JOIN_NODE_TARGET_HANDLES,
   MINIMAP_NODE_COLORS,
   minimapNodeColor,
+  themedJoinColor,
+  themedJoinEdge,
   type JoinFlowNodeData,
   type JoinFlowEdgeData,
 } from '../lib/join-flow-layout';
@@ -62,6 +65,12 @@ interface JoinDiagramProps {
 }
 
 const JOIN_COLORS = JOIN_EDGE_COLORS;
+
+/** 図の背景の点・ミニマップの色。React Flow には props で渡すので CSS 変数ではなく配色ごとに持つ */
+const DIAGRAM_CHROME = {
+  dark: { grid: '#3a4049', minimapBg: '#282c34', minimapMask: 'rgba(26, 29, 35, 0.65)', minimapStroke: MINIMAP_NODE_COLORS.stroke },
+  light: { grid: '#cfd6df', minimapBg: '#ffffff', minimapMask: 'rgba(214, 220, 228, 0.6)', minimapStroke: '#95a0b0' },
+} as const;
 
 function TableNode({ id, data: raw }: NodeProps) {
   const data = raw as JoinFlowNodeData;
@@ -151,6 +160,13 @@ function JoinDiagramFlow({
   const hasEffectiveInner = effectiveInnerByJoin.size > 0;
   const [showGraphJoinConditions, setShowGraphJoinConditions] = useState(true);
   const [joinFocus, setJoinFocus] = useState<JoinDiagramFocus | null>(null);
+  const colorScheme = useColorScheme();
+  const chrome = DIAGRAM_CHROME[colorScheme];
+  // ミニマップのノードも、白い背景で見えるようライトテーマでは濃い色にする
+  const themedMinimapNodeColor = useCallback(
+    (node: Node) => themedJoinColor(minimapNodeColor(node), colorScheme),
+    [colorScheme],
+  );
 
   const { flowNodes, flowEdges, onNodesChange, onEdgesChange, layoutKey, resetLayout } =
     useJoinFlowState(tables, joins, resolveAliases, query, compact);
@@ -229,13 +245,13 @@ function JoinDiagramFlow({
   const displayEdges = useMemo(
     () =>
       flowEdges.map((edge) => ({
-        ...edge,
+        ...themedJoinEdge(edge, colorScheme),
         data: {
           ...edge.data,
           showGraphJoinCondition: compact ? false : showGraphJoinConditions,
         },
       })),
-    [flowEdges, compact, showGraphJoinConditions],
+    [flowEdges, compact, showGraphJoinConditions, colorScheme],
   );
 
   const joinFocusHighlight = useMemo(
@@ -338,16 +354,16 @@ function JoinDiagramFlow({
           elementsSelectable={false}
           nodeClickDistance={6}
         >
-          <Background color="#3a4049" gap={20} />
+          <Background color={chrome.grid} gap={20} />
           <Controls showInteractive={false} />
           {compact ? (
             <MiniMap
-              nodeColor={minimapNodeColor}
-              nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
+              nodeColor={themedMinimapNodeColor}
+              nodeStrokeColor={chrome.minimapStroke}
               nodeBorderRadius={2}
-              maskColor="rgba(26, 29, 35, 0.65)"
+              maskColor={chrome.minimapMask}
               style={{
-                background: '#282c34',
+                background: chrome.minimapBg,
                 width: JOIN_MINIMAP_COMPACT_SIZE.width,
                 height: JOIN_MINIMAP_COMPACT_SIZE.height,
               }}
@@ -357,12 +373,12 @@ function JoinDiagramFlow({
             />
           ) : (
             <MiniMap
-              nodeColor={minimapNodeColor}
-              nodeStrokeColor={MINIMAP_NODE_COLORS.stroke}
+              nodeColor={themedMinimapNodeColor}
+              nodeStrokeColor={chrome.minimapStroke}
               nodeBorderRadius={2}
-              maskColor="rgba(26, 29, 35, 0.65)"
+              maskColor={chrome.minimapMask}
               style={{
-                background: '#282c34',
+                background: chrome.minimapBg,
                 width: JOIN_MINIMAP_SIZE.width,
                 height: JOIN_MINIMAP_SIZE.height,
               }}
@@ -389,9 +405,10 @@ function JoinDiagramFlow({
           <ul>
             {joins.map((j) => {
               const effectiveInner = effectiveInnerByJoin.has(j.id);
-              const edgeColor = effectiveInner
-                ? JOIN_COLORS['INNER JOIN']
-                : JOIN_COLORS[j.type];
+              const edgeColor = themedJoinColor(
+                effectiveInner ? JOIN_COLORS['INNER JOIN'] : JOIN_COLORS[j.type],
+                colorScheme,
+              );
               const conditionProps = onSourceSpanSelect
                 ? sourceSelectableProps(
                     j.sourceSpan,

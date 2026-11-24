@@ -1380,6 +1380,14 @@ export function parseMySqlQuery(sql: string): ParseResult {
     return { success: false, error: { message: 'SQLを入力してください' } };
   }
 
+  // 位置（sourceSpan）は呼び出し元が渡した sql 上のオフセットで返す。
+  // 解析は前後の空白を取り除いた文字列で行うので、先頭の空白の分だけ後ろへずらす。
+  // ずらさないと、空行や字下げで始まる SQL でエディタの強調位置がその分だけ手前にずれる
+  const leadingTrim = sql.length - sql.trimStart().length;
+  const toInputOffset = (offset: number): number => offset + leadingTrim;
+  /** 前処理後の SQL 上のオフセットと、入力 sql 上のオフセットの対応表。構文エラーの位置を戻すのに使う */
+  let processedToInputForError: number[] | null = null;
+
   try {
     const {
       sql: preprocessed,
@@ -1388,11 +1396,7 @@ export function parseMySqlQuery(sql: string): ParseResult {
       straightJoinHintOriginalSpans: straightSpans,
       processedToOriginal,
     } = preprocessSqlForParser(trimmed);
-    // 位置（sourceSpan）は呼び出し元が渡した sql 上のオフセットで返す。
-    // 解析は前後の空白を取り除いた文字列で行うので、先頭の空白の分だけ後ろへずらす。
-    // ずらさないと、空行や字下げで始まる SQL でエディタの強調位置がその分だけ手前にずれる
-    const leadingTrim = sql.length - sql.trimStart().length;
-    const toInputOffset = (offset: number): number => offset + leadingTrim;
+    processedToInputForError = processedToOriginal.map(toInputOffset);
 
     naturalJoinStarts = starts;
     straightJoinHintSelectStarts = straightStarts;
@@ -1460,8 +1464,54 @@ export function parseMySqlQuery(sql: string): ParseResult {
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'SQLの解析に失敗しました';
-    return { success: false, error: { message } };
+    const span = processedToInputForError
+      ? syntaxErrorSpan(err, processedToInputForError, sql)
+      : undefined;
+    if (!span) return { success: false, error: { message } };
+    const { line, column } = lineColumnAt(sql, span.start);
+    return {
+      success: false,
+      error: {
+        message: `${line} 行 ${column} 列で構文を解釈できません（${message}）`,
+        position: span.start,
+        span,
+      },
+    };
   }
+}
+
+/** オフセットを 1 始まりの行・列に変える */
+export function lineColumnAt(text: string, offset: number): { line: number; column: number } {
+  const before = text.slice(0, offset);
+  const lastNewline = before.lastIndexOf('\n');
+  return { line: before.split('\n').length, column: offset - lastNewline };
+}
+
+/**
+ * node-sql-parser の構文エラー（location 付き）を、入力 sql 上の範囲に変える。
+ * location は前処理後の SQL 上のオフセットなので、対応表で入力の座標へ戻す。
+ * 入力の末尾で文が途切れたときは、最後の空白でない 1 文字を範囲にする（長さ 0 だとエディタに印を描けない）
+ */
+function syntaxErrorSpan(
+  err: unknown,
+  processedToInput: number[],
+  sql: string,
+): SourceSpan | undefined {
+  const location = (err as { location?: { start?: { offset?: unknown }; end?: { offset?: unknown } } })
+    ?.location;
+  const startOffset = location?.start?.offset;
+  if (typeof startOffset !== 'number') return undefined;
+  const endOffset = typeof location?.end?.offset === 'number' ? location.end.offset : startOffset;
+
+  const contentEnd = sql.trimEnd().length;
+  if (contentEnd === 0) return undefined;
+  const toInput = (offset: number): number =>
+    offset < processedToInput.length ? processedToInput[offset]! : contentEnd;
+
+  const start = toInput(startOffset);
+  if (start >= contentEnd) return { start: contentEnd - 1, end: contentEnd };
+  const end = Math.min(Math.max(toInput(endOffset), start + 1), contentEnd);
+  return { start, end };
 }
 
 export const SAMPLE_SQL = `SELECT

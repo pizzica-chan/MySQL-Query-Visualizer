@@ -1,12 +1,39 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { JoinDiagram } from './components/JoinDiagram';
 import { QueryEffectBanner } from './components/QueryEffectPanel';
 import { QueryResultDiffPanel } from './components/QueryResultDiffPanel';
-import { SqlEditor } from './components/SqlEditor';
-import { SampleLoadButtons } from './components/SampleLoadButtons';
+import {
+  IconAnalyze,
+  IconCompare,
+  IconJoin,
+  IconLink,
+  IconMonitor,
+  IconMoon,
+  IconNarrative,
+  IconNested,
+  IconSpinner,
+  IconStructure,
+  IconSun,
+  LogoMark,
+} from './components/Icons';
+import { SqlEditor, type EditorStatus } from './components/SqlEditor';
+import { WelcomePanel } from './components/WelcomePanel';
 import { SubqueryDetail } from './components/SubqueryDetail';
 import { UnionJoinPanel } from './components/UnionPanel';
+import { useCaretSourceLink } from './hooks/useCaretSourceLink';
+import { useThemePreference } from './hooks/useTheme';
 import { applyAliasResolution } from './lib/alias-resolver';
+import {
+  decodeSharePayload,
+  encodeSharePayload,
+  isShareFragment,
+  readStoredState,
+  safeLocalStorage,
+  writeStoredState,
+  type AppMode,
+  type PersistedAppState,
+  type SharePayload,
+} from './lib/app-persistence';
 import {
   SAMPLE_SQL,
   UPDATE_SAMPLE_SQL,
@@ -16,10 +43,10 @@ import {
 } from './lib/parser';
 import { compareQueryResults } from './lib/query-result-diff';
 import { collectSubqueryRefsExcludingUnionBranches, hasUnion, type SubqueryRef } from './lib/query-utils';
-import type { ParsedQuery, SourceSpan } from './lib/types';
+import { setThemePreference, type ThemePreference } from './lib/theme';
+import type { ParseError, ParsedQuery, SourceSpan } from './lib/types';
 import type { OnSourceSpanSelect } from './lib/source-link';
 
-type AppMode = 'analyze' | 'compare';
 type TabId = 'structure' | 'narrative' | 'joins' | 'nested';
 
 const BASE_TABS: { id: TabId; label: string }[] = [
@@ -28,25 +55,94 @@ const BASE_TABS: { id: TabId; label: string }[] = [
   { id: 'joins', label: 'JOIN 図' },
 ];
 
+const TAB_ICONS: Record<TabId, typeof IconStructure> = {
+  structure: IconStructure,
+  narrative: IconNarrative,
+  joins: IconJoin,
+  nested: IconNested,
+};
+
+const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof IconSun }[] = [
+  { value: 'system', label: '自動（OS の設定に従う）', icon: IconMonitor },
+  { value: 'light', label: 'ライト', icon: IconSun },
+  { value: 'dark', label: 'ダーク', icon: IconMoon },
+];
+
+/** 入力から解析までの待ち時間 */
+const PARSE_DEBOUNCE_MS = 400;
+/** 入力を localStorage へ書くまでの待ち時間。キー入力のたびに書かないようにする */
+const SAVE_DEBOUNCE_MS = 300;
+/** 共有リンクのコピー結果を表示しておく時間 */
+const SHARE_STATUS_MS = 4000;
+
+interface ParseOutcome {
+  /** 解析した SQL。入力と一致するときだけ結果を使う（デバウンス中の stale 防止） */
+  from: string;
+  query: ParsedQuery | null;
+  error?: ParseError;
+}
+
+const EMPTY_OUTCOME: ParseOutcome = { from: '', query: null };
+
+/** エディタの下のステータスバーに出す解析の状態 */
+function editorStatus(sql: string, outcome: ParseOutcome): EditorStatus {
+  if (!sql.trim()) return 'empty';
+  if (outcome.from !== sql) return 'pending';
+  return outcome.error ? 'error' : 'ok';
+}
+
+/** 未入力は解析エラーではない。エラーにすると、サンプル読み込みの案内が「解析エラー」に置き換わる */
+function parseOutcome(sql: string): ParseOutcome {
+  if (!sql.trim()) return EMPTY_OUTCOME;
+  const result = parseMySqlQuery(sql);
+  return result.success
+    ? { from: sql, query: result.query }
+    : { from: sql, query: null, error: result.error };
+}
+
 export default function App() {
-  const [mode, setMode] = useState<AppMode>('analyze');
+  // 前回の入力を復元する。保存できない環境では空から始まる
+  const [initialState] = useState(() => readStoredState(safeLocalStorage()));
 
-  const [sql, setSql] = useState('');
-  const [parsed, setParsed] = useState<ParsedQuery | null>(null);
-  const [error, setError] = useState<string | undefined>();
+  const [mode, setMode] = useState<AppMode>(initialState.mode ?? 'analyze');
+
+  const [sql, setSql] = useState(initialState.sql ?? '');
+  // 復元した SQL は最初の描画の前に解析する。解析の待ち時間（400ms）を待つと、SQL が入っているのに
+  // 右側に「SQL を入力して解析を始めましょう」が一瞬出る
+  const [single, setSingle] = useState<ParseOutcome>(() =>
+    (initialState.mode ?? 'analyze') === 'analyze' ? parseOutcome(initialState.sql ?? '') : EMPTY_OUTCOME,
+  );
   const [activeTab, setActiveTab] = useState<TabId>('structure');
-  const [resolveAliases, setResolveAliases] = useState(false);
+  const [resolveAliases, setResolveAliases] = useState(initialState.resolveAliases ?? false);
   const [activeSourceSpan, setActiveSourceSpan] = useState<SourceSpan | null>(null);
+  const [caretOffset, setCaretOffset] = useState<number | null>(null);
 
-  const [sqlA, setSqlA] = useState('');
-  const [sqlB, setSqlB] = useState('');
-  const [parsedA, setParsedA] = useState<ParsedQuery | null>(null);
-  const [parsedB, setParsedB] = useState<ParsedQuery | null>(null);
-  /** 直近の解析対象 SQL。入力と一致するときだけ比較結果を使う（デバウンス中の stale 防止） */
-  const [parsedFromA, setParsedFromA] = useState('');
-  const [parsedFromB, setParsedFromB] = useState('');
-  const [errorA, setErrorA] = useState<string | undefined>();
-  const [errorB, setErrorB] = useState<string | undefined>();
+  const [sqlA, setSqlA] = useState(initialState.sqlA ?? '');
+  const [sqlB, setSqlB] = useState(initialState.sqlB ?? '');
+  const [outcomeA, setOutcomeA] = useState<ParseOutcome>(() =>
+    initialState.mode === 'compare' ? parseOutcome(initialState.sqlA ?? '') : EMPTY_OUTCOME,
+  );
+  const [outcomeB, setOutcomeB] = useState<ParseOutcome>(() =>
+    initialState.mode === 'compare' ? parseOutcome(initialState.sqlB ?? '') : EMPTY_OUTCOME,
+  );
+
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
+  /** クリップボードに書けなかったときに、手でコピーしてもらう URL */
+  const [shareFallbackUrl, setShareFallbackUrl] = useState<string | null>(null);
+  const themePreference = useThemePreference();
+
+  const outputRef = useRef<HTMLElement>(null);
+  /**
+   * 共有リンクを読み込んだ直後の、保存する値の全体。今の値がこれと同じあいだ（利用者が何も変えていないあいだ）は保存を止める。
+   * 共有されたモードの SQL だけで比べると、もう一方のモードでの編集や表示の切り替えが保存されなくなる
+   */
+  const sharedSnapshotRef = useRef<PersistedAppState | null>(null);
+  /** 保存する入力の最新の値。イベントの処理の中から、描画を待たずに保存するのに使う */
+  const latestStateRef = useRef<PersistedAppState>({ mode, sql, sqlA, sqlB, resolveAliases });
+  latestStateRef.current = { mode, sql, sqlA, sqlB, resolveAliases };
+
+  const parsed = single.query;
+  const error = single.error;
 
   const handleSourceSpanSelect: OnSourceSpanSelect = useCallback((span) => {
     setActiveSourceSpan(span ?? null);
@@ -83,88 +179,44 @@ export default function App() {
     ];
   }, [nestedInfo.showTab]);
 
-  const aSynced = parsedFromA === sqlA;
-  const bSynced = parsedFromB === sqlB;
+  const aSynced = outcomeA.from === sqlA;
+  const bSynced = outcomeB.from === sqlB;
   const hasSqlA = sqlA.trim().length > 0;
   const hasSqlB = sqlB.trim().length > 0;
   const comparePending = hasSqlA && hasSqlB && (!aSynced || !bSynced);
-  const syncedErrorA = aSynced ? errorA : undefined;
-  const syncedErrorB = bSynced ? errorB : undefined;
+  const syncedErrorA = aSynced ? outcomeA.error : undefined;
+  const syncedErrorB = bSynced ? outcomeB.error : undefined;
 
   const resultDiff = useMemo(() => {
-    if (!aSynced || !bSynced || !parsedA || !parsedB) return null;
-    return compareQueryResults(parsedA, parsedB);
-  }, [aSynced, bSynced, parsedA, parsedB]);
+    if (!aSynced || !bSynced || !outcomeA.query || !outcomeB.query) return null;
+    return compareQueryResults(outcomeA.query, outcomeB.query);
+  }, [aSynced, bSynced, outcomeA.query, outcomeB.query]);
 
-  const runParse = useCallback(() => {
-    // 未入力は解析エラーではない。エラーにすると、サンプル読み込みボタンのある初期表示が
-    // 開いて 0.4 秒後に「解析エラー」へ置き換わる
-    if (!sql.trim()) {
-      setParsed(null);
-      setError(undefined);
-      return;
-    }
-    const result = parseMySqlQuery(sql);
-    if (result.success) {
-      setParsed(result.query);
-      setError(undefined);
-    } else {
-      setParsed(null);
-      setError(result.error.message);
-    }
-  }, [sql]);
-
-  const runParseA = useCallback(() => {
-    if (!sqlA.trim()) {
-      setParsedA(null);
-      setErrorA(undefined);
-      setParsedFromA('');
-      return;
-    }
-    const result = parseMySqlQuery(sqlA);
-    setParsedFromA(sqlA);
-    if (result.success) {
-      setParsedA(result.query);
-      setErrorA(undefined);
-    } else {
-      setParsedA(null);
-      setErrorA(result.error.message);
-    }
-  }, [sqlA]);
-
-  const runParseB = useCallback(() => {
-    if (!sqlB.trim()) {
-      setParsedB(null);
-      setErrorB(undefined);
-      setParsedFromB('');
-      return;
-    }
-    const result = parseMySqlQuery(sqlB);
-    setParsedFromB(sqlB);
-    if (result.success) {
-      setParsedB(result.query);
-      setErrorB(undefined);
-    } else {
-      setParsedB(null);
-      setErrorB(result.error.message);
-    }
-  }, [sqlB]);
+  // 解析済みの SQL と同じなら解析し直さない。Ctrl+Enter で解析したあとや、起動時に復元した SQL を解析したあとにも、
+  // 入力の待ち時間（400ms）が過ぎるとまた解析するので、同じ SQL を 2 回解析することになる
+  const runParse = useCallback(() => setSingle((prev) => (prev.from === sql ? prev : parseOutcome(sql))), [sql]);
+  const runParseA = useCallback(() => setOutcomeA((prev) => (prev.from === sqlA ? prev : parseOutcome(sqlA))), [sqlA]);
+  const runParseB = useCallback(() => setOutcomeB((prev) => (prev.from === sqlB ? prev : parseOutcome(sqlB))), [sqlB]);
+  const runCompareNow = useCallback(() => {
+    runParseA();
+    runParseB();
+  }, [runParseA, runParseB]);
 
   useEffect(() => {
     if (mode !== 'analyze') return;
-    const timer = setTimeout(runParse, 400);
+    const timer = setTimeout(runParse, PARSE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [mode, sql, runParse]);
 
   useEffect(() => {
     if (mode !== 'compare') return;
-    const timer = setTimeout(runParseA, 400);
+    const timer = setTimeout(runParseA, PARSE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [mode, sqlA, runParseA]);
 
   useEffect(() => {
     if (mode !== 'compare') return;
-    const timer = setTimeout(runParseB, 400);
+    const timer = setTimeout(runParseB, PARSE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [mode, sqlB, runParseB]);
 
@@ -178,31 +230,187 @@ export default function App() {
     }
   }, [activeTab, nestedInfo.showTab]);
 
+  // 入力を保存し、リロードしても続きから使えるようにする
+  useEffect(() => {
+    // 共有リンクで読み込んだ SQL は、編集されるまで保存しない。
+    // 開いただけで保存すると、利用者が保存していた自分の SQL が他人の SQL に置き換わって戻せなくなる
+    const snapshot = sharedSnapshotRef.current;
+    if (snapshot) {
+      const untouched =
+        mode === snapshot.mode &&
+        sql === snapshot.sql &&
+        sqlA === snapshot.sqlA &&
+        sqlB === snapshot.sqlB &&
+        resolveAliases === snapshot.resolveAliases;
+      if (untouched) return;
+      sharedSnapshotRef.current = null;
+    }
+    const timer = setTimeout(() => {
+      writeStoredState(safeLocalStorage(), { mode, sql, sqlA, sqlB, resolveAliases });
+    }, SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [mode, sql, sqlA, sqlB, resolveAliases]);
+
+  // 共有リンク（#q=...）で開かれたら、その SQL を読み込む。保存してあった入力より優先して表示する。
+  // 起動時のほか、アプリを開いたタブでリンクを開いたときも読む。同じページで # 以降だけが変わる移動は
+  // ページを読み込み直さず hashchange だけが起きるので、起動時に 1 回読むだけではリンクを無視してしまう
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+    const loadFromHash = () => {
+      const hash = window.location.hash;
+      if (!hash) return;
+      void decodeSharePayload(hash).then((payload) => {
+        if (cancelled) return;
+        if (payload) {
+          applySharedPayload(payload);
+        } else if (isShareFragment(hash)) {
+          // 何も出さないと、リンクを開いたのに前の SQL のままになっている理由が分からない
+          setShareStatus('共有リンクの SQL を読み込めませんでした。リンクの一部が欠けているか、このブラウザでは開けない形式です');
+        }
+      });
+    };
+    const applySharedPayload = (payload: SharePayload) => {
+      // 入力の保存は 300ms 待ってから書くので、その間に差し替えると直前の編集が保存されない。先に書いておく
+      if (!sharedSnapshotRef.current) writeStoredState(safeLocalStorage(), latestStateRef.current);
+      sharedSnapshotRef.current = {
+        ...latestStateRef.current,
+        mode: payload.mode,
+        ...(payload.mode === 'analyze' ? { sql: payload.sql } : { sqlA: payload.sqlA, sqlB: payload.sqlB }),
+      };
+      if (payload.mode === 'analyze') {
+        setSql(payload.sql);
+      } else {
+        setSqlA(payload.sqlA);
+        setSqlB(payload.sqlB);
+      }
+      setMode(payload.mode);
+      setShareStatus('共有リンクの SQL を読み込みました（編集するまで保存しません）');
+      // フラグメントを消す。残すと、編集してからリロードしたときに共有時の SQL に戻ってしまう
+      try {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      } catch {
+        // file:// などで履歴を書き換えられなくても、読み込みはできている
+      }
+    };
+    loadFromHash();
+    window.addEventListener('hashchange', loadFromHash);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('hashchange', loadFromHash);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!shareStatus) return;
+    const timer = setTimeout(() => setShareStatus(null), SHARE_STATUS_MS);
+    return () => clearTimeout(timer);
+  }, [shareStatus]);
+
+  // 入力やモードが変わったら、手でコピーする用の URL を消す。古い SQL の URL をコピーさせないため
+  useEffect(() => {
+    setShareFallbackUrl(null);
+  }, [mode, sql, sqlA, sqlB]);
+
+  // カーソル位置に対応する右側の要素を枠で囲む。入力中は解析結果の位置が古いので、解析結果が今の入力と一致するときだけにする
+  useCaretSourceLink(outputRef, mode === 'analyze' && single.from === sql ? caretOffset : null);
+
+  const canShare = mode === 'analyze' ? sql.trim().length > 0 : hasSqlA || hasSqlB;
+
+  const handleShare = useCallback(async () => {
+    const payload: SharePayload =
+      mode === 'analyze' ? { mode: 'analyze', sql } : { mode: 'compare', sqlA, sqlB };
+    const fragment = await encodeSharePayload(payload);
+    const url = `${window.location.href.split('#')[0]}#${fragment}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareFallbackUrl(null);
+      setShareStatus('SQL 入りのリンクをコピーしました');
+    } catch {
+      // クリップボードを使えない環境（file:// の一部のブラウザなど）では、URL を表示して手でコピーしてもらう
+      setShareFallbackUrl(url);
+      setShareStatus(null);
+    }
+  }, [mode, sql, sqlA, sqlB]);
+
   return (
     <div className="app">
       <header className="app-header">
         <div className="app-header-inner">
-          <h1 className="app-title">MySQL Query Visualizer</h1>
-          <div className="app-mode-switch" role="tablist" aria-label="表示モード">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'analyze'}
-              className={`app-mode-btn${mode === 'analyze' ? ' app-mode-btn--active' : ''}`}
-              onClick={() => setMode('analyze')}
-            >
-              単一解析
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'compare'}
-              className={`app-mode-btn${mode === 'compare' ? ' app-mode-btn--active' : ''}`}
-              onClick={() => setMode('compare')}
-              title="チューニング前後の SQL を比較し、結果が変わりそうな差分を確認します"
-            >
-              SQL前後比較
-            </button>
+          <div className="app-brand">
+            <LogoMark size={30} />
+            <div className="app-brand-text">
+              <h1 className="app-title">MySQL Query Visualizer</h1>
+              <p className="app-tagline">SQL の構造・JOIN・作用を、ブラウザの中だけで解析</p>
+            </div>
+          </div>
+          <div className="app-header-actions">
+            <div className="app-mode-switch" role="tablist" aria-label="表示モード">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'analyze'}
+                className={`app-mode-btn${mode === 'analyze' ? ' app-mode-btn--active' : ''}`}
+                onClick={() => setMode('analyze')}
+              >
+                <IconAnalyze size={15} />
+                単一解析
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'compare'}
+                className={`app-mode-btn${mode === 'compare' ? ' app-mode-btn--active' : ''}`}
+                onClick={() => setMode('compare')}
+                title="チューニング前後の SQL を比較し、結果が変わりそうな差分を確認します"
+              >
+                <IconCompare size={15} />
+                SQL前後比較
+              </button>
+            </div>
+            <div className="app-header-tools">
+              {shareStatus && (
+                <span className="app-share-status" role="status">
+                  {shareStatus}
+                </span>
+              )}
+              {shareFallbackUrl && (
+                <input
+                  className="app-share-fallback"
+                  readOnly
+                  value={shareFallbackUrl}
+                  aria-label="共有リンク（選択してコピーしてください）"
+                  onFocus={(e) => e.currentTarget.select()}
+                  autoFocus
+                />
+              )}
+              <button
+                type="button"
+                className="btn btn--ghost btn--small app-share-btn"
+                onClick={() => void handleShare()}
+                disabled={!canShare}
+                title="入力中の SQL を URL の # 以降に入れたリンクを作ります。# 以降はサーバーに送られません"
+              >
+                <IconLink size={14} />
+                リンクをコピー
+              </button>
+              <div className="app-theme-switch" role="group" aria-label="配色">
+                {THEME_OPTIONS.map(({ value, label, icon: ThemeIcon }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={themePreference === value}
+                    aria-label={`配色: ${label}`}
+                    title={`配色: ${label}`}
+                    data-theme-value={value}
+                    className={`app-theme-btn${themePreference === value ? ' app-theme-btn--active' : ''}`}
+                    onClick={() => setThemePreference(value)}
+                  >
+                    <ThemeIcon size={15} />
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </header>
@@ -217,48 +425,64 @@ export default function App() {
               onLoadUpdateSample={() => setSql(UPDATE_SAMPLE_SQL)}
               onLoadDeleteSample={() => setSql(DELETE_SAMPLE_SQL)}
               onLoadUnionSample={() => setSql(UNION_SAMPLE_SQL)}
-              error={error}
+              error={error?.message}
+              errorSpan={single.from === sql ? error?.span : undefined}
               focusSpan={activeSourceSpan}
+              onCaretChange={setCaretOffset}
+              onRunNow={runParse}
+              status={editorStatus(sql, single)}
             />
           </section>
 
-          <section className="panel panel--output">
-            {!parsed && !error && (
-              <div className="welcome-state">
-                <p className="welcome-hint">左のエディタに SQL を入力するか、サンプルを読み込んでください。</p>
-                <SampleLoadButtons
-                  highlightSelect
-                  onSelect={() => setSql(SAMPLE_SQL)}
-                  onUpdate={() => setSql(UPDATE_SAMPLE_SQL)}
-                  onUnion={() => setSql(UNION_SAMPLE_SQL)}
-                  onDelete={() => setSql(DELETE_SAMPLE_SQL)}
-                />
+          <section className="panel panel--output" ref={outputRef}>
+            {/*
+              解析前の案内は SQL が空のときだけ出す。「解析結果もエラーも無い」で判断すると、
+              入力し始めた直後やモードを切り替えた直後の解析待ち（400ms）にも案内が一瞬出る
+            */}
+            {!parsed && !error && !sql.trim() && (
+              <WelcomePanel
+                onSelect={() => setSql(SAMPLE_SQL)}
+                onUpdate={() => setSql(UPDATE_SAMPLE_SQL)}
+                onUnion={() => setSql(UNION_SAMPLE_SQL)}
+                onDelete={() => setSql(DELETE_SAMPLE_SQL)}
+              />
+            )}
+            {!parsed && !error && sql.trim() && (
+              <div className="pending-state" role="status">
+                <IconSpinner size={18} />
+                解析中…
               </div>
             )}
 
             {parsed && displayQuery && (
               <>
-                <div className="display-options">
-                  <label className="option-toggle">
+                <nav className="tab-bar">
+                  {tabs.map((tab) => {
+                    const TabIcon = TAB_ICONS[tab.id];
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        className={`tab${activeTab === tab.id ? ' tab--active' : ''}`}
+                        onClick={() => setActiveTab(tab.id)}
+                      >
+                        <TabIcon size={15} />
+                        {tab.label}
+                        {tab.id === 'nested' && <span className="tab-count">{nestedInfo.subqueries.length}</span>}
+                      </button>
+                    );
+                  })}
+                  <label
+                    className="option-toggle tab-bar-options"
+                    title="オフのときも、別名にマウスを載せると実テーブル名が表示されます"
+                  >
                     <input
                       type="checkbox"
                       checked={resolveAliases}
                       onChange={(e) => setResolveAliases(e.target.checked)}
                     />
-                    <span>エイリアスを実テーブル名で表示</span>
+                    <span>別名を実テーブル名で表示</span>
                   </label>
-                </div>
-                <nav className="tab-bar">
-                  {tabs.map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      className={`tab${activeTab === tab.id ? ' tab--active' : ''}`}
-                      onClick={() => setActiveTab(tab.id)}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
                 </nav>
 
                 <div className="tab-content">
@@ -323,7 +547,7 @@ export default function App() {
             {error && !parsed && (
               <div className="error-state">
                 <h2>解析エラー</h2>
-                <p className="error-message">{error}</p>
+                <p className="error-message">{error.message}</p>
                 <p className="error-hint">
                   MySQL 形式の SELECT / UPDATE / DELETE 文を入力してください。INSERT など上記以外の文種は未対応です。
                 </p>
@@ -344,7 +568,10 @@ export default function App() {
                 onLoadUpdateSample={() => setSqlA(UPDATE_SAMPLE_SQL)}
                 onLoadDeleteSample={() => setSqlA(DELETE_SAMPLE_SQL)}
                 onLoadUnionSample={() => setSqlA(UNION_SAMPLE_SQL)}
-                error={syncedErrorA}
+                error={syncedErrorA?.message}
+                errorSpan={syncedErrorA?.span}
+                onRunNow={runCompareNow}
+                status={editorStatus(sqlA, outcomeA)}
                 compact
               />
               <SqlEditor
@@ -352,7 +579,10 @@ export default function App() {
                 onChange={setSqlB}
                 label="SQL B（変更後）"
                 showSamples={false}
-                error={syncedErrorB}
+                error={syncedErrorB?.message}
+                errorSpan={syncedErrorB?.span}
+                onRunNow={runCompareNow}
+                status={editorStatus(sqlB, outcomeB)}
                 compact
               />
             </div>
@@ -362,8 +592,8 @@ export default function App() {
             <div className="tab-content tab-content--compare">
               <QueryResultDiffPanel
                 diff={resultDiff}
-                errorA={syncedErrorA}
-                errorB={syncedErrorB}
+                errorA={syncedErrorA?.message}
+                errorB={syncedErrorB?.message}
                 hasSqlA={hasSqlA}
                 hasSqlB={hasSqlB}
                 pending={comparePending}

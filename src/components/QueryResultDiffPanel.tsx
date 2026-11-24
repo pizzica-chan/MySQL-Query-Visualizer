@@ -1,4 +1,5 @@
 import type { DiffCategoryResult } from '../lib/query-result-diff';
+import { IconAlert, IconApprox, IconDiff, IconShieldCheck } from './Icons';
 import {
   buildResultDiffSummary,
   partitionDiffCategories,
@@ -109,6 +110,16 @@ export function QueryResultDiffPanel({
     diff.categories,
   );
   const hasAnySame = resultSetSame.length > 0 || orderSame.length > 0;
+  const basis = summary.resultSet.status === 'same' ? summary.resultSet.basis : undefined;
+  // 判定の見出しのアイコン。証明済み・推定・要確認・異なるで形を変え、色だけに頼らずに見分けられるようにする
+  const SummaryIcon =
+    summary.tone === 'different'
+      ? IconDiff
+      : summary.tone === 'same'
+        ? basis === 'proven'
+          ? IconShieldCheck
+          : IconApprox
+        : IconAlert;
   const proofStatus = diff.equivalenceProof?.status ?? 'not-proven';
   const syntaxDiffTitle =
     proofStatus === 'proven-equivalent'
@@ -119,20 +130,30 @@ export function QueryResultDiffPanel({
 
   return (
     <div className="result-diff">
-      <p className="result-diff-disclaimer">
-        実データは使いません。SQL 構文の構造比較による推定です。意味的に等価でも構文が違う場合は差分と出ることがあります（INNER
-        相当の JOIN・AND・= だけで書かれた範囲に限り、等価性を証明できることがあります）。
-      </p>
-
-      <div className={`result-diff-summary result-diff-summary--${summary.tone}`} role="status">
-        <h2 className="result-diff-summary-title">{summary.title}</h2>
+      <div
+        className={`result-diff-summary result-diff-summary--${summary.tone}${
+          basis ? ` result-diff-summary--basis-${basis}` : ''
+        }`}
+        role="status"
+      >
+        <h2 className="result-diff-summary-title">
+          <span className="result-diff-summary-icon">
+            <SummaryIcon size={20} />
+          </span>
+          {summary.title}
+        </h2>
         <dl className="result-diff-summary-rows">
           <div className="result-diff-summary-row">
             <dt className="result-diff-summary-row-label">結果セット</dt>
             <dd
-              className={`result-diff-summary-row-value result-diff-summary-row-value--${summary.resultSet.status}`}
+              className={`result-diff-summary-row-value result-diff-summary-row-value--${summary.resultSet.status}${
+                basis ? ` result-diff-summary-row-value--${basis}` : ''
+              }`}
             >
               {summary.resultSet.label}
+              {basis === 'syntax-match' && (
+                <span className="result-diff-basis result-diff-basis--syntax-match">推定（構文が一致）</span>
+              )}
             </dd>
           </div>
           <div className="result-diff-summary-row">
@@ -144,6 +165,11 @@ export function QueryResultDiffPanel({
             </dd>
           </div>
         </dl>
+        {basis === 'syntax-match' && (
+          <p className="result-diff-basis-note">
+            構文の各カテゴリ（出力列・結合・条件など）が一致したことからの推定です。等価性を証明したものではありません。
+          </p>
+        )}
         <p className="result-diff-summary-body">
           {summary.body}
           {summary.note ? ` ${summary.note}` : ''}
@@ -212,6 +238,11 @@ export function QueryResultDiffPanel({
           </>
         )}
       </section>
+
+      <p className="result-diff-disclaimer">
+        実データは使いません。SQL 構文の構造比較による推定です。意味的に等価でも構文が違う場合は差分と出ることがあります（INNER
+        相当の JOIN・AND・= だけで書かれた範囲に限り、等価性を証明できることがあります）。
+      </p>
     </div>
   );
 }
