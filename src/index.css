@@ -628,6 +628,19 @@ body {
   flex-shrink: 0;
 }
 
+/* モード切り替えのタブのパネル。main の並びに影響させない */
+.app-mode-panel {
+  display: contents;
+}
+
+/* タブのボタンだけを囲む（role="tablist"）。並びと折り返しは .tab-bar と同じにする */
+.tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: inherit;
+  gap: inherit;
+}
+
 .tab {
   display: flex;
   align-items: center;

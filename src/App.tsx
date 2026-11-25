@@ -36,6 +36,7 @@ import {
 } from './lib/parser';
 import { compareQueryResults } from './lib/query-result-diff';
 import { collectSubqueryRefsExcludingUnionBranches, type SubqueryRef } from './lib/query-utils';
+import { handleTabListKeyDown } from './lib/tab-keys';
 import { setThemePreference, type ThemePreference } from './lib/theme';
 import type { ParseError, ParsedQuery, SourceSpan } from './lib/types';
 import type { OnSourceSpanSelect } from './lib/source-link';
@@ -45,6 +46,9 @@ const BASE_TABS: { id: TabId; label: string }[] = [
   { id: 'narrative', label: '作用説明' },
   { id: 'joins', label: 'JOIN 図' },
 ];
+
+/** モード切り替えのタブの並び順（← → で移る順） */
+const MODE_IDS: readonly AppMode[] = ['analyze', 'compare'];
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof IconSun }[] = [
   { value: 'system', label: '自動（OS の設定に従う）', icon: IconMonitor },
@@ -324,11 +328,20 @@ export default function App() {
             </div>
           </div>
           <div className="app-header-actions">
-            <div className="app-mode-switch" role="tablist" aria-label="表示モード">
+            <div
+              className="app-mode-switch"
+              role="tablist"
+              aria-label="表示モード"
+              onKeyDown={(event) => handleTabListKeyDown(event, MODE_IDS, mode, setMode)}
+            >
               <button
                 type="button"
                 role="tab"
+                id="app-mode-tab-analyze"
+                data-tab-id="analyze"
                 aria-selected={mode === 'analyze'}
+                aria-controls="app-mode-panel"
+                tabIndex={mode === 'analyze' ? 0 : -1}
                 className={`app-mode-btn${mode === 'analyze' ? ' app-mode-btn--active' : ''}`}
                 onClick={() => setMode('analyze')}
               >
@@ -338,7 +351,11 @@ export default function App() {
               <button
                 type="button"
                 role="tab"
+                id="app-mode-tab-compare"
+                data-tab-id="compare"
                 aria-selected={mode === 'compare'}
+                aria-controls="app-mode-panel"
+                tabIndex={mode === 'compare' ? 0 : -1}
                 className={`app-mode-btn${mode === 'compare' ? ' app-mode-btn--active' : ''}`}
                 onClick={() => setMode('compare')}
                 title="チューニング前後の SQL を比較し、結果が変わりそうな差分を確認します"
@@ -394,6 +411,8 @@ export default function App() {
         </div>
       </header>
 
+      {/* モード切り替えのタブのパネル。main のランドマークを残すため、main ではなく外枠（レイアウトに影響しない display: contents）に付ける */}
+      <div className="app-mode-panel" id="app-mode-panel" role="tabpanel" aria-labelledby={`app-mode-tab-${mode}`}>
       {mode === 'analyze' ? (
         <main className="app-main">
           <section className="panel panel--input">
@@ -503,6 +522,7 @@ export default function App() {
           </section>
         </main>
       )}
+      </div>
     </div>
   );
 }

@@ -308,6 +308,50 @@ describe('App — アプリを開いたタブで共有リンクを開く', () =>
   });
 });
 
+describe('App — タブのキーボード操作と選択の状態', () => {
+  function key(target: Element, name: string) {
+    act(() => {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
+    });
+  }
+
+  it('解析結果のタブは選んでいるタブを aria-selected で示し、← → Home End で移る', () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ mode: 'analyze', sql: 'SELECT u.id FROM users u', sqlA: '', sqlB: '', resolveAliases: false }),
+    );
+    renderAndSettle();
+    const selected = () => host.querySelector('.tab-list [role="tab"][aria-selected="true"]')?.textContent;
+    const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('.tab-list [role="tab"]')];
+    expect(selected()).toBe('SQL構造');
+    expect(tabs().map((t) => t.tabIndex)).toEqual([0, -1, -1]);
+
+    key(tabs()[0]!, 'ArrowRight');
+    expect(selected()).toBe('作用説明');
+    expect(document.activeElement).toBe(tabs()[1]);
+    key(tabs()[1]!, 'End');
+    expect(selected()).toBe('JOIN 図');
+    key(tabs()[2]!, 'ArrowRight');
+    expect(selected()).toBe('SQL構造');
+    key(tabs()[0]!, 'ArrowLeft');
+    expect(selected()).toBe('JOIN 図');
+
+    const panel = host.querySelector('[role="tabpanel"].tab-content')!;
+    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)?.textContent).toBe('JOIN 図');
+  });
+
+  it('モード切り替えも ← → で移り、選んでいるほうだけが Tab キーで止まる', () => {
+    renderAndSettle();
+    const modeTabs = () => [...host.querySelectorAll<HTMLButtonElement>('.app-mode-switch [role="tab"]')];
+    expect(modeTabs().map((t) => t.tabIndex)).toEqual([0, -1]);
+    key(modeTabs()[0]!, 'ArrowRight');
+    expect(host.querySelectorAll('textarea')).toHaveLength(2);
+    expect(modeTabs()[1]!.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(modeTabs()[1]);
+    expect(modeTabs().map((t) => t.tabIndex)).toEqual([-1, 0]);
+  });
+});
+
 describe('App — サンプルの読み込みと元に戻す', () => {
   function clickSample(label: string, editorIndex = 0) {
     const editor = host.querySelectorAll('.sql-editor')[editorIndex]!;

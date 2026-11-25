@@ -160,6 +160,13 @@ async function samplesAndThemeChecks(b) {
   await clickTab(b, '作用説明');
   check('作用説明の別名に実テーブル名のツールチップがある', await b.eval(`document.querySelectorAll('.effect-hl--alias[title]').length > 0`));
 
+  // タブは WAI-ARIA のタブの形。選んでいるタブから → で次のタブへ移り、フォーカスもそのタブへ移る
+  await b.eval(`document.querySelector('.tab-list [aria-selected="true"]').focus()`);
+  await b.key('ArrowRight', { code: 'ArrowRight', keyCode: 39 });
+  await sleep(300);
+  const tabKeys = await b.eval(`({ selected: document.querySelector('.tab-list [aria-selected="true"]')?.textContent, focused: document.activeElement?.textContent })`);
+  check('解析結果のタブを → で切り替え、フォーカスも移る', tabKeys.selected === 'JOIN 図' && tabKeys.focused === 'JOIN 図', JSON.stringify(tabKeys));
+
   await clickTab(b, 'JOIN');
   await sleep(600);
   check('JOIN 図の矢印マーカーの参照先がある（ライト）', (await b.eval(MISSING_MARKERS)).length === 0);

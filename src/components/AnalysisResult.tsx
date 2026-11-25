@@ -1,6 +1,7 @@
-import { memo } from 'react';
+import { memo, useId } from 'react';
 import { hasUnion, type SubqueryRef } from '../lib/query-utils';
 import type { OnSourceSpanSelect } from '../lib/source-link';
+import { handleTabListKeyDown } from '../lib/tab-keys';
 import type { ParsedQuery, SourceSpan } from '../lib/types';
 import { IconJoin, IconNarrative, IconNested, IconStructure } from './Icons';
 import { JoinDiagram } from './JoinDiagram';
@@ -48,25 +49,43 @@ export const AnalysisResult = memo(function AnalysisResult({
 }: AnalysisResultProps) {
   const sourceLinkProps = { activeSourceSpan, onSourceSpanSelect };
   const showNested = tabs.some((tab) => tab.id === 'nested');
+  const idPrefix = useId();
+  const tabIds = tabs.map((tab) => tab.id);
+  const panelId = `${idPrefix}-panel`;
 
   return (
     <>
-      <nav className="tab-bar">
-        {tabs.map((tab) => {
-          const TabIcon = TAB_ICONS[tab.id];
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              className={`tab${activeTab === tab.id ? ' tab--active' : ''}`}
-              onClick={() => onTabChange(tab.id)}
-            >
-              <TabIcon size={15} />
-              {tab.label}
-              {tab.id === 'nested' && <span className="tab-count">{subqueries.length}</span>}
-            </button>
-          );
-        })}
+      <div className="tab-bar">
+        {/* タブのパターン（WAI-ARIA）。選んでいるタブだけを Tab キーで止まる位置にし、タブの間は ← → で移る */}
+        <div
+          className="tab-list"
+          role="tablist"
+          aria-label="解析結果の表示"
+          onKeyDown={(event) => handleTabListKeyDown(event, tabIds, activeTab, onTabChange)}
+        >
+          {tabs.map((tab) => {
+            const TabIcon = TAB_ICONS[tab.id];
+            const selected = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={`${idPrefix}-tab-${tab.id}`}
+                data-tab-id={tab.id}
+                aria-selected={selected}
+                aria-controls={panelId}
+                tabIndex={selected ? 0 : -1}
+                className={`tab${selected ? ' tab--active' : ''}`}
+                onClick={() => onTabChange(tab.id)}
+              >
+                <TabIcon size={15} />
+                {tab.label}
+                {tab.id === 'nested' && <span className="tab-count">{subqueries.length}</span>}
+              </button>
+            );
+          })}
+        </div>
         <label
           className="option-toggle tab-bar-options"
           title="オフのときも、別名にマウスを載せると実テーブル名が表示されます"
@@ -78,9 +97,9 @@ export const AnalysisResult = memo(function AnalysisResult({
           />
           <span>別名を実テーブル名で表示</span>
         </label>
-      </nav>
+      </div>
 
-      <div className="tab-content">
+      <div className="tab-content" role="tabpanel" id={panelId} aria-labelledby={`${idPrefix}-tab-${activeTab}`}>
         {activeTab === 'structure' && (
           <QueryEffectBanner query={query} variant="structure" resolveAliases={resolveAliases} {...sourceLinkProps} />
         )}
