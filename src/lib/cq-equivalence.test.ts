@@ -78,6 +78,35 @@ describe('EXISTS ↔ JOIN + DISTINCT（半結合）', () => {
     );
   });
 
+  // GROUP BY の無い集約は、条件に合う行が無くても 1 行を返すので、EXISTS が常に真になる
+  it.each([
+    'BIT_OR(o.amount)',
+    'BIT_AND(o.amount)',
+    'JSON_ARRAYAGG(o.amount)',
+    'JSON_OBJECTAGG(o.id, o.amount)',
+    'VAR_POP(o.amount)',
+    'STDDEV_SAMP(o.amount)',
+    'ABS(o.amount)',
+  ])('EXISTS 内の SELECT の列が %s なら証明しない', (column) => {
+    expectStatus(
+      EXISTS_PLAIN,
+      `SELECT u.id, u.name FROM users u
+       WHERE u.active = 1
+         AND EXISTS (SELECT ${column} FROM orders o WHERE o.user_id = u.id AND o.status = 'paid')`,
+      'not-proven',
+    );
+  });
+
+  it.each(['*', 'o.*', 'o.id', "'x'"])('EXISTS 内の SELECT の列が %s なら証明する', (column) => {
+    expectStatus(
+      JOIN_DISTINCT,
+      `SELECT u.id, u.name FROM users u
+       WHERE u.active = 1
+         AND EXISTS (SELECT ${column} FROM orders o WHERE o.user_id = u.id AND o.status = 'paid')`,
+      'proven-equivalent-set-only',
+    );
+  });
+
   it('EXISTS 内で結合先テーブルが違えば証明しない', () => {
     expectStatus(
       JOIN_DISTINCT,
@@ -382,5 +411,18 @@ describe('対象クラス外は必ず not-proven', () => {
       INNER JOIN t9 ON t9.id = t8.id
     `;
     expectStatus(many, many, 'not-proven');
+  });
+
+  // 探索は候補ごとに変数の対応表を写すので、条件や出力列が数百あると比較のたびに 1 秒以上かかる
+  it('条件と出力列が上限を超えたら判定しない', () => {
+    const conditions = (n: number) => Array.from({ length: n }, (_, i) => `t.c${i} = ${i}`).join(' AND ');
+    expectStatus(`SELECT DISTINCT t.id FROM t WHERE ${conditions(32)}`, `SELECT DISTINCT t.id FROM t WHERE ${conditions(32)}`, 'proven-equivalent');
+    const tooMany = `SELECT DISTINCT t.id FROM t WHERE ${conditions(33)}`;
+    expect(prove(tooMany, tooMany).reason).toContain('条件が多すぎます');
+
+    const columns = (n: number) => Array.from({ length: n }, (_, i) => `t.c${i}`).join(', ');
+    expectStatus(`SELECT DISTINCT ${columns(32)} FROM t`, `SELECT DISTINCT ${columns(32)} FROM t`, 'proven-equivalent');
+    const wide = `SELECT DISTINCT ${columns(33)} FROM t`;
+    expect(prove(wide, wide).reason).toContain('出力列が多すぎます');
   });
 });

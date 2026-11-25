@@ -218,7 +218,13 @@ async function compareAndShareChecks(b) {
   check('比較モードで B の構文エラーの位置を出す', (await b.eval(`document.querySelectorAll('.sql-line--error').length`)) === 1);
   await b.send('Input.insertText', { text: '1' });
   await sleep(900);
-  check('構文が一致したときは「推定（構文が一致）」と出す', (await b.eval(`document.querySelector('.result-diff-basis')?.textContent`)) === '推定（構文が一致）');
+  const verdict = await b.eval(`({ label: document.querySelector('.result-diff-summary-row-value')?.textContent, noDiff: !!document.querySelector('.result-diff-summary--no-diff') })`);
+  check('構文が一致しただけのときは、緑の「同じ」ではなく「構文の違いなし」と出す', verdict.label === '構文の違いなし' && verdict.noDiff, JSON.stringify(verdict));
+  check('確認用の SQL を開いた状態で出す', (await b.eval(`!!document.querySelector('details.result-diff-verify[open] code')?.textContent.includes('EXCEPT ALL')`)) === true);
+  await b.eval(`[...document.querySelectorAll('.result-diff-verify button')].find((x) => x.textContent.includes('コピー')).click()`);
+  await sleep(300);
+  const copied = await b.eval(`navigator.clipboard.readText().catch((e) => 'ERR ' + e.message)`);
+  check('「SQL をコピー」で確認用の SQL をクリップボードに入れる', copied.includes('EXCEPT ALL') && copied.includes('SELECT id FROM users WHERE x = 1'), copied.slice(0, 80));
   await b.screenshot(join(outDir, 'compare.png'));
 
   await b.click('.app-share-btn');

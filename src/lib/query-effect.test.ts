@@ -334,7 +334,7 @@ describe('query-effect', () => {
         LEFT JOIN table_b b ON b.a_id = a.id
         WHERE b.col = 1
         GROUP BY a.id
-        HAVING COUNT(b.id) > 0
+        HAVING SUM(b.q) > 1
       `;
       const join = joinFilterNodes(sql).find((n) =>
         collectLeafTexts(n.children![0]!).some((l) => l.includes('b.a_id = a.id')),
@@ -735,6 +735,36 @@ describe('query-effect', () => {
       expect(lineTexts(agg)).toEqual(['COUNT(*) AS cnt']);
     });
 
+    it.each(['VAR_POP(o.x)', 'BIT_XOR(o.x)', 'JSON_ARRAYAGG(o.x)', 'STDDEV_SAMP(o.x)', 'STD(o.x)', 'VARIANCE(o.x)'])(
+      'GROUP BY なしの %s も全体集約として説明する',
+      (column) => {
+        const result = parseMySqlQuery(`SELECT ${column} FROM orders o`);
+        if (!result.success) throw new Error(result.error.message);
+
+        expect(buildQueryEffect(result.query).summary).toContain('全体集約');
+        const agg = buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'aggregate');
+        expect(lineTexts(agg)).toEqual(['集約関数のみ — 全体を1グループとして計算（結果は最大1行）']);
+      },
+    );
+
+    // OVER の付く集約はウィンドウ関数で、行をまとめずに各行へ値を付ける。文字列の中の SUM( は関数ではない
+    it.each([
+      'SUM(o.x) OVER () AS s',
+      'COUNT(*) OVER (PARTITION BY o.k) AS c',
+      'SUM(o.x) OVER w AS s',
+      "'SUM(x)' AS s",
+    ])('%s だけを選ぶ SELECT は全体集約と説明しない', (column) => {
+      const window = column.includes('OVER w') ? ' WINDOW w AS (PARTITION BY o.k)' : '';
+      const result = parseMySqlQuery(`SELECT ${column} FROM orders o${window}`);
+      if (!result.success) throw new Error(result.error.message);
+
+      for (const mode of ['sql', 'japanese'] as const) {
+        const effect = buildQueryEffect(result.query, mode);
+        expect(effect.summary).not.toContain('集約');
+        expect(effect.sections.find((s) => s.kind === 'aggregate')).toBeUndefined();
+      }
+    });
+
     it('COUNT(DISTINCT ...) を集約セクションで説明する', () => {
       const result = parseMySqlQuery('SELECT dept, COUNT(DISTINCT user_id) AS uu FROM users GROUP BY dept');
       expect(result.success).toBe(true);
@@ -1010,6 +1040,18 @@ describe('query-effect', () => {
       expect(inTexts.some((t) => t.startsWith('次の値のどれかと一致 —'))).toBe(true);
       expect(notInTexts.some((t) => t.startsWith('次の値のどれとも一致しない —'))).toBe(true);
     });
+
+    // 否定を見ずに「範囲内」と書くと、逆の意味の説明になる。NOT LIKE も LIKE と言い方をそろえる
+    it.each([
+      ['u.a BETWEEN 1 AND 5', '範囲内 — u.a BETWEEN 1 AND 5'],
+      ['u.a NOT BETWEEN 1 AND 5', '範囲外 — u.a NOT BETWEEN 1 AND 5'],
+      ["u.n LIKE 'a%'", "パターン一致 — u.n LIKE 'a%'"],
+      ["u.n NOT LIKE 'a%'", "パターンに一致しない — u.n NOT LIKE 'a%'"],
+    ])('%s の説明を否定に合わせる', (condition, expected) => {
+      const result = parseMySqlQuery(`SELECT u.id FROM users u WHERE ${condition}`);
+      if (!result.success) throw new Error(result.error.message);
+      expect(collectLeafTexts(buildConditionEffectTree(result.query.where!, 'japanese'))).toEqual([expected]);
+    });
   });
 });
 
@@ -1029,7 +1071,36 @@ describe('作用説明の要約文', () => {
     ['UPDATE users SET a = 1 WHERE b = 2 LIMIT 3', 'users のうち、WHERE 条件を満たす行が更新される — 最大 3 行'],
     ['DELETE FROM users', 'users の行が削除される'],
     ['SELECT 1', '式の値が 1 行の結果として表示される'],
+    ['WITH c AS (SELECT a FROM t) SELECT a FROM c', 'c（CTE） の行が結果として表示される'],
   ])('%s', (sql, expected) => {
     expect(summaryOf(sql)).toBe(expected);
+  });
+});
+
+describe('対象テーブル欄の別名', () => {
+  it.each([
+    ['SELECT x.a FROM users AS x', 'users（x） の行'],
+    ['UPDATE users x SET x.a = 1', 'users（x） の行'],
+    ['DELETE x FROM users AS x WHERE x.a = 1', 'users（x） の行'],
+    ['SELECT a FROM db.users', 'db.users の行'],
+  ])('要約と同じ表記にする: %s', (sql, expected) => {
+    expect(scopeLines(sql)).toEqual([expected]);
+  });
+
+  it('日本語の説明の起点も同じ表記にする', () => {
+    const result = parseMySqlQuery('SELECT x.a FROM users x JOIN orders o ON o.uid = x.id');
+    if (!result.success) throw new Error(result.error.message);
+    const scope = buildQueryEffect(result.query, 'japanese').sections.find((s) => s.kind === 'scope');
+    expect(lineTexts(scope)[0]).toBe('users（x） を起点に行の組み合わせを構成');
+  });
+});
+
+describe('UNION 全体の ORDER BY / LIMIT', () => {
+  it('括弧の無い最後のブランチに書いた LIMIT を、そのブランチだけの絞り込みとして説明しない', () => {
+    const result = parseMySqlQuery('SELECT a FROM t UNION SELECT b FROM u UNION ALL SELECT c FROM v ORDER BY 1 LIMIT 3');
+    if (!result.success) throw new Error(result.error.message);
+    const unionEffect = buildUnionQueryEffect(result.query);
+    expect(unionEffect?.branches[2]?.effect.summary).toBe('v の行が結果として表示される');
+    expect(result.query.unionTail?.limit).toBe('3');
   });
 });

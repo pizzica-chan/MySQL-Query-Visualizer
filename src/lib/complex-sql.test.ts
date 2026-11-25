@@ -227,16 +227,14 @@ GROUP BY u.id`,
 // 6. UPDATE / DELETE の複雑形（MySQL の複数テーブル操作）
 // ---------------------------------------------------------------------------
 add({
-  name: 'UPDATE: 3 テーブル JOIN + 複数 SET + ORDER/LIMIT',
+  name: 'UPDATE: 3 テーブル JOIN + 複数 SET',
   want: { tables: 3, joins: 2 },
   sql: `UPDATE LOW_PRIORITY IGNORE users u
 INNER JOIN orders o ON o.user_id = u.id
 LEFT JOIN order_items oi ON oi.order_id = o.id
 SET u.status = 'inactive', u.updated_at = NOW(), o.closed = 1, oi.shipped = 1
 WHERE u.last_login_at < '2023-01-01'
-  AND (o.status IN ('pending','hold') OR u.email LIKE '%@deprecated.example')
-ORDER BY o.updated_at DESC
-LIMIT 500`,
+  AND (o.status IN ('pending','hold') OR u.email LIKE '%@deprecated.example')`,
 });
 
 add({
@@ -256,9 +254,7 @@ INNER JOIN orders o ON o.user_id = u.id
 INNER JOIN order_items oi ON oi.order_id = o.id
 WHERE u.status = 'deleted'
   AND EXISTS (SELECT 1 FROM audit_log a WHERE a.user_id = u.id AND a.action = 'purge')
-  AND o.id NOT IN (SELECT s.order_id FROM shipments s WHERE s.shipped_at IS NOT NULL)
-ORDER BY o.created_at ASC
-LIMIT 1000`,
+  AND o.id NOT IN (SELECT s.order_id FROM shipments s WHERE s.shipped_at IS NOT NULL)`,
 });
 
 // ---------------------------------------------------------------------------

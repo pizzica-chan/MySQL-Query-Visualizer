@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_SHARE_PAYLOAD_BYTES,
   STORAGE_KEY,
   decodeSharePayload,
   encodeSharePayload,
@@ -74,5 +75,16 @@ describe('共有リンク', () => {
     expect(await decodeSharePayload('#q=x' + btoa('{}'))).toBeNull();
     const wrongShape = btoa(JSON.stringify({ mode: 'compare', sqlA: 'a' }));
     expect(await decodeSharePayload(`#q=r${wrongShape}`)).toBeNull();
+  });
+
+  it('展開すると上限を超える共有リンクは、展開を途中でやめて null を返す', async () => {
+    const sql = 'a'.repeat(MAX_SHARE_PAYLOAD_BYTES);
+    const fragment = await encodeSharePayload({ mode: 'analyze', sql });
+    // 同じ文字の並びはよく縮むので、リンクそのものは短い
+    expect(fragment.length).toBeLessThan(100_000);
+    expect(await decodeSharePayload(fragment)).toBeNull();
+
+    const withinLimit = { mode: 'analyze' as const, sql: 'a'.repeat(1_000_000) };
+    expect(await decodeSharePayload(await encodeSharePayload(withinLimit))).toEqual(withinLimit);
   });
 });

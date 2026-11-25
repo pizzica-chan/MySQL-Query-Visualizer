@@ -191,6 +191,32 @@ export function maskNonCode(sql: string): string {
 }
 
 /**
+ * MySQL が中身を SQL として実行するコメント（`/*!` で始まるブロックコメント。`/*!80000` のようにバージョンを
+ * 付けた形も）の範囲。無ければ null。文字列と、ほかのコメントの中は見ない（MySQL 8.4 リファレンス 11.7 Comments）
+ */
+export function findExecutableComment(sql: string): { start: number; end: number } | null {
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (isDashLineCommentStart(sql, i)) {
+      i = readLineCommentEnd(sql, i);
+    } else if (ch === '#') {
+      i = readHashLineCommentEnd(sql, i);
+    } else if (ch === '/' && sql[i + 1] === '*') {
+      const end = readBlockCommentEnd(sql, i);
+      if (sql[i + 2] === '!') return { start: i, end };
+      i = end;
+    } else if (ch === "'" || ch === '"') {
+      i = readQuotedStringEnd(sql, i, ch);
+    } else if (ch === '`') {
+      i = readBacktickIdentifierEnd(sql, i);
+    } else {
+      i += 1;
+    }
+  }
+  return null;
+}
+/**
  * 閉じていない文字列（' と "）・バッククォート・ブロックコメントの開始位置。どれも閉じていれば null。
  * 読み取りの関数は閉じていないときも末尾の位置を返すので、閉じたかどうかはここで確かめ直す
  */

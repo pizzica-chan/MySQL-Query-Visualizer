@@ -24,6 +24,8 @@ export interface PreprocessResult {
   straightJoinHintOriginalSpans: SourceSpan[];
   /** preprocessed[i] の文字が元 SQL のどの位置か */
   processedToOriginal: number[];
+  /** 前処理で置き換えた関数名（大文字の仮の名前 → 元の名前）。表示では元の名前に戻す */
+  renamedFunctions: Map<string, string>;
 }
 
 interface ProcessState {
@@ -324,7 +326,7 @@ function stripStatementOptionModifiers(
 }
 
 /** 複数テーブルの DELETE の対象に書くテーブル名（スキーマ付き・バッククォート付き・末尾の .* を含む） */
-// \x60 \u306F\u30D0\u30C3\u30AF\u30AF\u30A9\u30FC\u30C8\u3002\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8\u6587\u5B57\u5217\u306E\u4E2D\u306B\u66F8\u3051\u306A\u3044\u306E\u3067\u3001\u6B63\u898F\u8868\u73FE\u306E\u30A8\u30B9\u30B1\u30FC\u30D7\u3067\u66F8\u304F
+// \x60 はバッククォート。テンプレート文字列の中に書けないので、正規表現のエスケープで書く
 const DELETE_TARGET_ID = String.raw`(?:\x60(?:[^\x60]|\x60\x60)+\x60|[\w$\u0080-\uFFFF]+)`;
 const DELETE_TARGET = `${DELETE_TARGET_ID}(?:\\.${DELETE_TARGET_ID})?(?:\\.\\*)?`;
 const DELETE_TARGET_LIST = `${DELETE_TARGET}(?:\\s*,\\s*${DELETE_TARGET})*`;
@@ -375,7 +377,7 @@ function rewriteMultiTableDelete(state: ProcessState, recorded: RecordedStarts):
  * （MySQL 8.4 リファレンス 14.19.1）が、node-sql-parser は COUNT と GROUP_CONCAT でしか読めず、構文エラーになる。
  * `DISTINCT(a)` の形なら読めるので、DISTINCT の後ろの引数を括弧で囲む（表示は parser.ts で元の形に戻す）
  */
-const AGGREGATE_DISTINCT_RE = /(?<![\w$.`])(?:SUM|AVG|MIN|MAX)\s*\(\s*DISTINCT\b/giu;
+const AGGREGATE_DISTINCT_RE = /(?<![\w$.`\u0080-\uFFFF])(?:SUM|AVG|MIN|MAX)\s*\(\s*DISTINCT\b/giu;
 
 function parenthesizeAggregateDistinct(state: ProcessState, recorded: RecordedStarts): void {
   const masked = maskNonCode(state.sql);
@@ -395,6 +397,81 @@ function parenthesizeAggregateDistinct(state: ProcessState, recorded: RecordedSt
   for (const { at, text } of inserts) spliceProcessed(state, at, at, text, recorded);
 }
 
+/**
+ * 集約関数の STD と VARIANCE。MySQL では STDDEV_POP と VAR_POP の別名として書ける（MySQL 8.4 リファレンス 14.19.1）が、
+ * node-sql-parser は集約関数の名前として予約しているのに読む規則を持たず、構文エラーになる。
+ * SQL に現れない仮の名前に置き換えて普通の関数として読ませ、表示では parser.ts が元の名前に戻す
+ */
+const RESERVED_AGGREGATE_NAME_RE = /(?<![\w$.`\u0080-\uFFFF])(?:STD|VARIANCE)(?=\s*\()/giu;
+
+function renameReservedAggregates(state: ProcessState, recorded: RecordedStarts): Map<string, string> {
+  const renamed = new Map<string, string>();
+  const masked = maskNonCode(state.sql);
+  const matches = [...masked.matchAll(RESERVED_AGGREGATE_NAME_RE)];
+  if (matches.length === 0) return renamed;
+  const upperSql = state.sql.toUpperCase();
+  const placeholderFor = (name: string): string => {
+    const upper = name.toUpperCase();
+    for (const [placeholder, original] of renamed) if (original === upper) return placeholder;
+    let placeholder = `QV_${upper}_`;
+    while (upperSql.includes(placeholder)) placeholder += '_';
+    renamed.set(placeholder, upper);
+    return placeholder;
+  };
+  const replacements = matches.map((match) => ({ start: match.index, end: match.index + match[0].length, text: placeholderFor(match[0]) }));
+  for (const { start, end, text } of replacements.reverse()) spliceProcessed(state, start, end, text, recorded);
+  return renamed;
+}
+
+const SET_CLAUSE_END_WORDS = new Set(['WHERE', 'ORDER', 'LIMIT']);
+
+/**
+ * UPDATE の `SET a = DEFAULT`。MySQL は列を既定値に戻す書き方として DEFAULT を書ける
+ * （MySQL 8.4 リファレンス 15.2.17 UPDATE Statement）が、node-sql-parser は `DEFAULT(a)` の関数の形しか読めない。
+ * SET の値がちょうど DEFAULT の 1 語のときだけ、バッククォートで囲んで列の名前として読ませる（表示は DEFAULT のまま）
+ */
+function quoteUpdateSetDefault(state: ProcessState, recorded: RecordedStarts): void {
+  const masked = maskNonCode(state.sql);
+  const firstUpdate = findWholeWordStarts(masked, 'UPDATE')[0];
+  if (firstUpdate === undefined) return;
+  const starts: number[] = [];
+  for (const setStart of findWholeWordStarts(masked, 'SET')) {
+    if (setStart < firstUpdate) continue;
+    let depth = 0;
+    let i = setStart + 'SET'.length;
+    /** いま読んでいる `列 = 値` の始まり（SET の直後か、深さ 0 の `,` の直後） */
+    let itemStart = i;
+    while (i < masked.length) {
+      const ch = masked[i]!;
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      else if (ch === ',' && depth === 0) itemStart = i + 1;
+      if (depth < 0) break;
+      const atWordStart = /[A-Za-z_]/.test(ch) && !/[\w$.`]/.test(masked[i - 1] ?? ' ');
+      const token = atWordStart ? readWord(masked, i) : null;
+      if (!token) {
+        i += 1;
+        continue;
+      }
+      const word = token.word.toUpperCase();
+      if (depth === 0 && SET_CLAUSE_END_WORDS.has(word)) break;
+      if (depth === 0 && word === 'DEFAULT') {
+        const after = masked[skipMaskedWhitespace(masked, token.end)];
+        const nextWord = readWord(masked, skipMaskedWhitespace(masked, token.end))?.word.toUpperCase();
+        const endsValue = after === undefined || after === ',' || after === ';' || (nextWord !== undefined && SET_CLAUSE_END_WORDS.has(nextWord));
+        // 値の位置（`列 =` の直後）の DEFAULT だけを見る。`b != DEFAULT` や `b = DEFAULT` の比較の右に書いた
+        // DEFAULT は、MySQL でも構文エラーになる
+        const isAssignedValue = /^[^=<>!:]*=$/.test(masked.slice(itemStart, i).trim());
+        if (isAssignedValue && endsValue) starts.push(i);
+      }
+      i = token.end;
+    }
+  }
+  for (const start of starts.sort((a, b) => b - a)) {
+    spliceProcessed(state, start, start + 'DEFAULT'.length, '`DEFAULT`', recorded);
+  }
+}
+
 export function preprocessSqlForParser(sql: string): PreprocessResult {
   const state = initState(sql);
   const naturalJoinStarts: number[] = [];
@@ -409,6 +486,7 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
 
   stripStatementOptionModifiers(state, straightJoinHintSelectStarts, straightJoinHintOriginalSpans, recorded);
   rewriteMultiTableDelete(state, recorded);
+  quoteUpdateSetDefault(state, recorded);
 
   applyRegexReplacementsInCode(state, [
     {
@@ -422,6 +500,7 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
   ], recorded);
 
   parenthesizeAggregateDistinct(state, recorded);
+  const renamedFunctions = renameReservedAggregates(state, recorded);
   quoteNonAsciiIdentifiers(state, recorded);
 
   return {
@@ -430,6 +509,7 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
     straightJoinHintSelectStarts,
     straightJoinHintOriginalSpans,
     processedToOriginal: state.processedToOriginal,
+    renamedFunctions,
   };
 }
 

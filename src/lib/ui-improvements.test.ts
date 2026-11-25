@@ -46,11 +46,28 @@ describe('エディタのハイライト（エラーの印と行ごとの出力�
 });
 
 describe('比較の判定の根拠', () => {
-  it('構文カテゴリの一致による「同じ」は syntax-match', () => {
+  // 構文の比較は、関数の細かな仕様や型の変換による違いを見落とすことがある。緑の「同じ」は証明できたときだけにする
+  it('構文が一致しただけのときは「同じ」と言わず、色の付かない「構文の違いなし」にする', () => {
     const diff = compareQueryResults(mustParse('SELECT id FROM users'), mustParse('select  id  from users'));
     const summary = buildResultDiffSummary(diff);
+    expect(summary.resultSet.status).toBe('no-diff');
+    expect(summary.resultSet.label).toBe('構文の違いなし');
+    expect(summary.tone).toBe('no-diff');
+    expect(summary.order).toEqual({ status: 'not-specified', label: '指定なし' });
+  });
+
+  it('構文が一致し、等価性も証明できたときは「同じ（証明済み）」にする', () => {
+    const sql = 'SELECT DISTINCT u.id FROM users u JOIN orders o ON o.user_id = u.id';
+    const summary = buildResultDiffSummary(compareQueryResults(mustParse(sql), mustParse(sql.toLowerCase())));
     expect(summary.resultSet.status).toBe('same');
-    expect(summary.resultSet.basis).toBe('syntax-match');
+    expect(summary.resultSet.label).toBe('同じ（証明済み）');
+    expect(summary.tone).toBe('same');
+  });
+
+  it('ORDER BY が一致しても「同じ」ではなく「違いなし」と書く', () => {
+    const sql = 'SELECT u.id FROM users u ORDER BY u.id';
+    const summary = buildResultDiffSummary(compareQueryResults(mustParse(sql), mustParse(sql)));
+    expect(summary.order).toEqual({ status: 'no-diff', label: '違いなし' });
   });
 
   it('等価性を証明した「同じ」は proven', () => {
@@ -67,14 +84,38 @@ INNER JOIN orders o ON o.user_id = u.id
 WHERE u.active = 1 AND o.status = 'paid'`);
     const diff = compareQueryResults(a, b);
     expect(diff.equivalenceProof.status).toBe('proven-equivalent');
-    expect(buildResultDiffSummary(diff).resultSet.basis).toBe('proven');
+    expect(buildResultDiffSummary(diff).resultSet.status).toBe('same');
   });
 
-  it('「異なる」「要確認」には根拠を付けない', () => {
+  // 並び順の行が「異なる」なのに、本文で「構文の違いは無い」と書くと食い違う
+  it('並び順だけが違うときは、本文でも並び順が違うと書く', () => {
+    const unproven = buildResultDiffSummary(
+      compareQueryResults(
+        mustParse('SELECT u.id FROM users u WHERE u.a > 1 ORDER BY u.id'),
+        mustParse('SELECT u.id FROM users u WHERE u.a > 1 ORDER BY u.name'),
+      ),
+    );
+    expect(unproven.body.startsWith('並び順（ORDER BY）は違いますが、')).toBe(true);
+
+    const proven = buildResultDiffSummary(
+      compareQueryResults(mustParse('SELECT u.id FROM users u ORDER BY u.id'), mustParse('SELECT u.id FROM users u ORDER BY u.name')),
+    );
+    expect(proven.resultSet.label).toBe('同じ（証明済み）');
+    expect(proven.body.startsWith('並び順（ORDER BY）のほかに構文の違いは無く、')).toBe(true);
+  });
+
+  it('証明の補足は、文ごとに句点で区切る', () => {
+    const summary = buildResultDiffSummary(
+      compareQueryResults(mustParse('SELECT u.id FROM users u'), mustParse('select u.id from users u')),
+    );
+    expect(summary.proofNote).toBe(
+      '重複行の個数まで含めて一致することを証明しました。判定対象は INNER 相当の JOIN・AND・= のみで構成される範囲（合接クエリ）に限定しています。',
+    );
+  });
+
+  it('出力列が違えば「異なる」にする', () => {
     const diff = compareQueryResults(mustParse('SELECT id FROM users'), mustParse('SELECT name FROM users'));
-    const summary = buildResultDiffSummary(diff);
-    expect(summary.resultSet.status).not.toBe('same');
-    expect(summary.resultSet.basis).toBeUndefined();
+    expect(buildResultDiffSummary(diff).resultSet.status).toBe('different');
   });
 });
 

@@ -44,6 +44,8 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
   different('2 進のリテラル b\'101\'（値は 5）', "SELECT t.id FROM t WHERE t.a = b'101'", 'SELECT t.id FROM t WHERE t.a = 101'),
   different('16 進のリテラル X\'41\'', "SELECT t.id FROM t WHERE t.a = X'41'", 'SELECT t.id FROM t WHERE t.a = 41'),
   different('16 進のリテラル 0x41', 'SELECT t.id FROM t WHERE t.a = 0x41', 'SELECT t.id FROM t WHERE t.a = 41'),
+  // `&&` を比較として 1 つの条件にまとめていたので、AND と書いた SQL と別の条件に見えていた
+  same('&& と AND', 'SELECT t.id FROM t WHERE t.a = 1 && t.b = 2', 'SELECT t.id FROM t WHERE t.b = 2 AND t.a = 1'),
   different('SUM の DISTINCT', 'SELECT SUM(DISTINCT t.a) FROM t', 'SELECT SUM(t.a) FROM t'),
   same('SUM の DISTINCT の引数の括弧', 'SELECT SUM(DISTINCT t.a) FROM t', 'SELECT SUM(DISTINCT (t.a)) FROM t'),
   different('文字セットの指定 _binary', "SELECT t.id FROM t WHERE t.a = _binary'a'", "SELECT t.id FROM t WHERE t.a = 'a'"),
@@ -219,6 +221,11 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     'SELECT DISTINCT a.id FROM users a, users b WHERE a.id = b.id',
     'SELECT DISTINCT a.id FROM users a',
   ),
+  different(
+    'EXISTS の中の SELECT の列に書いた集約（行が無くても 1 行を返し、EXISTS が常に真になる）',
+    'SELECT DISTINCT a.id FROM a WHERE EXISTS (SELECT 1 FROM o WHERE o.aid = a.id)',
+    'SELECT DISTINCT a.id FROM a WHERE EXISTS (SELECT BIT_OR(o.x) FROM o WHERE o.aid = a.id)',
+  ),
   { name: 'カンマ結合と CROSS JOIN', a: 'SELECT a.id FROM a, b', b: 'SELECT a.id FROM a CROSS JOIN b', expect: 'proven' },
 
   // --- 結合の組み立て ---
@@ -299,10 +306,31 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     `${INNER} WHERE CASE WHEN o.x IS NULL THEN 1 ELSE 0 END = 1`,
   ),
   different('IF(… IS NULL)', `${LEFT} WHERE IF(o.x IS NULL, 1, 0) = 1`, `${INNER} WHERE IF(o.x IS NULL, 1, 0) = 1`),
+  // NULL を受け取っても NULL 以外を返す関数。NULL を返さない関数の一覧で除いていたので、一覧に無い関数を根拠にしていた
+  different('QUOTE()（NULL を文字列の NULL にする）', `${LEFT} WHERE QUOTE(o.x) = 'NULL'`, `${INNER} WHERE QUOTE(o.x) = 'NULL'`),
+  different('COERCIBILITY()', `${LEFT} WHERE COERCIBILITY(o.x) = 6`, `${INNER} WHERE COERCIBILITY(o.x) = 6`),
+  different('DEFAULT()（列の既定値）', `${LEFT} WHERE DEFAULT(o.x) = 1`, `${INNER} WHERE DEFAULT(o.x) = 1`),
+  different('利用者が作った関数', `${LEFT} WHERE my_func(o.x) = 1`, `${INNER} WHERE my_func(o.x) = 1`),
+  different('スキーマ付きの関数（組み込みの関数と同じ名前）', `${LEFT} WHERE db.upper(o.x) = 'A'`, `${INNER} WHERE db.upper(o.x) = 'A'`),
+  different('名前に日本語を含む関数', `${LEFT} WHERE 日F(o.x) = 1`, `${INNER} WHERE 日F(o.x) = 1`),
+  same('実質 INNER: NULL を伝える関数', `${LEFT} WHERE UPPER(TRIM(o.x)) = 'A'`, `${INNER} WHERE UPPER(TRIM(o.x)) = 'A'`),
+  same('実質 INNER: 関数の引数の外の参照', `${LEFT} WHERE my_func(a.y) = o.x`, `${INNER} WHERE my_func(a.y) = o.x`),
   different('IN リスト側の参照', `${LEFT} WHERE a.x IN (o.y, 1)`, `${INNER} WHERE a.x IN (o.y, 1)`),
   different('IS NOT TRUE', `${LEFT} WHERE (o.x = 1) IS NOT TRUE`, `${INNER} WHERE (o.x = 1) IS NOT TRUE`),
   different('NOT (… IS NOT NULL)', `${LEFT} WHERE NOT (o.id IS NOT NULL)`, `${INNER} WHERE NOT (o.id IS NOT NULL)`),
   different('NOT IN サブクエリ', `${LEFT} WHERE o.k NOT IN (SELECT x.k FROM x)`, `${INNER} WHERE o.k NOT IN (SELECT x.k FROM x)`),
+  // サブクエリが 0 行なら、`NULL <> ALL (…)` は真、`NULL = ANY (…)` は偽になる。右辺が ALL のサブクエリかを見ずに、実質 INNER の根拠にしていた
+  different('<> ALL サブクエリ', `${LEFT} WHERE o.k <> ALL (SELECT x.k FROM x)`, `${INNER} WHERE o.k <> ALL (SELECT x.k FROM x)`),
+  different('> ALL サブクエリ', `${LEFT} WHERE o.k > ALL (SELECT x.k FROM x)`, `${INNER} WHERE o.k > ALL (SELECT x.k FROM x)`),
+  different(
+    'NOT (= ANY サブクエリ)',
+    `${LEFT} WHERE NOT (o.k = ANY (SELECT x.k FROM x))`,
+    `${INNER} WHERE NOT (o.k = ANY (SELECT x.k FROM x))`,
+  ),
+  same('実質 INNER: = ANY サブクエリ', `${LEFT} WHERE o.k = ANY (SELECT x.k FROM x)`, `${INNER} WHERE o.k = ANY (SELECT x.k FROM x)`),
+  same('実質 INNER: NOT (IS NULL)', `${LEFT} WHERE NOT (o.id IS NULL)`, `${INNER} WHERE NOT (o.id IS NULL)`),
+  same('実質 INNER: IS TRUE', `${LEFT} WHERE (o.x = 1) IS TRUE`, `${INNER} WHERE (o.x = 1) IS TRUE`),
+  different('HAVING COUNT = 0', `${LEFT} GROUP BY a.id HAVING COUNT(o.id) = 0`, `${INNER} GROUP BY a.id HAVING COUNT(o.id) = 0`),
   different(
     '後続 INNER JOIN の ON が OR',
     `${LEFT} JOIN p ON p.id = o.pid OR p.aid = a.id`,
@@ -345,6 +373,17 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     b: '(SELECT a FROM t) UNION (SELECT a FROM u) ORDER BY a DESC',
     expect: 'order-only',
   },
+  // 括弧の無い最後のブランチの LIMIT は UNION 全体に掛かる。最後のブランチの LIMIT としても数えていた
+  same(
+    'UNION 全体の LIMIT（括弧の有無）',
+    'SELECT a FROM t UNION SELECT a FROM u ORDER BY a LIMIT 3',
+    '(SELECT a FROM t) UNION (SELECT a FROM u) ORDER BY a LIMIT 3',
+  ),
+  different(
+    'UNION 全体の LIMIT と最後のブランチだけの LIMIT',
+    'SELECT a FROM t UNION SELECT a FROM u ORDER BY a LIMIT 3',
+    '(SELECT a FROM t) UNION (SELECT a FROM u ORDER BY a LIMIT 3)',
+  ),
   // --- 前処理で書き換える構文（書き換えの前後で同じ結果になる） ---
   same(
     '複数テーブルの DELETE の USING の形と FROM の形',
@@ -366,6 +405,20 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     'SELECT ユーザー.名前 FROM ユーザー WHERE ユーザー.状態 = 1',
     'SELECT `ユーザー`.`名前` FROM `ユーザー` WHERE `ユーザー`.`状態` = 1',
   ),
+  // --- UNION DISTINCT（UNION と同じ意味。MySQL 8.4 リファレンス 15.2.18） ---
+  same('UNION DISTINCT と UNION', 'SELECT a.x FROM a UNION DISTINCT SELECT b.x FROM b', 'SELECT a.x FROM a UNION SELECT b.x FROM b'),
+  different('UNION DISTINCT と UNION ALL', 'SELECT a.x FROM a UNION DISTINCT SELECT b.x FROM b', 'SELECT a.x FROM a UNION ALL SELECT b.x FROM b'),
+  // --- スキーマ付きの関数（パーサーがスキーマを名前と別に持つので、表示で落としていた） ---
+  different('スキーマだけが違う関数', 'SELECT db1.f(a.x) AS v FROM a', 'SELECT db2.f(a.x) AS v FROM a'),
+  different('スキーマの有無だけが違う関数', 'SELECT a.id FROM a WHERE db1.f(a.x) = 1', 'SELECT a.id FROM a WHERE f(a.x) = 1'),
+  // Unix の MySQL では、データベース名の大文字小文字を区別する（テーブル名と同じ）
+  different('スキーマの大文字小文字だけが違う関数', 'SELECT db1.f(a.x) AS v FROM a', 'SELECT DB1.f(a.x) AS v FROM a'),
+  same('関数名の大文字小文字だけが違う関数', 'SELECT db1.f(a.x) AS v FROM a', 'SELECT db1.F(a.x) AS v FROM a'),
+
+  // --- || と OR（MySQL の既定では同じ意味。括弧の無い || は解析のエラーにしている） ---
+  same('括弧で囲んだ比較を結ぶ || と OR', 'SELECT a.id FROM a WHERE (a.x = 1) || (a.y = 2)', 'SELECT a.id FROM a WHERE (a.x = 1) OR (a.y = 2)'),
+  different('|| の片側だけが外部結合の列なら実質 INNER にしない', `${LEFT} WHERE (a.x = 1) || (o.b = 2)`, `${INNER} WHERE (a.x = 1) || (o.b = 2)`),
+
   // --- AND と OR の優先順位（SQL パーサーが同じ優先順位で結び付けていた） ---
   different(
     'AND は OR より先に結び付く',

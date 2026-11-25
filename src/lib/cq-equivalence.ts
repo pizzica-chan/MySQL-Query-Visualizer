@@ -28,6 +28,12 @@ import type { ConditionNode, JoinEdge, ParsedQuery, TableRef } from './types';
 export const MAX_CQ_ATOMS = 8;
 /** 準同型探索のステップ上限 */
 export const MAX_CQ_SEARCH_STEPS = 20000;
+/**
+ * 1 クエリあたりの条件（等式）と出力列の上限。探索は候補ごとに変数の対応表を写すので、
+ * 条件や出力列が数百あると、ステップ上限の前に 1 秒以上かかり、比較のたびに画面が止まる
+ */
+export const MAX_CQ_CONDITIONS = 32;
+export const MAX_CQ_OUTPUT_COLUMNS = 32;
 
 export type CqEquivalenceStatus =
   | 'proven-equivalent'
@@ -91,6 +97,9 @@ const DISALLOWED_KEYWORDS = new Set([
   'all', 'any', 'avg', 'between', 'binary', 'case', 'cast', 'coalesce', 'collate', 'convert',
   'count', 'dense_rank', 'group_concat', 'max', 'min', 'rank', 'row_number', 'stddev', 'sum',
   'variance',
+  // 集約関数の残り（MySQL 8.4 リファレンス 14.19.1）。GROUP BY が無ければ行が無くても 1 行を返す
+  'bit_and', 'bit_or', 'bit_xor', 'json_arrayagg', 'json_objectagg', 'std', 'stddev_pop',
+  'stddev_samp', 'var_pop', 'var_samp',
   'div', 'else', 'end', 'escape', 'except', 'false', 'for', 'full', 'group', 'having',
   'if', 'ifnull', 'ignore', 'in', 'intersect', 'interval', 'into', 'is', 'lateral',
   'left', 'like', 'limit', 'lock', 'mod', 'natural', 'not', 'null', 'nullif', 'offset',
@@ -319,7 +328,16 @@ function addQueryBody(
   const whereFailure = collectCondition(builder, query.where, scope);
   if (whereFailure) return whereFailure;
 
-  if (!isSubquery) {
+  if (isSubquery) {
+    // EXISTS は列の値を見ない。ただし GROUP BY の無いサブクエリの列に集約関数があると、
+    // 条件に合う行が無くても 1 行を返し、EXISTS が常に真になる。行の数を変えない列（列の参照・リテラル・*）だけを通す
+    for (const column of query.columns) {
+      const expression = column.expression.trim();
+      if (expression === '*' || /\.\*$/.test(expression)) continue;
+      if (parseColumnRef(expression) || parseLiteral(expression)) continue;
+      return 'EXISTS の中の SELECT の列は、列の参照・リテラル・* のみ対象です';
+    }
+  } else {
     for (const column of query.columns) {
       const ref = parseColumnRef(column.expression);
       if (!ref) return '出力列は修飾済みの単純な列参照のみ対象です';
@@ -341,6 +359,12 @@ function buildCq(query: ParsedQuery): BuildSuccess | BuildFailure {
   const builder = new CqBuilder();
   const failure = addQueryBody(builder, query, undefined, false);
   if (failure) return { ok: false, reason: failure };
+  if (builder.equalities.length + builder.constBindings.length > MAX_CQ_CONDITIONS) {
+    return { ok: false, reason: `条件が多すぎます（上限 ${MAX_CQ_CONDITIONS}）` };
+  }
+  if (builder.headKeys.length > MAX_CQ_OUTPUT_COLUMNS) {
+    return { ok: false, reason: `出力列が多すぎます（上限 ${MAX_CQ_OUTPUT_COLUMNS}）` };
+  }
 
   const constOf = new Map<string, string>();
   for (const [key, literal] of builder.constBindings) {

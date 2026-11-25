@@ -47,8 +47,8 @@ const LOCKING_CLAUSE_RE =
 const INDEX_HINT_RE =
   /\b(?:USE|FORCE|IGNORE)\s+(?:INDEX|KEY)(?:\s+FOR\s+(?:JOIN|ORDER\s+BY|GROUP\s+BY))?\s*\(/gi;
 
-const WORD_START_RE = /[A-Za-z_$\u0080-￿]/;
-const WORD_CHAR_RE = /[A-Za-z0-9_$\u0080-￿]/;
+const WORD_START_RE = /[A-Za-z_$\u0080-\uFFFF]/;
+const WORD_CHAR_RE = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 const OPERATOR_CHAR_RE = /[=<>!+\-*/%&|^~:@?]/;
 
 /** 2 文字以上の演算子。長いものから順に照らす */
@@ -207,6 +207,16 @@ function multiTableDeleteRanges(query: ParsedQuery, masked: string): Range[] {
   }));
 }
 
+/**
+ * `UNION DISTINCT` の DISTINCT。`UNION` と同じ意味（MySQL 8.4 リファレンス 15.2.18）で、演算子は parser.ts で `UNION` にそろえてある。
+ * INTERSECT と EXCEPT も同じ
+ */
+function setOperatorDistinctRanges(masked: string): Range[] {
+  return [...masked.matchAll(/\b(?:UNION|INTERSECT|EXCEPT)\s+(DISTINCT)\b/gi)].map((match) => {
+    const start = match.index + match[0].length - match[1]!.length;
+    return { start, end: start + match[1]!.length };
+  });
+}
 function tokenize(query: ParsedQuery, ignoredNames: Set<string>): string[] {
   const sql = query.rawSql;
   const masked = maskNonCode(sql);
@@ -215,6 +225,7 @@ function tokenize(query: ParsedQuery, ignoredNames: Set<string>): string[] {
     ...lockingClauseRanges(masked),
     ...topLevelOrderByRange(query, masked),
     ...multiTableDeleteRanges(query, masked),
+    ...setOperatorDistinctRanges(masked),
   ];
   const tokens: string[] = [];
   /** 直前の字句が語かどうか。直後に `.` が来たら修飾子（テーブル名・別名）なので取り消す */
@@ -298,8 +309,10 @@ function tokenize(query: ParsedQuery, ignoredNames: Set<string>): string[] {
       // 演算子は既知の組み合わせだけを 1 つの字句にする。記号の並びをまとめて切り出すと、
       // `a.x=-1` が `=-`、`a.x = -1` が `=` と `-` になり、空白の違いだけで差分になる
       const operator = MULTI_CHAR_OPERATORS.find((op) => sql.startsWith(op, i)) ?? ch;
-      // `!=` と `<>` は同じ演算子
-      tokens.push(`o:${operator === '!=' ? '<>' : operator}`);
+      // `!=` と `<>` は同じ演算子。`&&` は AND、`||` は OR と同じ（MySQL 8.4 リファレンス 14.4.3）
+      if (operator === '&&') tokens.push('w:and');
+      else if (operator === '||') tokens.push('w:or');
+      else tokens.push(`o:${operator === '!=' ? '<>' : operator}`);
       lastWasWord = false;
       i += operator.length;
       continue;

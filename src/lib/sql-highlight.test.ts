@@ -107,6 +107,18 @@ describe('sql-highlight', () => {
     expect(tokens.filter((t) => t.kind === 'number').map((t) => t.text)).toEqual(['1e5', '2', '3']);
   });
 
+  it('16 進・2 進の数値と、接頭辞の付く文字列を 1 つのリテラルとして色分けする', () => {
+    const tokens = kinds("SELECT 0x1F, 0b101, 0xZZ, b'101', X'41', N'abc', _binary'x', ab'c' FROM t");
+    expect(tokens.filter((t) => t.kind === 'number').map((t) => t.text)).toEqual(['0x1F', '0b101']);
+    expect(tokens.filter((t) => t.kind === 'string').map((t) => t.text)).toEqual([
+      "b'101'",
+      "X'41'",
+      "N'abc'",
+      "_binary'x'",
+      "'c'",
+    ]);
+  });
+
   it('ASCII 以外の文字が続く語はキーワードにしない（SELECT日付）', () => {
     const tokens = kinds('SELECT SELECT日付 FROM t');
     expect(tokens.filter((t) => t.kind === 'keyword').map((t) => t.text)).toEqual(['SELECT', 'FROM']);

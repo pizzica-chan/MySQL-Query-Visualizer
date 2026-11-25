@@ -12,6 +12,7 @@ import {
 import { joinConditionDisplayText } from './join-condition';
 import { resolveJoinLayoutSources } from './join-graph-layout';
 import { hasUnion } from './query-utils';
+import { maskNonCode, readBalancedParenEnd } from './sql-lex';
 
 export type EffectAction = 'select' | 'update' | 'delete';
 
@@ -79,9 +80,24 @@ export interface QueryEffect {
   sections: QueryEffectSection[];
 }
 
-const AGGREGATE_FUNC_PATTERN =
-  /\b(COUNT|SUM|AVG|MIN|MAX|GROUP_CONCAT|BIT_AND|BIT_OR|STD|STDDEV|VARIANCE)\s*\(/i;
-const COUNT_DISTINCT_PATTERN = /\bCOUNT\s*\(\s*DISTINCT\b/i;
+/** 集約関数の呼び出し（MySQL 8.4 リファレンス 14.19.1） */
+const AGGREGATE_CALL_RE =
+  /(?<![\w$.`\u0080-\uFFFF])(?:COUNT|SUM|AVG|MIN|MAX|GROUP_CONCAT|BIT_AND|BIT_OR|BIT_XOR|STD|STDDEV|STDDEV_POP|STDDEV_SAMP|VARIANCE|VAR_POP|VAR_SAMP|JSON_ARRAYAGG|JSON_OBJECTAGG)\s*\(/giu;
+const COUNT_DISTINCT_PATTERN = /(?<![\w$.`\u0080-\uFFFF])COUNT\s*\(\s*DISTINCT\b/iu;
+
+/**
+ * 行をグループにまとめる集約関数を含むか。OVER の付く呼び出しはウィンドウ関数で、行をまとめずに各行へ値を付けるので数えない。
+ * 文字列リテラルの中の `SUM(` は関数ではないので、maskNonCode で隠してから探す
+ */
+function hasGroupingAggregate(col: SelectColumn): boolean {
+  const masked = maskNonCode(col.expression);
+  for (const match of masked.matchAll(AGGREGATE_CALL_RE)) {
+    const callEnd = readBalancedParenEnd(masked, match.index + match[0].length - 1);
+    if (callEnd !== null && /^\s*OVER\b/i.test(masked.slice(callEnd))) continue;
+    return true;
+  }
+  return false;
+}
 
 function columnLabel(col: SelectColumn): string {
   return col.alias ?? col.expression;
@@ -191,7 +207,7 @@ function formatLimitSummary(query: ParsedQuery): string {
 function describeAggregateLinesJapanese(query: ParsedQuery): EffectLine[] {
   if (query.statementType !== 'SELECT') return [];
 
-  const aggregateCols = query.columns.filter((c) => AGGREGATE_FUNC_PATTERN.test(c.expression));
+  const aggregateCols = query.columns.filter(hasGroupingAggregate);
   const countDistinctCols = query.columns.filter((c) => COUNT_DISTINCT_PATTERN.test(c.expression));
   const lines: EffectLine[] = [];
 
@@ -228,7 +244,7 @@ function describeAggregateLines(query: ParsedQuery, mode: QueryEffectMode): Effe
     }
   }
 
-  const aggregateCols = query.columns.filter((c) => AGGREGATE_FUNC_PATTERN.test(c.expression));
+  const aggregateCols = query.columns.filter(hasGroupingAggregate);
   for (const col of aggregateCols) {
     lines.push({
       text: formatSelectColumnSql(col),
@@ -300,6 +316,8 @@ function derivedTableLabelAlreadyPresent(name: string): boolean {
 }
 
 function tablePrimaryName(table: TableRef): string {
+  // WITH で定義した CTE も、解析結果では派生テーブル（isDerived）として持つ。ほかの欄と同じく「r（CTE）」と書き、派生テーブルと書かない
+  if (table.displayName.includes('（CTE）')) return table.displayName;
   if (table.isDerived) {
     const base = table.alias || table.table;
     return derivedTableLabelAlreadyPresent(base) ? base : `${base}（派生テーブル）`;
@@ -431,6 +449,15 @@ function tableLabel(table: TableRef): string {
       : `${table.displayName}（派生テーブル）`;
   }
   return table.displayName;
+}
+
+/**
+ * 対象テーブル欄の起点のテーブル。別名を付けたテーブルは、要約や参加テーブルの欄と同じく「users（u）」と書く。
+ * 別名だけ（「u の行」）だと、要約の「users（u） の行」と別のテーブルに見える
+ */
+function scopeTableLabel(table: TableRef): string {
+  if (!table.isDerived && table.alias && table.alias !== table.table) return tablePrimaryName(table);
+  return tableLabel(table);
 }
 
 function mergeSameTypeGroups(
@@ -695,9 +722,12 @@ function conditionPhrase(node: ConditionNode, mode: QueryEffectMode): string {
       return inConditionPhrase(node);
     case 'like':
       return `パターン一致 — ${node.label}`;
+    // NOT BETWEEN は範囲の外の行を残す。否定を見ずに「範囲内」と書くと逆の意味の説明になる
     case 'between':
-      return `範囲内 — ${node.label}`;
+      return `${/\bNOT\b/i.test(node.operator ?? '') ? '範囲外' : '範囲内'} — ${node.label}`;
     default:
+      // NOT LIKE は、パーサーが LIKE とは別の比較として返す
+      if (/^NOT\s+LIKE$/i.test(node.operator ?? '')) return `パターンに一致しない — ${node.label}`;
       return node.label;
   }
 }
@@ -998,13 +1028,13 @@ function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSe
       }
     }
     if (query.joins.length === 0) {
-      lines.push({ text: `${tableLabel(query.tables[0]!)} の行` });
+      lines.push({ text: `${scopeTableLabel(query.tables[0]!)} の行` });
     } else if (mode === 'japanese') {
       const classification = classifyTablePresenceRequirement(query);
       presenceGroups = buildTablePresenceGroups(classification, mode);
 
       lines.push({
-        text: `${tableLabel(query.tables[0]!)} を起点に行の組み合わせを構成`,
+        text: `${scopeTableLabel(query.tables[0]!)} を起点に行の組み合わせを構成`,
         sourceSpan: query.tables[0]?.sourceSpan,
       });
       pushStraightJoinHintLine(lines, query);
@@ -1127,7 +1157,7 @@ function buildSummary(query: ParsedQuery, meta: (typeof ACTION_LABELS)[ParsedQue
       ? '（グループ集約後）'
       : query.statementType === 'SELECT' &&
           query.groupBy.length === 0 &&
-          query.columns.some((c) => AGGREGATE_FUNC_PATTERN.test(c.expression))
+          query.columns.some(hasGroupingAggregate)
         ? '（全体集約）'
         : '';
   const limit = formatLimitSummary(query);

@@ -12,7 +12,7 @@ const SAMPLES = [
   { id: 'select', label: 'SELECT', desc: '多段 JOIN・派生テーブル・EXISTS / IN / NOT IN', handler: 'onSelect' },
   { id: 'union', label: 'UNION', desc: 'ブランチごとの JOIN・集約・サブクエリ', handler: 'onUnion' },
   { id: 'update', label: 'UPDATE', desc: 'JOIN した 3 テーブルの列を一度に更新', handler: 'onUpdate' },
-  { id: 'delete', label: 'DELETE', desc: '2 テーブルから削除（ORDER BY・LIMIT 付き）', handler: 'onDelete' },
+  { id: 'delete', label: 'DELETE', desc: 'JOIN した 2 テーブルから一度に削除', handler: 'onDelete' },
 ] as const;
 
 const FEATURES = [

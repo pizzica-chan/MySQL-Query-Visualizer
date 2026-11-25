@@ -129,7 +129,7 @@ export const IconShieldCheck = (p: IconProps) => (
   </Icon>
 );
 
-/** 推定の印。ほぼ等しい（≈） */
+/** 比較で構文の違いが見つからないときの印。ほぼ等しい（≈）。証明済みの盾の印とは分ける */
 export const IconApprox = (p: IconProps) => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="9" strokeDasharray="3 2.4" />

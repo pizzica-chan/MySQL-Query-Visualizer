@@ -95,9 +95,38 @@ function base64UrlToBytes(text: string): Uint8Array {
   return bytes;
 }
 
-async function pipeThrough(bytes: Uint8Array, transform: GenericTransformStream): Promise<Uint8Array> {
-  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(transform);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+/**
+ * 共有リンクから読み込む中身の上限（展開したあとの大きさ）。deflate は 1000 倍近くまで縮むので、
+ * 上限が無いと、細工したリンクを開いただけで展開に数 GB のメモリを使い、タブが固まる
+ */
+export const MAX_SHARE_PAYLOAD_BYTES = 8 * 1024 * 1024;
+
+/** 変換した結果を返す。limit を超えたら読むのをやめて null を返す */
+async function pipeThrough(
+  bytes: Uint8Array,
+  transform: GenericTransformStream,
+  limit = Infinity,
+): Promise<Uint8Array | null> {
+  const reader = new Blob([bytes as BlobPart]).stream().pipeThrough(transform).getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 function canCompress(): boolean {
@@ -127,7 +156,7 @@ export async function encodeSharePayload(payload: SharePayload): Promise<string>
   if (canCompress()) {
     try {
       const compressed = await pipeThrough(json, new CompressionStream('deflate-raw'));
-      return `${SHARE_KEY}d${bytesToBase64Url(compressed)}`;
+      if (compressed) return `${SHARE_KEY}d${bytesToBase64Url(compressed)}`;
     } catch {
       // 圧縮に失敗したら圧縮なしで作る
     }
@@ -142,13 +171,14 @@ export async function decodeSharePayload(fragment: string): Promise<SharePayload
   const format = body.charAt(SHARE_KEY.length) as ShareFormat;
   const encoded = body.slice(SHARE_KEY.length + 1);
   try {
-    let bytes = base64UrlToBytes(encoded);
+    let bytes: Uint8Array | null = base64UrlToBytes(encoded);
     if (format === 'd') {
       if (!canCompress()) return null;
-      bytes = await pipeThrough(bytes, new DecompressionStream('deflate-raw'));
+      bytes = await pipeThrough(bytes, new DecompressionStream('deflate-raw'), MAX_SHARE_PAYLOAD_BYTES);
     } else if (format !== 'r') {
       return null;
     }
+    if (!bytes || bytes.byteLength > MAX_SHARE_PAYLOAD_BYTES) return null;
     return sanitizeSharePayload(JSON.parse(new TextDecoder().decode(bytes)));
   } catch {
     return null;

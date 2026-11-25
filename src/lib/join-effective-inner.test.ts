@@ -247,12 +247,45 @@ describe('join-effective-inner', () => {
           LEFT JOIN table_b b ON b.a_id = a.id
           WHERE b.col = 1
           GROUP BY a.id
-          HAVING COUNT(b.id) > 0
+          HAVING SUM(b.q) > 1
         `);
         const analysis = analysisForJoin(query, leftJoinByCondition(query, 'b.a_id')!.id);
         expect(analysis?.reasons.some((r) => r.kind === 'where')).toBe(true);
         expect(analysis?.reasons.some((r) => r.kind === 'having')).toBe(true);
         expect(analysis?.reasons.some((r) => r.kind === 'inner_join')).toBe(false);
+      });
+
+      it.each([
+        ['COUNT は未結合のグループで 0 を返す', 'GROUP BY a.id HAVING COUNT(b.id) = 0'],
+        ['COUNT(b.id) >= 0 は常に真になる','GROUP BY a.id HAVING COUNT(b.id) >= 0'],
+        ['BIT_OR は未結合のグループで 0 を返す', 'GROUP BY a.id HAVING BIT_OR(b.flags) = 0'],
+        ['GROUP BY が無いと全体が 1 つのグループになる', 'HAVING SUM(b.q) > 1'],
+        ['WITH ROLLUP の小計の行は未結合の行も含む', 'GROUP BY a.id WITH ROLLUP HAVING SUM(b.q) > 1'],
+      ])('HAVING の集約を根拠にしない: %s', (_name, tail) => {
+        const query = parseSql(`SELECT a.id FROM table_a a LEFT JOIN table_b b ON b.a_id = a.id ${tail}`);
+        expect(analyzeEffectiveInnerJoins(query)).toEqual([]);
+      });
+
+      it.each([
+        ['<> ALL は空のサブクエリで真になる', 'b.x <> ALL (SELECT y FROM t)'],
+        ['> ALL も空のサブクエリで真になる', 'b.x > ALL (SELECT y FROM t)'],
+        ['NOT (= ANY) は空のサブクエリで真になる', 'NOT (b.x = ANY (SELECT y FROM t))'],
+        ['NOT (IS NOT NULL) は IS NULL', 'NOT (b.x IS NOT NULL)'],
+        ['IS NOT TRUE は NULL で真になる', '(b.x = 1) IS NOT TRUE'],
+      ])('NULL でも真になりうる条件を根拠にしない: %s', (_name, where) => {
+        const query = parseSql(`SELECT a.id FROM table_a a LEFT JOIN table_b b ON b.a_id = a.id WHERE ${where}`);
+        expect(analyzeEffectiveInnerJoins(query)).toEqual([]);
+      });
+
+      it.each([
+        ['= ANY', 'b.x = ANY (SELECT y FROM t)', 'WHERE: b.x = ANY (SELECT 1列 FROM t)'],
+        ['NOT (<> ALL)', 'NOT (b.x <> ALL (SELECT y FROM t))', 'WHERE: NOT (b.x <> ALL (SELECT 1列 FROM t))'],
+        ['NOT (IS NULL)', 'NOT (b.x IS NULL)', 'WHERE: NOT (b.x IS NULL)'],
+        ['IS TRUE', 'b.flag IS TRUE', 'WHERE: b.flag IS TRUE'],
+        ['NOT 列', 'NOT b.flag', 'WHERE: NOT (b.flag)'],
+      ])('NULL では真にならない条件を根拠にする: %s', (_name, where, label) => {
+        const query = parseSql(`SELECT a.id FROM table_a a LEFT JOIN table_b b ON b.a_id = a.id WHERE ${where}`);
+        expect(analyzeEffectiveInnerJoins(query)[0]?.reasons).toEqual([{ kind: 'where', label }]);
       });
 
       it('BETWEEN / IN / LIKE も where 理由として検出する', () => {
@@ -449,7 +482,7 @@ describe('join-effective-inner', () => {
           FROM table_a a
           LEFT JOIN table_b b ON b.a_id = a.id
           GROUP BY a.id
-          HAVING COUNT(b.id) >= 0
+          HAVING SUM(b.q) > 1
         `);
         const withHaving = normalizeEffectiveInnerJoins(query);
         expect(withHaving.joins[0]?.type).toBe('INNER JOIN');

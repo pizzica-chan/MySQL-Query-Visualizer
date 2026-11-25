@@ -8,7 +8,8 @@ import {
 import { NO_JOIN_CONDITION, NO_JOIN_CONDITION_LABEL } from './join-condition';
 import { joinTreeSignature, type JoinCondition, type JoinKind } from './join-tree';
 import { residualTokenDiff } from './residual-token-diff';
-import { maskNonCode, readBacktickIdentifierEnd, readQuotedStringEnd } from './sql-lex';
+import { buildVerificationSql } from './verification-sql';
+import { isWordChar, maskNonCode, readBacktickIdentifierEnd, readQuotedStringEnd } from './sql-lex';
 import type {
   ConditionNode,
   CteRef,
@@ -66,8 +67,11 @@ export interface QueryResultDiff {
   /**
    * 合接クエリ断片に収まる場合の等価性証明。
    * 構文差分があっても証明できれば結果セットは同じと言い切れる。証明できないときは not-proven。
+   * 構文に差分が無いときも証明を試す。画面の緑の「同じ」は、証明できたときだけ出す
    */
   equivalenceProof: CqEquivalenceResult;
+  /** 実データで結果を突き合わせる確認用の SQL（verification-sql.ts）。両方が SELECT のときだけ */
+  verificationSql: string | null;
 }
 
 export interface ReviewHint {
@@ -77,21 +81,20 @@ export interface ReviewHint {
 }
 
 export interface ResultDiffSummary {
-  /** サマリー枠の色 */
-  tone: 'same' | 'order-only' | 'review-needed' | 'different';
+  /**
+   * サマリー枠の色。same（緑）は等価性を証明できたときだけ。
+   * 構文の違いが見つからないだけのときは no-diff（色を付けない）にし、安全の根拠として読ませない
+   */
+  tone: 'same' | 'no-diff' | 'order-only' | 'review-needed' | 'different';
   /** サマリー見出し */
   title: string;
   resultSet: {
-    status: 'same' | 'different' | 'uncertain';
+    /** same は証明済み、no-diff は構文の違いが見つからない（結果が同じとは限らない） */
+    status: 'same' | 'no-diff' | 'different' | 'uncertain';
     label: string;
-    /**
-     * status が same のときの根拠。proven は合接クエリ範囲での等価証明、
-     * syntax-match は構文カテゴリがすべて一致したことによる推定。
-     * 画面ではこの 2 つを色とバッジで分ける（推定の「同じ」を証明と同じ強さで読ませない）
-     */
-    basis?: 'proven' | 'syntax-match';
   };
-  order: { status: 'same' | 'different' | 'not-specified'; label: string };
+  /** ORDER BY の比較。構文で比べるだけなので、一致しても「同じ」ではなく no-diff（違いなし）と書く */
+  order: { status: 'no-diff' | 'different' | 'not-specified'; label: string };
   /** LIMIT+ORDER BY など、サマリーだけでは分かりにくいときの補足 */
   note?: string;
   /** 実質 INNER JOIN により同等とみなしたときの軽い補足 */
@@ -148,8 +151,21 @@ function buildSummaryBody(
     }
     return 'JOIN の記述順などの構文差は、下のカテゴリ一覧には出ない場合があります。ORDER BY がない LIMIT の返る行は実行依存です。';
   }
+  // 並び順（ORDER BY）だけが違うときは、「構文の違いは無い」と書かない。並び順の行の「異なる」と食い違う
+  const orderDiffers = diff.categories.some((c) => c.id === 'orderBy' && c.status === 'different');
   if (proofStatus === 'proven-equivalent') {
-    return '構文には差分がありますが、書き換え後も返る行の集合が変わらないことを構造から証明しました。';
+    if (!diff.equalForResultSet) {
+      return '構文には差分がありますが、書き換え後も返る行の集合が変わらないことを構造から証明しました。';
+    }
+    return orderDiffers
+      ? '並び順（ORDER BY）のほかに構文の違いは無く、返る行の集合が変わらないことも構造から証明しました。'
+      : '構文の違いは無く、返る行の集合が変わらないことも構造から証明しました。';
+  }
+  if (diff.equalForResultSet) {
+    const found = orderDiffers
+      ? '並び順（ORDER BY）は違いますが、出力列・結合・条件などには、構文の違いは見つかりませんでした。'
+      : '出力列・結合・条件などを構文で比べ、違いは見つかりませんでした。';
+    return `${found}構文の比較では、関数の細かな仕様や型の変換による違いを見落とすことがあるので、結果が同じとは限りません。下の確認用の SQL で、実データの結果を突き合わせてください。`;
   }
   if (proofStatus === 'proven-equivalent-set-only') {
     return '重複を除いた行の集合が一致することは証明しました。重複行の個数までは一致しない可能性があります。';
@@ -178,23 +194,20 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
   } else if (orderDiffers) {
     order = { status: 'different', label: '異なる' };
   } else {
-    order = { status: 'same', label: '同じ' };
+    order = { status: 'no-diff', label: '違いなし' };
   }
 
   let resultSetStatus: ResultDiffSummary['resultSet']['status'];
   let resultSetLabel: string;
-  let resultSetBasis: ResultDiffSummary['resultSet']['basis'];
   if (limitWithoutOrderCaution) {
     resultSetStatus = 'uncertain';
     resultSetLabel = '要確認';
-  } else if (diff.equalForResultSet) {
-    resultSetStatus = 'same';
-    resultSetLabel = '同じ';
-    resultSetBasis = 'syntax-match';
   } else if (proven) {
     resultSetStatus = 'same';
     resultSetLabel = '同じ（証明済み）';
-    resultSetBasis = 'proven';
+  } else if (diff.equalForResultSet) {
+    resultSetStatus = 'no-diff';
+    resultSetLabel = '構文の違いなし';
   } else if (provenSetOnly) {
     resultSetStatus = 'uncertain';
     resultSetLabel = '重複を除けば同じ';
@@ -206,10 +219,10 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
   let tone: ResultDiffSummary['tone'];
   if (limitWithoutOrderCaution) {
     tone = 'review-needed';
-  } else if (diff.equalForResultSet) {
-    tone = diff.equalIncludingOrder ? 'same' : 'order-only';
   } else if (proven) {
     tone = orderDiffers ? 'order-only' : 'same';
+  } else if (diff.equalForResultSet) {
+    tone = diff.equalIncludingOrder ? 'no-diff' : 'order-only';
   } else if (provenSetOnly || hints.length > 0) {
     tone = 'review-needed';
   } else {
@@ -225,6 +238,8 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     title = '要確認（重複行の扱いのみ差分）';
   } else if (tone === 'review-needed') {
     title = '要確認（構文差分あり）';
+  } else if (tone === 'no-diff') {
+    title = '構文の違いは見つかりませんでした';
   } else {
     title = '比較結果';
   }
@@ -236,16 +251,21 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
   }
 
   const effectiveInnerNote = diff.matchedViaEffectiveInner
-    ? 'JOIN 種別は異なりますが、WHERE 等により実質 INNER JOIN 相当で、結果セットは同じと推定しています。'
+    ? 'JOIN 種別は異なりますが、WHERE 等により実質 INNER JOIN 相当とみなし、JOIN 種別の違いを差分にしていません。'
     : undefined;
 
   const limitWithoutOrderWarning = diff.limitWithoutOrderActive
     ? 'ORDER BY がない状態で LIMIT / OFFSET があります。構文差分がなくても、返る行は実行計画や結合順に依存して変わり得ます。問題ないと判断せず、実データで確認してください。'
     : undefined;
 
+  // 構文に違いが無いときは判定を「構文の違いなし」のままにするので、「重複を除けば同じ」の証明の補足も出さない
   const proofNote =
-    proven || provenSetOnly
-      ? [proof.reason, CQ_SCOPE_NOTE].filter(Boolean).join(' ')
+    proven || (provenSetOnly && !diff.equalForResultSet)
+      ? [proof.reason, CQ_SCOPE_NOTE]
+          .filter((text): text is string => Boolean(text))
+          // 証明の理由は句点で終わらないので、補足とつなぐ前に句点を足す
+          .map((text) => (/[。．.]$/.test(text) ? text : `${text}。`))
+          .join('')
       : undefined;
 
   const body = buildSummaryBody(diff, tone, limitWithoutOrderCaution, proof.status);
@@ -256,7 +276,6 @@ export function buildResultDiffSummary(diff: QueryResultDiff): ResultDiffSummary
     resultSet: {
       status: resultSetStatus,
       label: resultSetLabel,
-      ...(resultSetBasis ? { basis: resultSetBasis } : {}),
     },
     order,
     note,
@@ -285,6 +304,19 @@ const CATEGORY_LABELS: Record<DiffCategoryId, string> = {
   deleteTargets: '削除対象',
   other: 'その他の記述',
 };
+
+/** start から始まる語が `語.語(` のスキーマなら、その語の終わりを返す。そうでなければ null */
+function qualifiedFunctionSchemaEnd(src: string, start: number): number | null {
+  let end = start;
+  while (end < src.length && isWordChar(src[end])) end += 1;
+  if (src[end] !== '.') return null;
+  let k = end + 1;
+  const nameStart = k;
+  while (k < src.length && isWordChar(src[k])) k += 1;
+  if (k === nameStart) return null;
+  while (k < src.length && /\s/.test(src[k]!)) k += 1;
+  return src[k] === '(' ? end : null;
+}
 
 /**
  * 比較用に式を正規化する。空白を 1 つにまとめ、識別子とキーワードを小文字にし、
@@ -319,6 +351,16 @@ export function normalizeExpr(text: string | undefined | null): string {
       if (!out.endsWith(' ')) out += ' ';
       i += 1;
       continue;
+    }
+    // `db1.f(x)` のスキーマ（データベース名）は小文字にしない。Unix では DB1 と db1 は別のデータベースになる
+    // （MySQL 8.4 リファレンス 11.2.3）。テーブル名も同じ理由で大文字小文字を区別して比べている
+    if (isWordChar(ch) && !isWordChar(src[i - 1]) && src[i - 1] !== '.') {
+      const schemaEnd = qualifiedFunctionSchemaEnd(src, i);
+      if (schemaEnd !== null) {
+        out += src.slice(i, schemaEnd);
+        i = schemaEnd;
+        continue;
+      }
     }
     // `!=` と `<>` は同じ演算子
     if (ch === '!' && src[i + 1] === '=') {
@@ -1584,10 +1626,9 @@ export function compareQueryResults(
     );
   }
 
-  // エイリアス解決前の生クエリで判定する（自己結合を潰さないため）
-  const equivalenceProof: CqEquivalenceResult = equalForResultSet
-    ? { status: 'not-proven', reason: '構文差分がないため証明は不要です' }
-    : proveCqEquivalence(queryA, queryB);
+  // エイリアス解決前の生クエリで判定する（自己結合を潰さないため）。構文に差分が無いときも試す。
+  // 緑の「同じ」は証明できたときだけ出すので、構文が一致しただけでは「同じ」と言わない
+  const equivalenceProof: CqEquivalenceResult = proveCqEquivalence(queryA, queryB);
   const proven = equivalenceProof.status !== 'not-proven';
 
   let reviewHints =
@@ -1626,6 +1667,7 @@ export function compareQueryResults(
     matchedViaEffectiveInner,
     limitWithoutOrderActive,
     equivalenceProof,
+    verificationSql: buildVerificationSql(queryA, queryB),
   };
 }
 

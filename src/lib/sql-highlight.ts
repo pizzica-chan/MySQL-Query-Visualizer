@@ -120,6 +120,10 @@ const KEYWORD_PATTERNS = KEYWORDS.map(
 );
 
 const NUMBER_PATTERN = /(\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
+/** 0x1F（16 進）と 0b101（2 進）。数字で始まる識別子と区別するため、後ろに語の文字が続かないものだけ */
+const PREFIXED_NUMBER_PATTERN = /0x[0-9a-f]+(?![\w$\u0080-\uFFFF])|0b[01]+(?![\w$\u0080-\uFFFF])/iy;
+/** b'101'・X'41'・N'abc'・_binary'x' の、引用符の直前の接頭辞。接頭辞も文字列の色にする */
+const STRING_PREFIX_PATTERN = /(?:[bxn]|_[a-z0-9]+)(?=')/iy;
 
 function matchKeyword(text: string, pos: number): string | null {
   // 語の途中（直前が英数字）からはキーワードにしない
@@ -207,6 +211,23 @@ export function tokenizeSql(sql: string): SqlHighlightToken[] {
     if (ch === "'" || ch === '"') {
       pushToken(tokens, 'string', readQuotedString(sql, i, ch));
       i += tokens[tokens.length - 1].text.length;
+      continue;
+    }
+
+    STRING_PREFIX_PATTERN.lastIndex = i;
+    const stringPrefix = STRING_PREFIX_PATTERN.exec(sql)?.[0];
+    if (stringPrefix) {
+      const literal = stringPrefix + readQuotedString(sql, i + stringPrefix.length, "'");
+      pushToken(tokens, 'string', literal);
+      i += literal.length;
+      continue;
+    }
+
+    PREFIXED_NUMBER_PATTERN.lastIndex = i;
+    const prefixedNumber = PREFIXED_NUMBER_PATTERN.exec(sql)?.[0];
+    if (prefixedNumber && !(ch === '0' && sql[i - 1] === '.')) {
+      pushToken(tokens, 'number', prefixedNumber);
+      i += prefixedNumber.length;
       continue;
     }
 

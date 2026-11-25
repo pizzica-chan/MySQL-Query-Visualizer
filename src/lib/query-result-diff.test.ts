@@ -196,7 +196,8 @@ describe('compareQueryResults', () => {
 
     const summary = buildResultDiffSummary(diff);
     expect(summary.tone).toBe('order-only');
-    expect(summary.resultSet.label).toBe('同じ');
+    // 構文の比較なので、結果セットは「同じ」ではなく「構文の違いなし」
+    expect(summary.resultSet.label).toBe('構文の違いなし');
     expect(summary.order.label).toBe('異なる');
 
     const parts = partitionDiffCategories(diff.categories);
@@ -212,9 +213,9 @@ describe('compareQueryResults', () => {
     expect(diff.equalIncludingOrder).toBe(true);
 
     const summary = buildResultDiffSummary(diff);
-    expect(summary.tone).toBe('same');
-    expect(summary.resultSet.label).toBe('同じ');
-    expect(summary.order.label).toBe('同じ');
+    expect(summary.tone).toBe('no-diff');
+    expect(summary.resultSet.label).toBe('構文の違いなし');
+    expect(summary.order.label).toBe('違いなし');
   });
 
   it('ORDER BY なし同士は並び順が指定なし', () => {
@@ -675,7 +676,7 @@ WHERE o.status = 'paid' AND o.total >= 1000`);
     expect(diff.equalForResultSet).toBe(true);
     expect(diff.matchedViaEffectiveInner).toBe(true);
     const summary = buildResultDiffSummary(diff);
-    expect(summary.tone).toBe('same');
+    expect(summary.tone).toBe('no-diff');
     expect(summary.effectiveInnerNote).toContain('実質 INNER JOIN');
     expect(diff.reviewHints).toHaveLength(0);
   });
@@ -699,7 +700,7 @@ SELECT id, total FROM paid`);
     expect(diff.equalForResultSet).toBe(true);
     expect(diff.matchedViaEffectiveInner).toBe(true);
     const summary = buildResultDiffSummary(diff);
-    expect(summary.tone).toBe('same');
+    expect(summary.tone).toBe('no-diff');
     expect(summary.effectiveInnerNote).toContain('実質 INNER JOIN');
   });
 

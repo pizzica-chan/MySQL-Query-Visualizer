@@ -82,7 +82,8 @@ describe('parseMySqlQuery', () => {
       expect(result.query.joins).toHaveLength(2);
       expect(result.query.setClauses).toHaveLength(4);
       expect(result.query.where?.type).toBe('and');
-      expect(result.query.limit).toBe('500');
+      // 複数のテーブルを使う UPDATE には ORDER BY と LIMIT を書けない（MySQL 8.4 リファレンス 15.2.17）
+      expect(result.query.limit).toBeUndefined();
       expect(result.query.setClauses?.some((s) => s.table === 'u')).toBe(true);
       expect(result.query.setClauses?.some((s) => s.table === 'oi')).toBe(true);
 
@@ -102,7 +103,8 @@ describe('parseMySqlQuery', () => {
       expect(result.query.deleteTargets).toHaveLength(2);
       expect(result.query.deleteTargets?.map((d) => d.name).sort().join(',')).toBe('oi,u');
       expect(result.query.where?.type).toBe('and');
-      expect(result.query.limit).toBe('200');
+      // 複数のテーブルを使う DELETE には ORDER BY と LIMIT を書けない（MySQL 8.4 リファレンス 15.2.2）
+      expect(result.query.limit).toBeUndefined();
 
       const wTypes = collectConditionTypes(result.query.where);
       expect(wTypes).toContain('or');

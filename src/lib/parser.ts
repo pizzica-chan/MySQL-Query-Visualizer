@@ -5,7 +5,7 @@ import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { NO_JOIN_CONDITION, formatJoinConditionLabel } from './join-condition';
 import { findMisboundLogicalOperator, fixLogicalOperatorPrecedence } from './logical-precedence';
-import { findUnclosedLiteral, isWordChar } from './sql-lex';
+import { findExecutableComment, findUnclosedLiteral, isWordChar } from './sql-lex';
 import {
   maskNonCode,
   preprocessSqlForParser,
@@ -49,6 +49,8 @@ let straightJoinHintOriginalSpans: SourceSpan[] = [];
  * （collectEmbeddedSubqueries がクエリごとに差し替える）
  */
 let embeddedSubqueryAsts: any[] = [];
+/** 前処理で置き換えた関数名（大文字の仮の名前 → 元の名前） */
+let renamedFunctions = new Map<string, string>();
 
 function nextId(prefix: string): string {
   nodeCounter += 1;
@@ -62,6 +64,7 @@ function resetIds(): void {
   straightJoinHintSelectStarts = [];
   straightJoinHintOriginalSpans = [];
   embeddedSubqueryAsts = [];
+  renamedFunctions = new Map();
 }
 
 function noteEmbeddedSubquery(ast: any): void {
@@ -105,7 +108,21 @@ function toArray<T>(value: T | T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/**
+ * 関数名を大文字で返す。前処理で仮の名前に置き換えた関数（STD など）は、元の名前に戻す。
+ * `db.f(x)` のスキーマは、パーサーが名前とは別の schema に入れる。落とすと、別のデータベースの関数
+ * （db1.f と db2.f）が同じ関数に見え、比較でも同じとして扱ってしまう。データベース名は Unix では大文字小文字を
+ * 区別する（MySQL 8.4 リファレンス 11.2.3）ので、スキーマは書いたとおりに残す
+ */
 function resolveFunctionName(nameField: unknown): string {
+  const name = readFunctionName(nameField);
+  const restored = renamedFunctions.get(name) ?? name;
+  const schema =
+    nameField && typeof nameField === 'object' ? formatIdentifier((nameField as { schema?: unknown }).schema) : '';
+  return schema ? `${schema}.${restored}` : restored;
+}
+
+function readFunctionName(nameField: unknown): string {
   if (typeof nameField === 'string') return nameField.toUpperCase();
   if (!nameField || typeof nameField !== 'object') return '';
 
@@ -136,17 +153,17 @@ function extractFunctionArgs(node: any): any[] {
   return toArray(raw);
 }
 
-function unescapeSqlSingleQuotedValue(value: string): string {
-  return value.replace(/''/g, "'");
-}
-
+/**
+ * 文字列リテラルを引用符で囲んで書く。パーサーは引用符の中身を、エスケープ（`\'`、`''`、`\\`）も含めて
+ * 書いたとおりに value に入れるので、エスケープし直さずにそのまま囲む。エスケープし直すと、`'a\'b'` が
+ * `'a\''b'`（文字列として閉じない）に、`"a""b"` が `"a\"\"b"`（値が a""b）になり、別の値に見える
+ */
 function formatSingleQuotedString(value: string): string {
-  const unescaped = unescapeSqlSingleQuotedValue(value);
-  return `'${unescaped.replace(/'/g, "''")}'`;
+  return `'${value}'`;
 }
 
 function formatDoubleQuotedString(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${value}"`;
 }
 
 function formatQuotedLiteral(node: any): string {
@@ -197,13 +214,21 @@ function formatEscapeClause(node: any): string {
  * 関数の引数を並べる。`TRIM(BOTH ' ' FROM name)` のようにキーワードが引数列に混ざる形があり、
  * そこへカンマを入れると元の SQL と違う式に見えてしまう
  */
-function formatFunctionArgs(args: any[]): string {
+/**
+ * 引数にキーワードを取るが、キーワードのあとも普通の引数と同じくカンマで区切る関数。
+ * `TIMESTAMPDIFF(DAY, a, b)` を `TIMESTAMPDIFF(DAY a, b)` と書かないようにする
+ */
+const COMMA_SEPARATED_KEYWORD_ARG_FUNCTIONS = new Set(['TIMESTAMPDIFF', 'TIMESTAMPADD', 'GET_FORMAT']);
+
+function formatFunctionArgs(args: any[], functionName = ''): string {
+  const commaOnly = COMMA_SEPARATED_KEYWORD_ARG_FUNCTIONS.has(functionName);
   let out = '';
   let prevWasKeyword = false;
   args.forEach((arg: any, index: number) => {
     const isKeyword = arg?.type === 'origin';
-    const text = exprToString(arg);
-    if (index > 0) out += isKeyword || prevWasKeyword ? ' ' : ', ';
+    // キーワード（LEADING・FROM・DAY など）は、ほかのキーワードと同じく大文字で書く。パーサーは書いたとおりに持つ
+    const text = isKeyword ? exprToString(arg).toUpperCase() : exprToString(arg);
+    if (index > 0) out += !commaOnly && (isKeyword || prevWasKeyword) ? ' ' : ', ';
     out += text;
     prevWasKeyword = isKeyword;
   });
@@ -283,8 +308,10 @@ function exprToStringCore(node: any): string {
       return parts.join('.') || '*';
     }
     case 'number':
-    case 'bool':
       return String(node.value);
+    case 'bool':
+      // パーサーは true / false を JavaScript の真偽値で持つ。ほかのキーワードと同じく大文字で書く
+      return String(node.value).toUpperCase();
     case 'string':
     case 'single_quote_string':
     case 'double_quote_string':
@@ -342,7 +369,9 @@ function exprToStringCore(node: any): string {
       return `INTERVAL ${exprToString(node.expr)} ${String(node.unit ?? '').toUpperCase()}`.trim();
     case 'function': {
       const fnName = resolveFunctionName(node.name);
-      const args = formatFunctionArgs(extractFunctionArgs(node));
+      const args = formatFunctionArgs(extractFunctionArgs(node), fnName);
+      // `a > ALL (SELECT …)` や `EXISTS (SELECT …)`。サブクエリの要約は括弧付きなので、関数の括弧を重ねない
+      if (/^(?:ALL|ANY|SOME|EXISTS)$/.test(fnName) && /^\(SELECT .*\)$/.test(args)) return `${fnName} ${args}`;
       return `${fnName}(${args})${formatOverClause(node.over)}`;
     }
     case 'aggr_func': {
@@ -385,6 +414,12 @@ function exprToStringCore(node: any): string {
     case 'cast': {
       return `CAST(${exprToString(node.expr)} AS ${formatCastTarget(node.target)})`;
     }
+    case 'datatype':
+      // `CONVERT(a, CHAR(3))` の変換先の型。素通しすると AST の JSON が表示に出る
+      return formatCastTarget(node);
+    case 'assign':
+      // `@x := a`。素通しすると AST の JSON が表示に出る
+      return `${exprToString(node.left)} ${node.symbol ?? ':='} ${exprToString(node.right)}`;
     case 'subquery': {
       const inner = node.subquery?.ast ?? node.subquery ?? node.ast;
       if (inner?.type === 'select') {
@@ -438,9 +473,13 @@ function summarizeSelect(ast: any): string {
   return `(SELECT ${cols}列 FROM ${first.table ?? '?'})`;
 }
 
+/**
+ * 集合演算子を大文字の 1 つの形にそろえる。`UNION DISTINCT` は `UNION` と同じ意味（重複を除く。MySQL 8.4 リファレンス 15.2.18）なので、
+ * `UNION` にそろえる。そろえないと、作用説明で UNION と UNION ALL が混ざったときの説明になり、比較でも違う演算子として扱う
+ */
 function normalizeSetOp(op: string | undefined): string {
   if (!op) return 'UNION';
-  return op.replace(/\s+/g, ' ').trim().toUpperCase();
+  return op.replace(/\s+/g, ' ').trim().toUpperCase().replace(/^(UNION|INTERSECT|EXCEPT) DISTINCT$/, '$1');
 }
 
 function collectUnionBranches(root: any): Array<{ ast: any; unionOp?: string }> {
@@ -689,7 +728,10 @@ function parseConditionTree(node: any): ConditionNode | undefined {
 
   switch (node.type) {
     case 'binary_expr': {
-      const op = node.operator?.toUpperCase?.() ?? node.operator;
+      const rawOp = node.operator?.toUpperCase?.() ?? node.operator;
+      // `&&` は AND、`||` は OR と同じ意味（MySQL 8.4 リファレンス 14.4.3）。比較として 1 つの条件にまとめない。
+      // 括弧の無い `||` は parseMySqlQuery がエラーにするので、ここに来るのは `(a = 1) || (b = 2)` の形だけ
+      const op = rawOp === '&&' ? 'AND' : rawOp === '||' ? 'OR' : rawOp;
 
       if (op === 'AND' || op === 'OR') {
         const children: ConditionNode[] = [];
@@ -1210,9 +1252,24 @@ function parseSelectQuery(ast: any, rawSql: string): ParsedQuery {
   main.rawSql = rawSql;
 
   if (branches.length > 1) {
-    main.unionTail = parseUnionTail(ast, branches[branches.length - 1]!.ast);
+    const lastAst = branches[branches.length - 1]!.ast;
+    main.unionTail = parseUnionTail(ast, lastAst);
+    // 括弧の無い最後のブランチの ORDER BY / LIMIT は UNION 全体のもの。ブランチにも残すと、
+    // 作用説明でそのブランチだけが「最大 3 行」のように絞られて見える
+    const tailFromLastBranch = Boolean(main.unionTail) && !ast._orderby && !ast._limit;
     main.unionBranches = branches.map((branch, index) => {
-      const branchQuery = applyCtesToQuery(buildSelectParsed(branch.ast), ctes);
+      let branchQuery = applyCtesToQuery(buildSelectParsed(branch.ast), ctes);
+      if (tailFromLastBranch && branch.ast === lastAst) {
+        branchQuery = {
+          ...branchQuery,
+          orderBy: [],
+          limit: undefined,
+          limitSpan: undefined,
+          offset: undefined,
+          offsetSpan: undefined,
+          limitCommaOffset: undefined,
+        };
+      }
       const sourceSpan = toSourceSpan(branch.ast?.loc);
       return {
         id: nextId('union'),
@@ -1447,6 +1504,21 @@ export function parseMySqlQuery(sql: string): ParseResult {
   if (!trimmed) {
     return { success: false, error: { message: 'SQLを入力してください' } };
   }
+  // MySQL は `/*! … */` の中身を SQL として実行するが、SQL パーサーはコメントとして読み飛ばす。
+  // そのまま解析すると、中に書いた WHERE などが無い文として説明し、比較でもコメントの無い SQL と同じと判定してしまう
+  const executable = findExecutableComment(sql);
+  if (executable) {
+    const at = lineColumnAt(sql, executable.start);
+    const span = { start: executable.start, end: Math.min(executable.start + 3, executable.end) };
+    return {
+      success: false,
+      error: {
+        message: `${at.line} 行 ${at.column} 列の「/*!」のコメントは、MySQL では中身が SQL として実行されます。中身をコメントの外に書いてください`,
+        position: span.start,
+        span,
+      },
+    };
+  }
 
   // 位置（sourceSpan）は呼び出し元が渡した sql 上のオフセットで返す。
   // 解析は前後の空白を取り除いた文字列で行うので、先頭の空白の分だけ後ろへずらす。
@@ -1463,8 +1535,10 @@ export function parseMySqlQuery(sql: string): ParseResult {
       straightJoinHintSelectStarts: straightStarts,
       straightJoinHintOriginalSpans: straightSpans,
       processedToOriginal,
+      renamedFunctions: renamed,
     } = preprocessSqlForParser(trimmed);
     processedToInputForError = processedToOriginal.map(toInputOffset);
+    renamedFunctions = renamed;
 
     naturalJoinStarts = starts;
     straightJoinHintSelectStarts = straightStarts;
@@ -1530,13 +1604,26 @@ export function parseMySqlQuery(sql: string): ParseResult {
     }
 
     if (first.type === 'update') {
-      const query = parseUpdateAst(first, sql);
-      return { success: true, query: remap(query) };
+      const query = remap(parseUpdateAst(first, sql));
+      return multiTableOrderLimitError(query, sql) ?? { success: true, query };
     }
 
     if (first.type === 'delete') {
       const query = parseDeleteAst(first, sql);
-      return { success: true, query: remap(query) };
+      // `DELETE FROM u JOIN x ON …` や `DELETE FROM u, x` は MySQL では構文エラー（複数のテーブルを使う DELETE は、
+      // 削除するテーブルを DELETE の直後か USING の前に書く。MySQL 8.4 リファレンス 15.2.2）。
+      // SQL パーサーは削除対象の無い文として読むので、そのまま表示すると何を削除するのかが出ない
+      if (!query.deleteTargets?.length) {
+        return {
+          success: false,
+          error: {
+            message:
+              'DELETE FROM の後ろに複数のテーブルや JOIN を書くときは、削除するテーブルを指定してください（例: DELETE u FROM u JOIN x ON … または DELETE FROM u USING u JOIN x ON …）',
+          },
+        };
+      }
+      const mapped = remap(query);
+      return multiTableOrderLimitError(mapped, sql) ?? { success: true, query: mapped };
     }
 
     return {
@@ -1605,6 +1692,25 @@ export function parseMySqlQuery(sql: string): ParseResult {
   }
 }
 
+/**
+ * 複数のテーブルを使う UPDATE と DELETE には、ORDER BY と LIMIT を書けない（MySQL 8.4 リファレンス 15.2.17、15.2.2）。
+ * SQL パーサーはそのまま読むので、MySQL では実行できない文を「最大 500 行を更新」のように説明してしまう。
+ * テーブルが 1 つの `DELETE t FROM t … LIMIT 1` は、エラーになるかをリファレンスで確かめられないので、そのまま通す
+ */
+function multiTableOrderLimitError(query: ParsedQuery, sql: string): ParseResult | null {
+  if (query.tables.length < 2) return null;
+  const clause = query.orderBy.length > 0 ? 'ORDER BY' : query.limit ? 'LIMIT' : null;
+  if (!clause) return null;
+  const span = clause === 'ORDER BY' ? query.orderBy[0]?.sourceSpan : query.limitSpan;
+  const at = span ? lineColumnAt(sql, span.start) : null;
+  return {
+    success: false,
+    error: {
+      message: `${at ? `${at.line} 行 ${at.column} 列: ` : ''}複数のテーブルを使う ${query.statementType} には、ORDER BY と LIMIT を書けません。MySQL では実行するとエラーになります`,
+      ...(span ? { position: span.start, span } : {}),
+    },
+  };
+}
 /** span の始まりが語（識別子・キーワード）の文字なら、終わりを語の終わりまで広げる */
 function extendSpanToWordEnd(sql: string, span: SourceSpan): SourceSpan {
   if (!isWordChar(sql[span.start])) return span;
@@ -1794,9 +1900,7 @@ WHERE u.last_login_at < '2023-01-01'
     o.status IN ('pending', 'hold')
     OR u.email LIKE '%@deprecated.example'
   )
-  AND oi.quantity BETWEEN 1 AND 100
-ORDER BY o.updated_at DESC
-LIMIT 500;`;
+  AND oi.quantity BETWEEN 1 AND 100;`;
 
 export const DELETE_SAMPLE_SQL = `DELETE u, oi
 FROM users u
@@ -1808,9 +1912,7 @@ WHERE u.status = 'deleted'
     o.total_amount = 0
     OR oi.quantity IS NULL
   )
-  AND u.email NOT LIKE '%@keep.example'
-ORDER BY o.created_at ASC
-LIMIT 200;`;
+  AND u.email NOT LIKE '%@keep.example';`;
 
 export const UNION_SAMPLE_SQL = `SELECT
   u.id,

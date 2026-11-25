@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { DiffCategoryResult } from '../lib/query-result-diff';
 import { IconAlert, IconApprox, IconDiff, IconShieldCheck } from './Icons';
 import {
@@ -49,6 +50,45 @@ function SameCategoryList({ categories }: { categories: DiffCategoryResult[] }) 
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * 実データで結果を突き合わせる確認用の SQL。コピーして利用者が自分の DB で実行する（このアプリはどこにも送らない）。
+ * 構文の違いが見つからないだけのときや要確認のときは、最初から開いておく
+ */
+function VerificationSqlSection({ sql, open }: { sql: string; open: boolean }) {
+  // どの SQL をコピーしたときの知らせかも持つ。SQL を書き換えたあとに「コピーしました」を残すと、今の SQL をコピーしたように読める
+  const [copyResult, setCopyResult] = useState<{ sql: string; message: string } | null>(null);
+  const copyStatus = copyResult?.sql === sql ? copyResult.message : null;
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopyResult({ sql, message: 'コピーしました' });
+    } catch {
+      // クリップボードを使えない環境では、下の SQL を選んで手でコピーしてもらう
+      setCopyResult({ sql, message: 'コピーできませんでした。SQL を選んでコピーしてください' });
+    }
+  };
+  return (
+    <details className="result-diff-section result-diff-verify" open={open}>
+      <summary className="result-diff-section-title">確認用の SQL（実データで結果を突き合わせる）</summary>
+      <p className="result-diff-verify-text">
+        2 本の SQL の結果を、EXCEPT ALL で突き合わせます。両方とも 0 行なら、実行したときのデータでは同じ行が同じ数だけ返っています（並び順は比べません）。
+        ほかのデータでも同じになるとは限りません。値は列の照合順序で比べるので、大文字と小文字を区別しない照合順序では、'abc' と 'ABC' のような値を同じとみなすことがあります。MySQL 8.0.31 以降で実行できます。
+      </p>
+      <div className="result-diff-verify-actions">
+        <button type="button" className="btn btn--ghost" onClick={handleCopy}>
+          SQL をコピー
+        </button>
+        <span className="result-diff-verify-status" role="status">
+          {copyStatus}
+        </span>
+      </div>
+      <pre className="result-diff-verify-sql">
+        <code>{sql}</code>
+      </pre>
+    </details>
   );
 }
 
@@ -110,16 +150,15 @@ export function QueryResultDiffPanel({
     diff.categories,
   );
   const hasAnySame = resultSetSame.length > 0 || orderSame.length > 0;
-  const basis = summary.resultSet.status === 'same' ? summary.resultSet.basis : undefined;
-  // 判定の見出しのアイコン。証明済み・推定・要確認・異なるで形を変え、色だけに頼らずに見分けられるようにする
+  // 判定の見出しのアイコン。証明済み・構文の違いなし・要確認・異なるで形を変え、色だけに頼らずに見分けられるようにする
   const SummaryIcon =
     summary.tone === 'different'
       ? IconDiff
       : summary.tone === 'same'
-        ? basis === 'proven'
-          ? IconShieldCheck
-          : IconApprox
-        : IconAlert;
+        ? IconShieldCheck
+        : summary.tone === 'no-diff'
+          ? IconApprox
+          : IconAlert;
   const proofStatus = diff.equivalenceProof?.status ?? 'not-proven';
   const syntaxDiffTitle =
     proofStatus === 'proven-equivalent'
@@ -130,12 +169,7 @@ export function QueryResultDiffPanel({
 
   return (
     <div className="result-diff">
-      <div
-        className={`result-diff-summary result-diff-summary--${summary.tone}${
-          basis ? ` result-diff-summary--basis-${basis}` : ''
-        }`}
-        role="status"
-      >
+      <div className={`result-diff-summary result-diff-summary--${summary.tone}`} role="status">
         <h2 className="result-diff-summary-title">
           <span className="result-diff-summary-icon">
             <SummaryIcon size={20} />
@@ -145,15 +179,8 @@ export function QueryResultDiffPanel({
         <dl className="result-diff-summary-rows">
           <div className="result-diff-summary-row">
             <dt className="result-diff-summary-row-label">結果セット</dt>
-            <dd
-              className={`result-diff-summary-row-value result-diff-summary-row-value--${summary.resultSet.status}${
-                basis ? ` result-diff-summary-row-value--${basis}` : ''
-              }`}
-            >
+            <dd className={`result-diff-summary-row-value result-diff-summary-row-value--${summary.resultSet.status}`}>
               {summary.resultSet.label}
-              {basis === 'syntax-match' && (
-                <span className="result-diff-basis result-diff-basis--syntax-match">推定（構文が一致）</span>
-              )}
             </dd>
           </div>
           <div className="result-diff-summary-row">
@@ -165,11 +192,7 @@ export function QueryResultDiffPanel({
             </dd>
           </div>
         </dl>
-        {basis === 'syntax-match' && (
-          <p className="result-diff-basis-note">
-            構文の各カテゴリ（出力列・結合・条件など）が一致したことからの推定です。等価性を証明したものではありません。
-          </p>
-        )}
+
         <p className="result-diff-summary-body">
           {summary.body}
           {summary.note ? ` ${summary.note}` : ''}
@@ -184,6 +207,10 @@ export function QueryResultDiffPanel({
           </p>
         )}
       </div>
+
+      {diff.verificationSql && (
+        <VerificationSqlSection sql={diff.verificationSql} open={summary.tone !== 'same' && summary.tone !== 'different'} />
+      )}
 
       {summary.hints.length > 0 && (
         <section className="result-diff-section result-diff-hints">
@@ -240,8 +267,8 @@ export function QueryResultDiffPanel({
       </section>
 
       <p className="result-diff-disclaimer">
-        実データは使いません。SQL 構文の構造比較による推定です。意味的に等価でも構文が違う場合は差分と出ることがあります（INNER
-        相当の JOIN・AND・= だけで書かれた範囲に限り、等価性を証明できることがあります）。
+        実データは使わず、SQL の構文を比べます。「同じ（証明済み）」と出すのは、INNER 相当の JOIN・AND・= だけで書かれた範囲で、
+        結果が同じことを証明できたときだけです。意味が同じでも書き方が違うと、差分と出ることがあります。
       </p>
     </div>
   );

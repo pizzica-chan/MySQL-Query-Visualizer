@@ -769,9 +769,9 @@ body {
   background: var(--bg-elevated);
 }
 
-.result-diff-summary--same {
-  border-color: rgba(var(--success-rgb), 0.45);
-  background: rgba(var(--success-rgb), 0.08);
+/* 構文の違いが見つからないだけのとき。結果が同じとは限らないので、緑にせず色を付けない */
+.result-diff-summary--no-diff {
+  border-style: dashed;
 }
 
 .result-diff-summary--order-only,
@@ -817,16 +817,16 @@ body {
   margin: 0;
 }
 
-.result-diff-summary-row-value--same {
-  color: var(--success);
-}
-
 .result-diff-summary-row-value--different {
   color: var(--danger);
 }
 
 .result-diff-summary-row-value--uncertain {
   color: var(--warning);
+}
+
+.result-diff-summary-row-value--no-diff {
+  color: var(--text);
 }
 
 .result-diff-summary-row-value--not-specified {
@@ -971,9 +971,11 @@ body {
   background: rgba(var(--danger-rgb), 0.15);
 }
 
+/* カテゴリごとの「一致」は構文が一致しただけなので、緑にしない（緑は等価性を証明できたときの判定だけ） */
 .result-diff-badge--same {
-  color: var(--success);
-  background: rgba(var(--success-rgb), 0.15);
+  color: var(--text-muted);
+  background: rgba(var(--bg-elevated-rgb), 0.9);
+  border: 1px solid var(--border);
 }
 
 .result-diff-details {
@@ -2305,49 +2307,59 @@ body {
 }
 
 
-/* ── 比較の判定: 「同じ」の根拠を色とバッジで分ける ───────────────── */
+/* ── 比較の判定: 緑の「同じ」は証明できたときだけ ───────────────── */
 
 /* 証明済み: 実線の濃い枠 */
-.result-diff-summary--same.result-diff-summary--basis-proven {
+.result-diff-summary--same {
   border-width: 2px;
   border-color: var(--success);
   background: rgba(var(--success-rgb), 0.12);
 }
 
-/* 構文一致による推定: 破線の淡い枠。証明済みと同じ強さに見せない */
-.result-diff-summary--same.result-diff-summary--basis-syntax-match {
-  border-style: dashed;
-  border-color: rgba(var(--success-rgb), 0.55);
-  background: rgba(var(--success-rgb), 0.04);
-}
-
-.result-diff-summary-row-value--proven {
+.result-diff-summary-row-value--same {
   padding: 1px 10px;
   border-radius: 999px;
   background: var(--success);
   color: var(--bg-elevated);
 }
 
-.result-diff-basis {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  vertical-align: 1px;
+/* 確認用の SQL（実データで結果を突き合わせる） */
+.result-diff-verify > summary {
+  cursor: pointer;
+  margin-bottom: 0;
 }
 
-.result-diff-basis--syntax-match {
-  border: 1px dashed rgba(var(--success-rgb), 0.7);
+.result-diff-verify-text {
+  margin: 8px 0;
+  font-size: 0.82rem;
   color: var(--text-muted);
+  line-height: 1.6;
 }
 
-.result-diff-basis-note {
+.result-diff-verify-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 8px;
+}
+
+.result-diff-verify-status {
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.result-diff-verify-sql {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
   line-height: 1.5;
+  white-space: pre;
 }
 
 /* 別名にマウスを載せると実テーブル名が出る印 */
@@ -3061,6 +3073,11 @@ kbd {
 .result-diff-summary--same .result-diff-summary-icon {
   background: rgba(var(--success-rgb), 0.18);
   color: var(--success);
+}
+
+.result-diff-summary--no-diff .result-diff-summary-icon {
+  background: rgba(var(--bg-elevated-rgb), 0.9);
+  color: var(--text-muted);
 }
 
 .result-diff-summary--order-only .result-diff-summary-icon,

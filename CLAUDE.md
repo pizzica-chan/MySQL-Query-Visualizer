@@ -55,7 +55,7 @@ SQL 前後比較（`query-result-diff.ts`）は、構文カテゴリのシグネ
 
 - **`parser.ts` はモジュールレベルの可変状態を持つ**（`nodeCounter` / `naturalJoinStarts` / `straightJoinHint*`）。`parseMySqlQuery` の先頭の `resetIds()` で毎回全消しする前提なので、解析を並行化したり再入させたりすると壊れる。
 
-- **比較モードの「同じ」は緑で表示され、安全の根拠として読まれる**。偽陽性（違う結果を「同じ」と言う）が最も高コストなので、判定を緩める変更は必ず反例を探してから入れる。見つけた反例と「同じ」と判定すべきペアは `src/lib/fixtures/result-diff-pairs.ts` に足す（`query-result-diff-soundness.test.ts` が全件を回す）。
+- **比較モードの緑の「同じ」は、安全の根拠として読まれる**。緑は等価性を証明できたとき（`cq-equivalence.ts`）だけに出し、構文に差分が無いだけのときは色の付かない「構文の違いなし」にしている。偽陽性（違う結果を「同じ」と言う）が最も高コストなので、判定を緩める変更は必ず反例を探してから入れる。見つけた反例と「同じ」と判定すべきペアは `src/lib/fixtures/result-diff-pairs.ts` に足す（`query-result-diff-soundness.test.ts` が全件を回す）。
 
 - **比較の正規化は「結果を変えない書き換え」だけにする**。JOIN は辺の集合ではなく結合の木（`join-tree.ts`）で比べる。外部結合で行を残す側は直前のテーブルではなく、それより左の結合全体。等価性の証明（`cq-equivalence.ts`）は MySQL の `=` を推移的にも反射的にも扱わない（型変換と NULL で成り立たない）。
 

@@ -406,6 +406,20 @@ WHERE status = 1`,
     },
   },
   {
+    name: '削除するテーブルを書かない JOIN 付きの DELETE はエラーにする',
+    category: 'error',
+    sql: 'DELETE FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE o.id IS NULL',
+    expectSuccess: false,
+    errorContains: '削除するテーブルを指定してください',
+  },
+  {
+    name: '削除するテーブルを書かないカンマ区切りの DELETE はエラーにする',
+    category: 'error',
+    sql: 'DELETE FROM users, orders WHERE orders.user_id = users.id',
+    expectSuccess: false,
+    errorContains: '削除するテーブルを指定してください',
+  },
+  {
     name: '複文は 2 文目以降を捨てずにエラーにする',
     category: 'error',
     sql: 'SELECT id FROM users WHERE status = 1; SELECT id FROM orders',
@@ -465,16 +479,14 @@ WHERE status = 1`,
     },
   },
   {
-    name: 'UPDATE: JOIN + 複合WHERE + ORDER/LIMIT',
+    name: 'UPDATE: JOIN + 複合WHERE',
     category: 'update',
     sql: `UPDATE users u
 INNER JOIN orders o ON o.user_id = u.id
 SET u.status = 'inactive', o.closed = 1
 WHERE u.last_login_at < '2023-01-01'
   AND o.status IN ('pending', 'hold')
-  AND o.total > 0
-ORDER BY u.id DESC
-LIMIT 100`,
+  AND o.total > 0`,
     expectSuccess: true,
     assert: (q) => {
       if (q.statementType !== 'UPDATE') throw new Error('UPDATE');
@@ -487,8 +499,58 @@ LIMIT 100`,
       } else {
         throw new Error('in');
       }
-      if (q.limit !== '100') throw new Error('limit');
     },
+  },
+  {
+    name: 'UPDATE: 1 テーブルの ORDER BY と LIMIT',
+    category: 'update',
+    sql: "UPDATE users u SET u.status = 'inactive' WHERE u.last_login_at < '2023-01-01' ORDER BY u.id DESC LIMIT 100",
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.limit !== '100') throw new Error(`limit ${q.limit}`);
+      if (q.orderBy[0]?.text !== 'u.id DESC') throw new Error(`order ${q.orderBy[0]?.text}`);
+    },
+  },
+  // MySQL は /*! … */ の中身を SQL として実行する（MySQL 8.4 リファレンス 11.7）。読み飛ばすと中の条件が無い文として説明してしまう
+  {
+    name: '実行されるコメントの中の WHERE はエラーにする',
+    category: 'error',
+    sql: 'SELECT u.id FROM users u /*! WHERE u.a = 1 */',
+    expectSuccess: false,
+  },
+  {
+    name: 'バージョンを付けた実行されるコメントはエラーにする',
+    category: 'error',
+    sql: 'SELECT u.id FROM users u WHERE u.a = 1 /*!80000 AND u.b = 2 */',
+    expectSuccess: false,
+  },
+  {
+    name: '文字列やほかのコメントの中の /*! は実行されるコメントとして扱わない',
+    category: 'regression',
+    sql: "SELECT u.id FROM users u WHERE u.note = '/*! x */' /* /*! */ -- /*! y\n  AND u.a = 1 /*+ NO_INDEX(u) */",
+    expectSuccess: true,
+    assert: (q) => {
+      if (q.where?.type !== 'and') throw new Error(`where ${q.where?.type}`);
+    },
+  },
+  // 複数のテーブルを使う UPDATE と DELETE には ORDER BY と LIMIT を書けない（MySQL 8.4 リファレンス 15.2.17、15.2.2）
+  {
+    name: '複数のテーブルを使う UPDATE の ORDER BY と LIMIT はエラーにする',
+    category: 'error',
+    sql: "UPDATE users u JOIN orders o ON o.user_id = u.id SET u.status = 'x' ORDER BY u.id LIMIT 100",
+    expectSuccess: false,
+  },
+  {
+    name: '複数のテーブルを使う UPDATE の LIMIT はエラーにする（カンマ区切り）',
+    category: 'error',
+    sql: "UPDATE users u, orders o SET u.status = 'x' WHERE o.user_id = u.id LIMIT 1",
+    expectSuccess: false,
+  },
+  {
+    name: '複数のテーブルを使う DELETE の ORDER BY と LIMIT はエラーにする',
+    category: 'error',
+    sql: 'DELETE u FROM users u JOIN orders o ON o.user_id = u.id ORDER BY o.created_at LIMIT 10',
+    expectSuccess: false,
   },
   {
     name: 'UPDATE: スキーマ付きテーブル',
@@ -1311,6 +1373,42 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
+    name: '&& は AND として条件を分ける・TRUE は大文字で表示する',
+    category: 'regression',
+    sql: 'SELECT u.id FROM users u WHERE u.a = 1 && u.b = 2 OR u.c IS TRUE',
+    expectSuccess: true,
+    assert: (q) => {
+      const shape = (n: typeof q.where): string =>
+        !n ? '-' : n.children?.length ? `${n.type}(${n.children.map(shape).join(',')})` : n.label;
+      const got = shape(q.where);
+      if (got !== 'or(and(u.a = 1,u.b = 2),u.c IS TRUE)') throw new Error(`where ${got}`);
+    },
+  },
+  {
+    name: '括弧で囲んだ比較を結ぶ || は OR として条件を分ける',
+    category: 'regression',
+    sql: 'SELECT u.id FROM users u WHERE (u.a = 1) || (u.b = 2 && u.c = 3)',
+    expectSuccess: true,
+    assert: (q) => {
+      const shape = (n: typeof q.where): string =>
+        !n ? '-' : n.children?.length ? `${n.type}(${n.children.map(shape).join(',')})` : n.label;
+      const got = shape(q.where);
+      if (got !== 'or(u.a = 1,and(u.b = 2,u.c = 3))') throw new Error(`where ${got}`);
+    },
+  },
+  {
+    name: 'ALL・ANY・EXISTS のサブクエリの括弧を重ねない',
+    category: 'regression',
+    sql: 'SELECT EXISTS (SELECT 1 FROM u) AS e FROM t WHERE t.a > ALL (SELECT u.a FROM u) AND t.b = ANY (SELECT u.b FROM u)',
+    expectSuccess: true,
+    assert: (q) => {
+      const texts = [q.columns[0]?.expression, ...(q.where?.children?.map((c) => c.label) ?? [])].join(' | ');
+      if (texts !== 'EXISTS (SELECT 1列 FROM u) | t.a > ALL (SELECT 1列 FROM u) | t.b = ANY (SELECT 1列 FROM u)') {
+        throw new Error(`texts ${texts}`);
+      }
+    },
+  },
+  {
     name: 'SUM・AVG・MIN・MAX の DISTINCT',
     category: 'regression',
     sql: 'SELECT o.user_id, SUM(DISTINCT o.total) AS s, avg( distinct o.total + 1 ), MAX(DISTINCT (o.x)), COUNT(DISTINCT o.id) FROM orders o GROUP BY o.user_id HAVING MIN(DISTINCT o.total) > 0',
@@ -1326,7 +1424,47 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
-    name: '印付きのリテラル・変数・全文検索・行の値',
+    name: 'スキーマ付きの関数（ストアドファンクション）',
+    category: 'regression',
+    sql: 'SELECT db1.f(a.x) AS v, `my db`.g(a.y), h(a.z) FROM a WHERE Db1.f(a.x) = 1',
+    expectSuccess: true,
+    assert: (q) => {
+      const columns = q.columns.map((c) => c.expression).join(' | ');
+      // データベース名は Unix では大文字小文字を区別するので、書いたとおりに残す
+      if (columns !== 'db1.F(a.x) | my db.G(a.y) | H(a.z)') throw new Error(`columns ${columns}`);
+      if (q.where?.label !== 'Db1.F(a.x) = 1') throw new Error(`where ${q.where?.label}`);
+    },
+  },
+  {
+    name: '式の表示: エスケープした文字列・CONVERT の型・代入・TIMESTAMPDIFF',
+    category: 'regression',
+    sql: String.raw`SELECT 'a\'b', 'a''b', "a""b", "a\"b", N'x\'y', CONVERT(u.a, CHAR(3)), @x := u.a, TIMESTAMPDIFF(DAY, u.a, u.b), TRIM(LEADING 'x' from u.n) FROM users u`,
+    expectSuccess: true,
+    assert: (q) => {
+      const columns = q.columns.map((c) => c.expression).join(' | ');
+      // 文字列はパーサーが持つ中身（エスケープを含む）をそのまま囲む。エスケープし直すと別の値の文字列に見える
+      const expected = String.raw`'a\'b' | 'a''b' | "a""b" | "a\"b" | N'x\'y' | CONVERT(u.a, CHAR(3)) | @x := u.a | TIMESTAMPDIFF(DAY, u.a, u.b) | TRIM(LEADING 'x' FROM u.n)`;
+      if (columns !== expected) throw new Error(`columns ${columns}`);
+    },
+  },
+  {
+    name: '集約関数の STD と VARIANCE',
+    category: 'regression',
+    sql: 'SELECT o.k, std(o.x) AS s, VARIANCE (o.y), STD(o.x) OVER (PARTITION BY o.k), QV_STD_(o.z), o.std, 日STD(o.w) FROM orders o GROUP BY o.k HAVING STD(o.x) > 1',
+    expectSuccess: true,
+    assert: (q) => {
+      const columns = q.columns.map((c) => c.expression).join(' | ');
+      // 仮の名前と同じ名前の関数（QV_STD_）が SQL にあっても、STD に戻さない。日STD は STD ではなく、日STD という名前の関数
+      if (columns !== 'o.k | STD(o.x) | VARIANCE(o.y) | STD(o.x) OVER (PARTITION BY o.k) | QV_STD_(o.z) | o.std | 日STD(o.w)') {
+        throw new Error(`columns ${columns}`);
+      }
+      const span = q.columns[1]?.sourceSpan;
+      if (!span || q.rawSql.slice(span.start, span.end) !== 'std(o.x) AS s') throw new Error('span');
+      if (q.having?.label !== 'STD(o.x) > 1') throw new Error(`having ${q.having?.label}`);
+    },
+  },
+  {
+    name: '接頭辞の付くリテラル・変数・全文検索・行の値',
     category: 'regression',
     sql: "SELECT b'101', X'41', 0x1F, N'abc', _binary'x', DATE '2024-01-01', TIMESTAMP '2024-01-01 00:00:00', @v, @@session.sql_mode, MATCH (t.a) AGAINST ('x' IN BOOLEAN MODE) FROM t WHERE (t.a, t.b) IN ((1, 2), (3, 4)) AND EXISTS (SELECT 1)",
     expectSuccess: true,
@@ -1338,5 +1476,34 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
       const labels = q.where?.children?.map((c) => c.label).join(' | ');
       if (labels !== '(t.a, t.b) IN ((1, 2), (3, 4)) | EXISTS (SELECT 1列)') throw new Error(`where ${labels}`);
     },
+  },
+  {
+    name: 'UPDATE の SET の値に書く DEFAULT',
+    category: 'regression',
+    sql: "UPDATE LOW_PRIORITY users u SET u.a = DEFAULT, u.b = 'DEFAULT', u.c=DEFAULT, `d` = DEFAULT WHERE u.id = 1",
+    expectSuccess: true,
+    assert: (q) => {
+      const labels = q.setClauses?.map((c) => c.label).join(' | ');
+      if (labels !== "u.a = DEFAULT | u.b = 'DEFAULT' | u.c = DEFAULT | d = DEFAULT") throw new Error(`set ${labels}`);
+      if (q.where?.label !== 'u.id = 1') throw new Error(`where ${q.where?.label}`);
+    },
+  },
+  {
+    name: 'SET の値の外に書いた DEFAULT は列の名前として読ませない',
+    category: 'error',
+    sql: 'SELECT a FROM users WHERE a = DEFAULT',
+    expectSuccess: false,
+  },
+  {
+    name: 'SET の値の中の比較の右に書いた DEFAULT は列の名前として読ませない（!=）',
+    category: 'error',
+    sql: 'UPDATE users u SET u.a = u.b != DEFAULT',
+    expectSuccess: false,
+  },
+  {
+    name: 'SET の値の中の比較の右に書いた DEFAULT は列の名前として読ませない（=）',
+    category: 'error',
+    sql: 'UPDATE users u SET u.a = u.b = DEFAULT',
+    expectSuccess: false,
   },
 ];
