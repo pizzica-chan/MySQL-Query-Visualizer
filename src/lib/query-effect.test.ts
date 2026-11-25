@@ -1104,3 +1104,32 @@ describe('UNION 全体の ORDER BY / LIMIT', () => {
     expect(result.query.unionTail?.limit).toBe('3');
   });
 });
+
+describe('集合演算の説明', () => {
+  const notesOf = (sql: string): string[] => {
+    const result = parseMySqlQuery(sql);
+    if (!result.success) throw new Error(result.error.message);
+    return buildUnionQueryEffect(result.query)?.unionNotes ?? [];
+  };
+
+  // EXCEPT と INTERSECT を「縦に連結」と説明すると、行を除く・絞る演算が行を足す演算に見える
+  it.each([
+    ['SELECT a.x FROM a EXCEPT SELECT b.x FROM b', 'EXCEPT — 前の結果から、この SELECT の結果にもある行を除く（残った行の重複は1行にまとめる）'],
+    ['SELECT a.x FROM a INTERSECT SELECT b.x FROM b', 'INTERSECT — 前の結果とこの SELECT の結果の両方にある行だけを残す（重複は1行にまとめる）'],
+  ])('%s', (sql, expected) => {
+    expect(notesOf(sql)).toEqual([expected]);
+  });
+
+  it('INTERSECT とほかの集合演算を混ぜたときは、INTERSECT を先に計算すると書く', () => {
+    const notes = notesOf('SELECT a.x FROM a UNION SELECT b.x FROM b INTERSECT SELECT c.x FROM c');
+    expect(notes[0]).toMatch(/^UNION — /);
+    expect(notes[1]).toMatch(/^INTERSECT — /);
+    expect(notes[2]).toBe('INTERSECT は、括弧が無ければ UNION と EXCEPT より先に計算される');
+  });
+
+  it('UNION と UNION ALL を混ぜたときは、それぞれを説明し、順序の注記は付けない', () => {
+    const notes = notesOf('SELECT a.x FROM a UNION SELECT b.x FROM b UNION ALL SELECT c.x FROM c');
+    expect(notes).toHaveLength(2);
+    expect(notes.every((n) => !n.includes('先に計算'))).toBe(true);
+  });
+});

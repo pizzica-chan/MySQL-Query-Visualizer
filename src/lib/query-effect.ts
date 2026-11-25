@@ -270,10 +270,26 @@ function describeUnionCombination(query: ParsedQuery): string[] {
     return ['UNION — 各 SELECT の結果を縦に連結し、完全に同じ行は1行にまとめる'];
   }
 
-  return [
-    'UNION / UNION ALL — 各 SELECT の結果を縦に連結（UNION は重複行を除外、UNION ALL は残す）',
-  ];
+  // EXCEPT と INTERSECT は連結ではない。UNION と同じ説明にすると、行を除く・絞る演算が行を足す演算に見える。
+  // ALL を付けなければ重複を除く（MySQL 8.4 リファレンス 15.2.4 EXCEPT Clause、15.2.8 INTERSECT Clause）
+  const notes = operators.map((op) => SET_OPERATOR_NOTES[op] ?? `${op} — 集合演算で前の結果と組み合わせる`);
+  // INTERSECT は UNION と EXCEPT より先に評価される（MySQL 8.4 リファレンス 15.2.14 Set Operations with UNION, INTERSECT, and EXCEPT）
+  const mixesIntersect =
+    operators.some((op) => op.startsWith('INTERSECT')) && operators.some((op) => !op.startsWith('INTERSECT'));
+  return mixesIntersect
+    ? [...notes, 'INTERSECT は、括弧が無ければ UNION と EXCEPT より先に計算される']
+    : notes;
 }
+
+/** 集合演算子ごとの説明 */
+const SET_OPERATOR_NOTES: Record<string, string> = {
+  'UNION ALL': 'UNION ALL — 前の結果に、この SELECT の結果をそのまま縦に連結（重複も残る）',
+  UNION: 'UNION — 前の結果に、この SELECT の結果を縦に連結し、完全に同じ行は1行にまとめる',
+  EXCEPT: 'EXCEPT — 前の結果から、この SELECT の結果にもある行を除く（残った行の重複は1行にまとめる）',
+  'EXCEPT ALL': 'EXCEPT ALL — 前の結果から、この SELECT の結果にもある行を除く（前の結果の重複は残す）',
+  INTERSECT: 'INTERSECT — 前の結果とこの SELECT の結果の両方にある行だけを残す（重複は1行にまとめる）',
+  'INTERSECT ALL': 'INTERSECT ALL — 前の結果とこの SELECT の結果の両方にある行だけを残す（重複も残す）',
+};
 
 const JOIN_SCOPE: Record<string, (left: string, right: string, condition: string) => string> = {
   'INNER JOIN': (l, r, c) =>
