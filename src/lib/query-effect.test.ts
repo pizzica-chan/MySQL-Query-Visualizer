@@ -1012,3 +1012,24 @@ describe('query-effect', () => {
     });
   });
 });
+
+describe('作用説明の要約文', () => {
+  const summaryOf = (sql: string): string => {
+    const result = parseMySqlQuery(sql);
+    if (!result.success) throw new Error(result.error.message);
+    return buildQueryEffect(result.query).summary;
+  };
+
+  // テーブル名に「行」を直接つないで「users行」「users、WHERE 条件を満たす行」と書いていた
+  it.each([
+    ['SELECT a FROM users', 'users の行が結果として表示される'],
+    ['SELECT a FROM users WHERE b = 1', 'users のうち、WHERE 条件を満たす行が結果として表示される'],
+    ['SELECT a FROM users u', 'users（u） の行が結果として表示される'],
+    ['SELECT a FROM t1, t2, t3', 't1 など 3 テーブルの組み合わせの行が結果として表示される'],
+    ['UPDATE users SET a = 1 WHERE b = 2 LIMIT 3', 'users のうち、WHERE 条件を満たす行が更新される — 最大 3 行'],
+    ['DELETE FROM users', 'users の行が削除される'],
+    ['SELECT 1', '式の値が 1 行の結果として表示される'],
+  ])('%s', (sql, expected) => {
+    expect(summaryOf(sql)).toBe(expected);
+  });
+});

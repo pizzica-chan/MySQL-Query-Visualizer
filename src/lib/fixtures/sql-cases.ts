@@ -1298,4 +1298,45 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
       if (on !== 'or(x,and(x,x))') throw new Error(`on ${on}`);
     },
   },
+  {
+    name: '要素の後ろのコメント',
+    category: 'regression',
+    sql: "SELECT u.id -- 利用者\nFROM users u # 本体\nJOIN orders o ON o.user_id = u.id /* 注文 */\nWHERE u.status = 'a b ' -- 有効\n  AND o.total > 0",
+    expectSuccess: true,
+    assert: (q) => {
+      const slices = [q.tables[0]?.sourceSpan, q.tables[1]?.sourceSpan, q.where?.children?.[0]?.sourceSpan].map(
+        (span) => (span ? q.rawSql.slice(span.start, span.end) : ''),
+      );
+      if (slices.join('|') !== "users u|orders o|u.status = 'a b '") throw new Error(`spans ${slices.join('|')}`);
+    },
+  },
+  {
+    name: 'SUM・AVG・MIN・MAX の DISTINCT',
+    category: 'regression',
+    sql: 'SELECT o.user_id, SUM(DISTINCT o.total) AS s, avg( distinct o.total + 1 ), MAX(DISTINCT (o.x)), COUNT(DISTINCT o.id) FROM orders o GROUP BY o.user_id HAVING MIN(DISTINCT o.total) > 0',
+    expectSuccess: true,
+    assert: (q) => {
+      const columns = q.columns.map((c) => c.expression).join(' | ');
+      if (columns !== 'o.user_id | SUM(DISTINCT o.total) | AVG(DISTINCT o.total + 1) | MAX(DISTINCT o.x) | COUNT(DISTINCT o.id)') {
+        throw new Error(`columns ${columns}`);
+      }
+      const span = q.columns[1]?.sourceSpan;
+      if (!span || q.rawSql.slice(span.start, span.end) !== 'SUM(DISTINCT o.total) AS s') throw new Error('span');
+      if (q.having?.label !== 'MIN(DISTINCT o.total) > 0') throw new Error(`having ${q.having?.label}`);
+    },
+  },
+  {
+    name: '印付きのリテラル・変数・全文検索・行の値',
+    category: 'regression',
+    sql: "SELECT b'101', X'41', 0x1F, N'abc', _binary'x', DATE '2024-01-01', TIMESTAMP '2024-01-01 00:00:00', @v, @@session.sql_mode, MATCH (t.a) AGAINST ('x' IN BOOLEAN MODE) FROM t WHERE (t.a, t.b) IN ((1, 2), (3, 4)) AND EXISTS (SELECT 1)",
+    expectSuccess: true,
+    assert: (q) => {
+      const columns = q.columns.map((c) => c.expression).join(' | ');
+      const expected =
+        "b'101' | X'41' | 0x1F | N'abc' | _binary'x' | DATE '2024-01-01' | TIMESTAMP '2024-01-01 00:00:00' | @v | @@session.sql_mode | MATCH (t.a) AGAINST ('x' IN BOOLEAN MODE)";
+      if (columns !== expected) throw new Error(`columns ${columns}`);
+      const labels = q.where?.children?.map((c) => c.label).join(' | ');
+      if (labels !== '(t.a, t.b) IN ((1, 2), (3, 4)) | EXISTS (SELECT 1列)') throw new Error(`where ${labels}`);
+    },
+  },
 ];

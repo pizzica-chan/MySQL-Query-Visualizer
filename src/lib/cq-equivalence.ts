@@ -21,7 +21,7 @@
  *   3. 証明できたときだけ結果を上げる。既存の構文差分判定は書き換えない
  */
 import { NO_JOIN_CONDITION } from './join-condition';
-import { maskNonCode } from './sql-lex';
+import { findCodeRegions, maskNonCode } from './sql-lex';
 import type { ConditionNode, JoinEdge, ParsedQuery, TableRef } from './types';
 
 /** 1クエリあたりのアトム（テーブル参照）上限 */
@@ -109,6 +109,17 @@ function isLexicallyInScope(rawSql: string | undefined): boolean {
   if (!ALLOWED_CHARS_RE.test(masked)) return false;
   for (const token of masked.match(/[A-Za-z_][A-Za-z0-9_$]*/g) ?? []) {
     if (DISALLOWED_KEYWORDS.has(token.toLowerCase())) return false;
+  }
+  // 0x41 / 0b101 は数値に見えるが、16 進と 2 進の値（0x41 は 65）
+  if (/(?<![\w$])0[xb][0-9a-f]/i.test(masked)) return false;
+  // 接頭辞の付くリテラル（b'101'、X'41'、N'abc'、_binary'x'、DATE '2024-01-01'）は、
+  // 引用符の中が同じでも普通の文字列とは値や照合順序が違う
+  for (const region of findCodeRegions(rawSql)) {
+    const next = rawSql[region.end];
+    if (next !== "'" && next !== '"') continue;
+    if (/(?:[\w$]|\b(?:date|time|timestamp|datetime)\s+)$/i.test(rawSql.slice(region.start, region.end))) {
+      return false;
+    }
   }
   return true;
 }

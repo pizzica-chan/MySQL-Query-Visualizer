@@ -189,3 +189,41 @@ export function maskNonCode(sql: string): string {
   masked += ' '.repeat(sql.length - pos);
   return masked;
 }
+
+/**
+ * 範囲の終端から、後ろに付いた空白とコメントを除いた終端を返す関数を作る。
+ * SQL パーサーの位置情報は要素の後ろの空白や `# …` のコメントまで範囲に含めることがある。
+ * そのままだと、要素を選んだときにエディタで後ろのコメントまで強調し、
+ * カーソルがコメントや次の語の先頭にあるときも、手前の要素を対応する要素として選んでしまう。
+ * 文字列とバッククォートの中の空白は除かない。表は SQL 全体で 1 回だけ作る
+ */
+export function createTrailingTriviaTrimmer(sql: string): (start: number, end: number) => number {
+  // codeEndAt[i]: sql[0..i) のうち、空白とコメント以外の最後の文字の直後の位置
+  const codeEndAt = new Int32Array(sql.length + 1);
+  let lastCodeEnd = 0;
+  let i = 0;
+  const markTrivia = (to: number) => {
+    for (let k = i + 1; k <= to; k += 1) codeEndAt[k] = lastCodeEnd;
+    i = to;
+  };
+  const markCode = (to: number) => {
+    for (let k = i + 1; k <= to; k += 1) codeEndAt[k] = k;
+    lastCodeEnd = to;
+    i = to;
+  };
+  while (i < sql.length) {
+    const ch = sql[i]!;
+    if (isDashLineCommentStart(sql, i)) markTrivia(readLineCommentEnd(sql, i));
+    else if (ch === '#') markTrivia(readHashLineCommentEnd(sql, i));
+    else if (ch === '/' && sql[i + 1] === '*') markTrivia(readBlockCommentEnd(sql, i));
+    else if (ch === "'" || ch === '"') markCode(readQuotedStringEnd(sql, i, ch));
+    else if (ch === '`') markCode(readBacktickIdentifierEnd(sql, i));
+    else if (/\s/.test(ch)) markTrivia(i + 1);
+    else markCode(i + 1);
+  }
+  return (start, end) => {
+    if (end <= start || end > sql.length) return end;
+    const trimmed = codeEndAt[end]!;
+    return trimmed > start ? trimmed : end;
+  };
+}

@@ -1,4 +1,5 @@
 import {
+  createTrailingTriviaTrimmer,
   isDashLineCommentStart,
   isWordChar,
   maskNonCode,
@@ -369,6 +370,31 @@ function rewriteMultiTableDelete(state: ProcessState, recorded: RecordedStarts):
   }
 }
 
+/**
+ * `SUM(DISTINCT a)` の DISTINCT。MySQL は SUM・AVG・MIN・MAX の引数の前に DISTINCT を書ける
+ * （MySQL 8.4 リファレンス 14.19.1）が、node-sql-parser は COUNT と GROUP_CONCAT でしか読めず、構文エラーになる。
+ * `DISTINCT(a)` の形なら読めるので、DISTINCT の後ろの引数を括弧で囲む（表示は parser.ts で元の形に戻す）
+ */
+const AGGREGATE_DISTINCT_RE = /(?<![\w$.`])(?:SUM|AVG|MIN|MAX)\s*\(\s*DISTINCT\b/giu;
+
+function parenthesizeAggregateDistinct(state: ProcessState, recorded: RecordedStarts): void {
+  const masked = maskNonCode(state.sql);
+  const inserts: Array<{ at: number; text: string }> = [];
+  for (const match of masked.matchAll(AGGREGATE_DISTINCT_RE)) {
+    const openParen = masked.indexOf('(', match.index);
+    const closeParenEnd = readBalancedParenEnd(masked, openParen);
+    if (closeParenEnd == null) continue;
+    const argStart = skipMaskedWhitespace(masked, match.index + match[0].length);
+    let argEnd = closeParenEnd - 1;
+    while (argEnd > argStart && /\s/.test(masked[argEnd - 1]!)) argEnd -= 1;
+    if (argEnd <= argStart) continue;
+    inserts.push({ at: argStart, text: '(' }, { at: argEnd, text: ')' });
+  }
+  // 後ろから挿入して、前にある挿入位置をずらさない
+  inserts.sort((a, b) => b.at - a.at);
+  for (const { at, text } of inserts) spliceProcessed(state, at, at, text, recorded);
+}
+
 export function preprocessSqlForParser(sql: string): PreprocessResult {
   const state = initState(sql);
   const naturalJoinStarts: number[] = [];
@@ -395,6 +421,7 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
     },
   ], recorded);
 
+  parenthesizeAggregateDistinct(state, recorded);
   quoteNonAsciiIdentifiers(state, recorded);
 
   return {
@@ -575,4 +602,42 @@ export function remapParsedQuerySpans(
         }
       : undefined,
   };
+}
+
+/**
+ * 解析結果の中のすべての範囲（sourceSpan / limitSpan など）から、終端の後ろに付いた空白とコメントを除く。
+ * sql は範囲の座標の基準になっている SQL（remapParsedQuerySpans のあとなら入力の SQL）。
+ * 解析結果はこの解析で作ったばかりのオブジェクトなので、範囲のオブジェクトをその場で差し替える
+ */
+export function trimParsedQuerySpanEnds(query: ParsedQuery, sql: string): ParsedQuery {
+  const trimEnd = createTrailingTriviaTrimmer(sql);
+  const seen = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      if (key.endsWith('Span') && isSpan(child)) {
+        const end = trimEnd(child.start, child.end);
+        if (end !== child.end) record[key] = { start: child.start, end };
+      } else {
+        visit(child);
+      }
+    }
+  };
+  visit(query);
+  return query;
+}
+
+function isSpan(value: unknown): value is SourceSpan {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    typeof (value as SourceSpan).start === 'number' &&
+    typeof (value as SourceSpan).end === 'number'
+  );
 }

@@ -40,6 +40,13 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     'SELECT t.id FROM t WHERE t.n = t.m COLLATE utf8mb4_general_ci',
   ),
   different('CONVERT の USING', 'SELECT CONVERT(t.x USING utf8mb4) FROM t', 'SELECT CONVERT(t.x USING latin1) FROM t'),
+  // パーサーは引用符の中身だけを値に入れるので、接頭辞を落とすと等価性の証明で同じ定数に見えていた
+  different('2 進のリテラル b\'101\'（値は 5）', "SELECT t.id FROM t WHERE t.a = b'101'", 'SELECT t.id FROM t WHERE t.a = 101'),
+  different('16 進のリテラル X\'41\'', "SELECT t.id FROM t WHERE t.a = X'41'", 'SELECT t.id FROM t WHERE t.a = 41'),
+  different('16 進のリテラル 0x41', 'SELECT t.id FROM t WHERE t.a = 0x41', 'SELECT t.id FROM t WHERE t.a = 41'),
+  different('SUM の DISTINCT', 'SELECT SUM(DISTINCT t.a) FROM t', 'SELECT SUM(t.a) FROM t'),
+  same('SUM の DISTINCT の引数の括弧', 'SELECT SUM(DISTINCT t.a) FROM t', 'SELECT SUM(DISTINCT (t.a)) FROM t'),
+  different('文字セットの指定 _binary', "SELECT t.id FROM t WHERE t.a = _binary'a'", "SELECT t.id FROM t WHERE t.a = 'a'"),
   different(
     'ウィンドウ枠',
     'SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t',

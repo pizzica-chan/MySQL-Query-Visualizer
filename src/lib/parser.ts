@@ -10,6 +10,7 @@ import {
   maskNonCode,
   preprocessSqlForParser,
   remapParsedQuerySpans,
+  trimParsedQuerySpanEnds,
 } from './sql-preprocess';
 import {
   columnEntrySourceSpan,
@@ -149,12 +150,41 @@ function formatDoubleQuotedString(value: string): string {
 }
 
 function formatQuotedLiteral(node: any): string {
+  // `_binary'x'` の文字セット指定。落とすと、照合順序の違う比較が 'x' との比較と同じに見える
+  const introducer = typeof node.prefix === 'string' && node.prefix ? node.prefix : '';
   if (typeof node.raw === 'string' && node.raw.length > 0) {
     const raw = node.raw;
-    if (raw.startsWith("'") || raw.startsWith('"')) return raw;
+    if (raw.startsWith("'") || raw.startsWith('"')) return `${introducer}${raw}`;
   }
-  if (node.type === 'double_quote_string') return formatDoubleQuotedString(String(node.value));
-  return formatSingleQuotedString(String(node.value));
+  if (node.type === 'double_quote_string') return `${introducer}${formatDoubleQuotedString(String(node.value))}`;
+  return `${introducer}${formatSingleQuotedString(String(node.value))}`;
+}
+
+/**
+ * 接頭辞の付くリテラル（X'41'、0x41、b'101'、N'abc'、DATE '2024-01-01'）。
+ * パーサーは引用符の中身だけを value に入れるので、接頭辞を戻さないと b'101'（値は 5）が 101 に、
+ * N'abc' が列名の abc に見え、比較モードでも別の値を同じ値として扱ってしまう
+ */
+function formatPrefixedLiteral(node: any): string | null {
+  const value = String(node.value ?? '');
+  const introducer = typeof node.prefix === 'string' && node.prefix ? `${node.prefix} ` : '';
+  switch (node.type) {
+    case 'hex_string':
+      return `${introducer}X'${value}'`;
+    case 'full_hex_string':
+      return `${introducer}0x${value}`;
+    case 'bit_string':
+      return `${introducer}b'${value}'`;
+    case 'natural_string':
+      return `N${formatSingleQuotedString(value)}`;
+    case 'date':
+    case 'time':
+    case 'timestamp':
+    case 'datetime':
+      return `${String(node.type).toUpperCase()} ${formatSingleQuotedString(value)}`;
+    default:
+      return null;
+  }
 }
 
 /** LIKE の ESCAPE 句。右辺に付くので、比較を組み立てるときも忘れず添える */
@@ -264,9 +294,31 @@ function exprToStringCore(node: any): string {
     case 'star':
       return node.table ? `${node.table}.*` : '*';
     case 'expr_list':
-      return toArray(node.value)
-        .map((a: any) => exprToString(a))
-        .join(', ');
+      // 行の値 `(a, b) = (1, 2)` の括弧。IN の値の並びには parentheses が付かないので、括弧は二重にならない
+      return wrap(
+        toArray(node.value)
+          .map((a: any) => exprToString(a))
+          .join(', '),
+      );
+    case 'hex_string':
+    case 'full_hex_string':
+    case 'bit_string':
+    case 'natural_string':
+    case 'date':
+    case 'time':
+    case 'timestamp':
+    case 'datetime':
+      return formatPrefixedLiteral(node) ?? String(node.value);
+    case 'var': {
+      // @v / @@session.sql_mode。そのままだと AST の JSON が表示に出る
+      const members = toArray<any>(node.members).map((m: any) => `.${formatIdentifier(m)}`).join('');
+      return `${node.prefix ?? '@'}${formatIdentifier(node.name)}${members}`;
+    }
+    case 'fulltext_search': {
+      const columns = toArray<any>(node.columns).map((c: any) => exprToString(c)).join(', ');
+      const mode = node.mode?.value ? ` ${String(node.mode.value).toUpperCase()}` : '';
+      return `MATCH (${columns}) AGAINST (${exprToString(node.expr)}${mode})`;
+    }
     case 'binary_expr': {
       const betweenBounds =
         /^(NOT\s+)?BETWEEN$/i.test(String(node.operator ?? '')) && node.right?.type === 'expr_list'
@@ -294,8 +346,18 @@ function exprToStringCore(node: any): string {
       return `${fnName}(${args})${formatOverClause(node.over)}`;
     }
     case 'aggr_func': {
-      const rawArgs = node.args?.expr ?? node.args?.value ?? node.args;
-      const distinctPrefix = node.args?.distinct ? 'DISTINCT ' : '';
+      let rawArgs = node.args?.expr ?? node.args?.value ?? node.args;
+      let distinctPrefix = node.args?.distinct ? 'DISTINCT ' : '';
+      // `SUM(DISTINCT a)` は前処理で `SUM(DISTINCT(a))` にしてから読むので、DISTINCT という名前の関数で来る
+      if (
+        !distinctPrefix &&
+        rawArgs?.type === 'function' &&
+        resolveFunctionName(rawArgs.name) === 'DISTINCT' &&
+        !rawArgs.over
+      ) {
+        distinctPrefix = 'DISTINCT ';
+        rawArgs = extractFunctionArgs(rawArgs);
+      }
       const args = toArray<any>(rawArgs)
         .map((a: any) => exprToString(a))
         .join(', ');
@@ -370,9 +432,10 @@ function summarizeSelect(ast: any): string {
     const alias = first.as ?? 'derived';
     return `(SELECT ... AS ${alias})`;
   }
-  const table = first?.table ?? '?';
   const cols = toArray<any>(ast.columns).length;
-  return `(SELECT ${cols}列 FROM ${table})`;
+  // `EXISTS (SELECT 1)` のように FROM の無いサブクエリ。FROM DUAL も FROM が無いのと同じ
+  if (!first || first.type === 'dual') return `(SELECT ${cols}列)`;
+  return `(SELECT ${cols}列 FROM ${first.table ?? '?'})`;
 }
 
 function normalizeSetOp(op: string | undefined): string {
@@ -1447,7 +1510,8 @@ export function parseMySqlQuery(sql: string): ParseResult {
     }
 
     const processedToInput = leadingTrim > 0 ? processedToOriginal.map(toInputOffset) : processedToOriginal;
-    const remap = (query: ParsedQuery) => remapParsedQuerySpans(processedToInput, query, sql);
+    const remap = (query: ParsedQuery) =>
+      trimParsedQuerySpanEnds(remapParsedQuerySpans(processedToInput, query, sql), sql);
 
     if (first.type === 'select') {
       // `SELECT … UNION (SELECT …)` は右側のブランチがエラーにならずに AST から消える。

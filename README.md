@@ -70,7 +70,7 @@ SQL の送信や外部 API 通信は行わず、**完全オフライン**で動�
 判定対象になる条件（すべて満たすときのみ）:
 
 - INNER / CROSS / STRAIGHT_JOIN と暗黙結合のみ（OUTER・NATURAL は対象外）
-- 条件は `AND` と `=` のみ。オペランドは修飾済みの列参照か数値 / 文字列リテラル
+- 条件は `AND` と `=` のみ。オペランドは修飾済みの列参照か数値 / 文字列リテラル（`b'101'`、`0x41`、`_binary'x'`、`DATE '2024-01-01'` のような、接頭辞の付くリテラルは対象外）
 - 正の相関 `EXISTS`（半結合）は本体に展開して扱う。`NOT EXISTS` は対象外
 - 出力列は修飾済みの単純な列参照のみ（`*`・関数・式は対象外）
 - GROUP BY / HAVING / LIMIT / OFFSET / UNION / CTE / 派生テーブルがない
@@ -171,6 +171,7 @@ npm run check:browser # ビルド + 実際の Chrome で dist/ を操作して�
 - **WITH（CTE）** — 定義の解析と FROM 参照の紐付け、作用説明での表示
 - WHERE / HAVING: 比較、IN、BETWEEN、LIKE、IS NULL、EXISTS、NOT、AND / OR
 - GROUP BY / ORDER BY / LIMIT / OFFSET / DISTINCT
+- 集約関数の DISTINCT（`COUNT(DISTINCT x)`、`SUM(DISTINCT x)`、`AVG` / `MIN` / `MAX` も同じ）
 - MySQL ヒント・修飾子: `SELECT STRAIGHT_JOIN`（クエリ単位の結合順ヒント。FROM の JOIN 種別は書き換えない） / `DISTINCTROW` 等、`USE`/`FORCE`/`IGNORE INDEX`、`PARTITION`、`UPDATE`/`DELETE` の `LOW_PRIORITY` / `IGNORE` / `QUICK`
 
 ### 未対応・制限
@@ -181,6 +182,7 @@ npm run check:browser # ビルド + 実際の Chrome で dist/ を操作して�
 - UNION の右側だけを括弧で囲む書き方（`SELECT … UNION (SELECT …)`）— SQL パーサが右側のブランチを読み飛ばすため、エラーにします。両側を括弧で囲むか、括弧を外すと解析できます
 - NULL 安全な等価演算子 `<=>` — SQL パーサーが読めないため、エラーにします
 - `||`（OR）と `XOR` を括弧なしで比較と並べる書き方（`a = 1 || b = 2`）— SQL パーサーが比較より先に結び付けて MySQL と違う意味になるため、エラーにします。`(a = 1) OR (b = 2)` のように括弧で囲むと解析できます
+- SQL パーサーが読めない一部の書き方（`SUBSTRING(a FROM 2 FOR 3)`、`.5` のように 0 を省いた小数、WHERE の中の `BINARY a`、`SOUNDS LIKE` など）— 構文エラーとして位置を示します
 - ウィンドウ関数の専用説明
 - オプティマイザヒントコメント（`/*+ STRAIGHT_JOIN */` 等）
 - 実行計画・実際の行数取得（解析・可視化のみ）

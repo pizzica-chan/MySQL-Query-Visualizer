@@ -1111,8 +1111,16 @@ function primaryTarget(query: ParsedQuery): string {
 }
 
 function buildSummary(query: ParsedQuery, meta: (typeof ACTION_LABELS)[ParsedQuery['statementType']]): string {
-  const target = primaryTarget(query);
-  const filtered = query.where ? '、WHERE 条件を満たす' : '';
+  // `SELECT 1` のように FROM の無い SELECT は、式の値が 1 行だけ返る
+  if (query.statementType === 'SELECT' && query.tables.length === 0) {
+    const condition = query.where ? 'WHERE 条件を満たすときだけ、' : '';
+    return `${condition}式の値が 1 行の結果として${meta.verb}`;
+  }
+  // 「users の行」「users のうち、WHERE 条件を満たす行」。テーブル名と「行」の間に「の」を入れて文をつなぐ
+  const primary = primaryTarget(query);
+  // テーブル名や「（u）」の後ろは空白を空け、「組み合わせ」「3 テーブル」のような日本語の後ろは詰める
+  const target = /[\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Han}ー]$/u.test(primary) ? `${primary}の` : `${primary} の`;
+  const filtered = query.where ? 'うち、WHERE 条件を満たす' : '';
   const distinct = query.statementType === 'SELECT' && query.distinct ? '（重複行除外）' : '';
   const grouped =
     query.statementType === 'SELECT' && query.groupBy.length > 0
