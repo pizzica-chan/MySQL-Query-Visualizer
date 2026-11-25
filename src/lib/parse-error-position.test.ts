@@ -92,6 +92,33 @@ describe('構文エラーの文', () => {
   it('予約語を別名の位置に書いたときの英語の文を、日本語にする', () => {
     const error = errorOf('SELECT * FROM t AS OF TIMESTAMP NOW()');
     expect(error.message).toBe('「OF」は予約語なので、そのままでは別名に使えません。別名にするならバッククォート（`）で囲んでください');
+    // パーサーのエラーは位置を持たないので、`AS 予約語` を探してエディタで示す
+    const sql = "SELECT a FROM t WHERE s = 'x AS order' AND b IN (SELECT c FROM u AS order)";
+    const located = errorOf(sql);
+    const start = sql.lastIndexOf('order');
+    expect(located.span).toEqual({ start, end: start + 5 });
+  });
+
+  // パーサーは SQL の末尾や、原因より後ろの語を指す。原因の位置を示さないと、どこを直せばよいか分からない
+  it.each([
+    ["SELECT a FROM t WHERE s = 'abc", "1 行 27 列の「'」で始まる文字列が閉じていません", "'"],
+    ['SELECT `a FROM t', '1 行 8 列の「`」で始まるバッククォートの名前が閉じていません', '`'],
+    ['SELECT a FROM t\nWHERE a = 1 /* 未完', '2 行 13 列の「/*」で始まるコメントが閉じていません', '/*'],
+    [
+      'SELECT a FROM t　WHERE a = 1',
+      '1 行 16 列に全角の空白があります。全角の空白は区切りにならず、前後の語とつながった名前として読まれます。半角の空白にしてください',
+      '　',
+    ],
+    ['SELECT a，b FROM t', '1 行 9 列の「，」は全角の文字です。SQL の記号は半角（「,」）で書いてください', '，'],
+  ])('原因を示す: %s', (sql, message, marked) => {
+    const error = errorOf(sql);
+    expect(error.message).toBe(message);
+    expect(sql.slice(error.span!.start, error.span!.end)).toBe(marked);
+  });
+
+  it('文字列の中の全角の空白と、閉じた文字列の中の引用符は原因にしない', () => {
+    const sql = "SELECT a FROM t WHERE s = 'あ　い' AND t = 'it''s' AND";
+    expect(errorOf(sql).message).toContain('SQL が途中で終わっています');
   });
 
   it('SQL ケース集の構文エラーは、どれも短い文になる', async () => {

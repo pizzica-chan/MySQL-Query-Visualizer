@@ -191,6 +191,47 @@ export function maskNonCode(sql: string): string {
 }
 
 /**
+ * 閉じていない文字列（' と "）・バッククォート・ブロックコメントの開始位置。どれも閉じていれば null。
+ * 読み取りの関数は閉じていないときも末尾の位置を返すので、閉じたかどうかはここで確かめ直す
+ */
+export function findUnclosedLiteral(sql: string): { start: number; opener: "'" | '"' | '`' | '/*' } | null {
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (isDashLineCommentStart(sql, i)) {
+      i = readLineCommentEnd(sql, i);
+    } else if (ch === '#') {
+      i = readHashLineCommentEnd(sql, i);
+    } else if (ch === '/' && sql[i + 1] === '*') {
+      const end = readBlockCommentEnd(sql, i);
+      if (end < i + 4 || sql.slice(end - 2, end) !== '*/') return { start: i, opener: '/*' };
+      i = end;
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1;
+      let closed = false;
+      while (j < sql.length) {
+        if (sql[j] === ch) {
+          if (sql[j + 1] === ch) {
+            j += 2;
+            continue;
+          }
+          closed = true;
+          j += 1;
+          break;
+        }
+        // バッククォートの中ではバックスラッシュは普通の文字
+        j += ch !== '`' && sql[j] === '\\' ? 2 : 1;
+      }
+      if (!closed) return { start: i, opener: ch };
+      i = j;
+    } else {
+      i += 1;
+    }
+  }
+  return null;
+}
+
+/**
  * 範囲の終端から、後ろに付いた空白とコメントを除いた終端を返す関数を作る。
  * SQL パーサーの位置情報は要素の後ろの空白や `# …` のコメントまで範囲に含めることがある。
  * そのままだと、要素を選んだときにエディタで後ろのコメントまで強調し、

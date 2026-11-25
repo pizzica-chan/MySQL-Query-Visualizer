@@ -5,7 +5,7 @@ import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { NO_JOIN_CONDITION, formatJoinConditionLabel } from './join-condition';
 import { findMisboundLogicalOperator, fixLogicalOperatorPrecedence } from './logical-precedence';
-import { isWordChar } from './sql-lex';
+import { findUnclosedLiteral, isWordChar } from './sql-lex';
 import {
   maskNonCode,
   preprocessSqlForParser,
@@ -1550,7 +1550,20 @@ export function parseMySqlQuery(sql: string): ParseResult {
     const rawSpan = processedToInputForError
       ? syntaxErrorSpan(err, processedToInputForError, sql)
       : undefined;
-    if (!rawSpan) return { success: false, error: { message: translateParserMessage(message) } };
+    if (!rawSpan) {
+      const reservedAlias = reservedAliasSpan(sql, message);
+      return {
+        success: false,
+        error: {
+          message: translateParserMessage(message),
+          ...(reservedAlias ? { position: reservedAlias.start, span: reservedAlias } : {}),
+        },
+      };
+    }
+    const cause = likelySyntaxErrorCause(sql, rawSpan.start, syntaxErrorFound(message) === null);
+    if (cause) {
+      return { success: false, error: { message: cause.message, detail: message, position: cause.span.start, span: cause.span } };
+    }
     // SQL パーサーは NULL 安全な等価演算子 <=> を読めず、`<=` のあとの `>` でエラーにする。
     // 「「>」で構文を解釈できません」では原因が分からないので、演算子ごと示して対応していないと書く
     if (rawSpan.start >= 2 && sql.slice(rawSpan.start - 2, rawSpan.start + 1) === '<=>') {
@@ -1604,6 +1617,55 @@ function extendSpanToWordEnd(sql: string, span: SourceSpan): SourceSpan {
  * 位置を持たない英語のエラーの文のうち、意味の分かるものを日本語にする。分からないものはそのまま返す。
  * `t AS OF ...` のように予約語を別名の位置に書くと、node-sql-parser は位置の無いエラーを投げる
  */
+/** 予約語を別名にしたエラーは位置を持たないので、`AS 予約語` を元の SQL から探してエディタで示せるようにする */
+function reservedAliasSpan(sql: string, message: string): SourceSpan | undefined {
+  const reserved = /^Error: "(.+)" is a reserved word, can not as alias clause$/.exec(message);
+  if (!reserved) return undefined;
+  const word = reserved[1]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`\\bAS\\s+(${word})(?![\\w$])`, 'i').exec(maskNonCode(sql));
+  if (!match) return undefined;
+  const start = match.index + match[0].length - match[1]!.length;
+  return { start, end: start + match[1]!.length };
+}
+
+/** 全角の空白と、半角に対応する全角の記号（，（）＝ など）。英数字の全角（ａ、１）は名前に使えるので含めない */
+const FULL_WIDTH_SEPARATOR_RE = /[　！-／：-＠［-｀｛-～]/;
+
+/**
+ * パーサーのエラー位置より手前にある、本当の原因と考えられる所。
+ * - 閉じていない文字列・バッククォート・コメント。パーサーは SQL の末尾を指し、「途中で終わっています」のエラーになる
+ * - 全角の空白や記号。MySQL は U+0080〜U+FFFF を名前の文字として読む（MySQL 8.4 リファレンス 11.2）ので、
+ *   `t　WHERE` は 1 つの名前になり、エラーはその先の語で出る
+ */
+function likelySyntaxErrorCause(
+  sql: string,
+  errorStart: number,
+  endedEarly: boolean,
+): { message: string; span: SourceSpan } | null {
+  if (endedEarly) {
+    const unclosed = findUnclosedLiteral(sql);
+    if (unclosed) {
+      const at = lineColumnAt(sql, unclosed.start);
+      const what =
+        unclosed.opener === '/*' ? 'コメント' : unclosed.opener === '`' ? 'バッククォートの名前' : '文字列';
+      return {
+        message: `${at.line} 行 ${at.column} 列の「${unclosed.opener}」で始まる${what}が閉じていません`,
+        span: { start: unclosed.start, end: unclosed.start + unclosed.opener.length },
+      };
+    }
+  }
+  const masked = maskNonCode(sql);
+  const index = masked.slice(0, errorStart + 1).search(FULL_WIDTH_SEPARATOR_RE);
+  if (index < 0) return null;
+  const ch = masked[index]!;
+  const at = lineColumnAt(sql, index);
+  const message =
+    ch === '　'
+      ? `${at.line} 行 ${at.column} 列に全角の空白があります。全角の空白は区切りにならず、前後の語とつながった名前として読まれます。半角の空白にしてください`
+      : `${at.line} 行 ${at.column} 列の「${ch}」は全角の文字です。SQL の記号は半角（「${String.fromCharCode(ch.charCodeAt(0) - 0xfee0)}」）で書いてください`;
+  return { message, span: { start: index, end: index + 1 } };
+}
+
 export function translateParserMessage(message: string): string {
   const reserved = /^Error: "(.+)" is a reserved word, can not as alias clause$/.exec(message);
   if (reserved) {
