@@ -82,6 +82,13 @@ describe('構文エラーの文', () => {
     expect(errorOf('SELECT a,, b FROM t').span).toEqual({ start: 9, end: 10 });
   });
 
+  it('SQL パーサーが読めない <=> は、演算子ごと示して対応していないと書く', () => {
+    const sql = 'SELECT t.a FROM t\nWHERE t.a <=> NULL';
+    const error = errorOf(sql);
+    expect(error.message).toBe('2 行 11 列の「<=>」（NULL どうしも等しいとみなす等価演算子）には対応していません');
+    expect(sql.slice(error.span!.start, error.span!.end)).toBe('<=>');
+  });
+
   it('予約語を別名の位置に書いたときの英語の文を、日本語にする', () => {
     const error = errorOf('SELECT * FROM t AS OF TIMESTAMP NOW()');
     expect(error.message).toBe('「OF」は予約語なので、そのままでは別名に使えません。別名にするならバッククォート（`）で囲んでください');

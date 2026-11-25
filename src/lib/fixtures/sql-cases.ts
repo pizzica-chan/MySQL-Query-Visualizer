@@ -1280,4 +1280,22 @@ WHERE t3.id IS NULL`,
       if (targets !== 't1, t2') throw new Error(`targets ${targets}`);
     },
   },
+  {
+    name: 'AND と OR を括弧なしで混ぜる（AND が先に結び付く）',
+    category: 'regression',
+    sql: `SELECT t.id FROM t
+JOIN u ON u.t_id = t.id OR u.k = 1 AND u.j = 2
+WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
+    expectSuccess: true,
+    assert: (q) => {
+      const shape = (n: ConditionNode | undefined): string =>
+        !n ? '-' : n.type === 'and' || n.type === 'or'
+          ? `${n.type}(${(n.children ?? []).map(shape).join(',')})`
+          : 'x';
+      const where = shape(q.where);
+      if (where !== 'or(x,and(x,or(x,x)))') throw new Error(`where ${where}`);
+      const on = shape(q.joins[0]?.conditionRoot);
+      if (on !== 'or(x,and(x,x))') throw new Error(`on ${on}`);
+    },
+  },
 ];

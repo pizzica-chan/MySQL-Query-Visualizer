@@ -51,6 +51,8 @@ SQL 前後比較（`query-result-diff.ts`）は、構文カテゴリのシグネ
 
 ## 変更時に踏みやすい落とし穴
 
+- **node-sql-parser は WHERE・ON・HAVING の中で AND と OR を同じ優先順位として左から結び付ける**（`a OR b AND c` が `(a OR b) AND c` になる）。`parseMySqlQuery` が `astify` の直後に `logical-precedence.ts` で組み直している。AST を自分で `astify` する経路を足すときも、この組み直しを通す。`||` と括弧の無い `XOR` は比較より強く結び付けられて組み直せないので、エラーにしている。
+
 - **`parser.ts` はモジュールレベルの可変状態を持つ**（`nodeCounter` / `naturalJoinStarts` / `straightJoinHint*`）。`parseMySqlQuery` の先頭の `resetIds()` で毎回全消しする前提なので、解析を並行化したり再入させたりすると壊れる。
 
 - **比較モードの「同じ」は緑で表示され、安全の根拠として読まれる**。偽陽性（違う結果を「同じ」と言う）が最も高コストなので、判定を緩める変更は必ず反例を探してから入れる。

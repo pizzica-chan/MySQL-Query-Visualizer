@@ -359,4 +359,20 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     'SELECT ユーザー.名前 FROM ユーザー WHERE ユーザー.状態 = 1',
     'SELECT `ユーザー`.`名前` FROM `ユーザー` WHERE `ユーザー`.`状態` = 1',
   ),
+  // --- AND と OR の優先順位（SQL パーサーが同じ優先順位で結び付けていた） ---
+  different(
+    'AND は OR より先に結び付く',
+    'SELECT t.a FROM t WHERE t.a = 1 OR t.b = 2 AND t.c = 3',
+    'SELECT t.a FROM t WHERE (t.a = 1 OR t.b = 2) AND t.c = 3',
+  ),
+  same(
+    'AND の側を括弧で囲んでも同じ',
+    'SELECT t.a FROM t WHERE t.a = 1 OR t.b = 2 AND t.c = 3',
+    'SELECT t.a FROM t WHERE t.a = 1 OR (t.b = 2 AND t.c = 3)',
+  ),
+  different(
+    'ON の中の AND と OR の優先順位',
+    'SELECT t.a FROM t JOIN u ON u.id = t.id OR u.k = 1 AND u.j = 2',
+    'SELECT t.a FROM t JOIN u ON (u.id = t.id OR u.k = 1) AND u.j = 2',
+  ),
 ];

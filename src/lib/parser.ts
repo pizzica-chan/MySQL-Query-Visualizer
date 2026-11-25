@@ -4,6 +4,7 @@
 import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { NO_JOIN_CONDITION, formatJoinConditionLabel } from './join-condition';
+import { findMisboundLogicalOperator, fixLogicalOperatorPrecedence } from './logical-precedence';
 import { isWordChar } from './sql-lex';
 import {
   maskNonCode,
@@ -1413,6 +1414,20 @@ export function parseMySqlQuery(sql: string): ParseResult {
       database: 'MySQL',
       parseOptions: { includeLocations: true },
     });
+    // パーサーは WHERE などの中で AND と OR を同じ優先順位で結び付けるので、MySQL の優先順位で組み直す
+    fixLogicalOperatorPrecedence(ast);
+    const misbound = findMisboundLogicalOperator(ast);
+    if (misbound) {
+      return {
+        success: false,
+        error: {
+          message:
+            `${misbound} の前後の比較を括弧で囲んでください（例: (a = 1) ${misbound} (b = 2)）。括弧が無いと、SQL パーサーが ${misbound} を比較より先に結び付けてしまい、MySQL と違う意味で解析されます` +
+            // || は既定では OR だが、PIPES_AS_CONCAT を有効にした MySQL では文字列の連結になる（MySQL 8.4 リファレンス 14.4.1）
+            (misbound === '||' ? '。文字列を連結するつもりなら、CONCAT() で書いてください' : ''),
+        },
+      };
+    }
     // 先頭 `;` などで astify が type を持たない空要素を返すことがある。文数に数えない
     const statements = (Array.isArray(ast) ? ast : [ast]).filter((statement) => statement?.type);
     const first = statements[0];
@@ -1472,6 +1487,21 @@ export function parseMySqlQuery(sql: string): ParseResult {
       ? syntaxErrorSpan(err, processedToInputForError, sql)
       : undefined;
     if (!rawSpan) return { success: false, error: { message: translateParserMessage(message) } };
+    // SQL パーサーは NULL 安全な等価演算子 <=> を読めず、`<=` のあとの `>` でエラーにする。
+    // 「「>」で構文を解釈できません」では原因が分からないので、演算子ごと示して対応していないと書く
+    if (rawSpan.start >= 2 && sql.slice(rawSpan.start - 2, rawSpan.start + 1) === '<=>') {
+      const nullSafe = { start: rawSpan.start - 2, end: rawSpan.start + 1 };
+      const at = lineColumnAt(sql, nullSafe.start);
+      return {
+        success: false,
+        error: {
+          message: `${at.line} 行 ${at.column} 列の「<=>」（NULL どうしも等しいとみなす等価演算子）には対応していません`,
+          detail: message,
+          position: nullSafe.start,
+          span: nullSafe,
+        },
+      };
+    }
     // パーサーは 1 文字だけを指すので、語の途中で切れていたら語の終わりまで広げる（「ROW」を「R」とだけ示さない）
     const span = extendSpanToWordEnd(sql, rawSpan);
     const { line, column } = lineColumnAt(sql, span.start);
