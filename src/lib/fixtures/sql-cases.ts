@@ -1513,6 +1513,37 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
+    name: '列を書き忘れた SELECT は、原因が分かるエラーにする',
+    category: 'error',
+    sql: 'SELECT FROM users',
+    expectSuccess: false,
+    errorContains: 'SELECT の後ろに、表示する列がありません',
+  },
+  {
+    name: '最後の列の後ろに残った「,」は、原因が分かるエラーにする',
+    category: 'error',
+    sql: 'SELECT u.id,\n  FROM users u',
+    expectSuccess: false,
+    errorContains: '「,」の後ろに列がありません',
+  },
+  {
+    name: '引用符なしで書けない名前は、バッククォートで囲んで表示する（AS User Name を別名 User に見せない）',
+    category: 'regression',
+    sql: 'SELECT u.name AS `User Name`, u.`x y`, u.`1e`, 売上.金額 AS 合計 FROM users u, 売上 ORDER BY `User Name`',
+    expectSuccess: true,
+    assert: (q) => {
+      const texts = q.columns.map((c) => [c.expression, c.alias ?? null]);
+      const expected = [
+        ['u.name', 'User Name'],
+        ['u.`x y`', null],
+        ['u.`1e`', null],
+        ['売上.金額', '合計'],
+      ];
+      if (JSON.stringify(texts) !== JSON.stringify(expected)) throw new Error(JSON.stringify(texts));
+      if (q.orderBy[0]?.text !== '`User Name`') throw new Error(q.orderBy[0]?.text);
+    },
+  },
+  {
     name: 'FROM の無い SELECT の列も、SQL 上の範囲を持つ',
     category: 'regression',
     sql: "SELECT 1, 'a' AS x, NOW()",

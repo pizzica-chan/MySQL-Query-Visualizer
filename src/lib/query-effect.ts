@@ -12,7 +12,7 @@ import {
 import { joinConditionDisplayText } from './join-condition';
 import { resolveJoinLayoutSources } from './join-graph-layout';
 import { hasUnion } from './query-utils';
-import { maskNonCode, readBalancedParenEnd } from './sql-lex';
+import { displayIdentifier, maskNonCode, readBalancedParenEnd } from './sql-lex';
 
 export type EffectAction = 'select' | 'update' | 'delete';
 
@@ -108,7 +108,7 @@ function hasStarProjection(columns: SelectColumn[]): boolean {
 }
 
 function formatSelectColumnSql(col: SelectColumn): string {
-  return col.alias ? `${col.expression} AS ${col.alias}` : col.expression;
+  return col.alias ? `${col.expression} AS ${displayIdentifier(col.alias)}` : col.expression;
 }
 
 function formatOrderByClause(query: ParsedQuery): EffectLine | null {
@@ -409,7 +409,7 @@ function replaceTableQualifiersInExpression(expression: string, tables: TableRef
 function formatSelectColumnLine(col: SelectColumn, tables: TableRef[]): string {
   const expression = replaceTableQualifiersInExpression(col.expression, tables);
   if (col.expression === '*') return '*（すべての列）';
-  return col.alias ? `${expression} AS ${col.alias}` : expression;
+  return col.alias ? `${expression} AS ${displayIdentifier(col.alias)}` : expression;
 }
 
 function formatSetClauseLine(set: SetClause, tables: TableRef[]): string {

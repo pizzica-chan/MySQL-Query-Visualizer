@@ -6,6 +6,21 @@
  */
 const WORD_CHAR = /[\w$\u0080-\uFFFF]/;
 
+/**
+ * 引用符なしで書ける名前（英数字・`_`・`$`・U+0080 以降の文字）。MySQL は数字で始まる名前も引用符なしで書けるが、
+ * `1e` のように数値と紛らわしいので、数字で始まる名前は引用符で囲んで出す
+ */
+const PLAIN_IDENTIFIER_RE = /^[A-Za-z_$\u0080-\uFFFF][\w$\u0080-\uFFFF]*$/;
+
+/**
+ * 画面に出す名前。引用符なしで書けない名前（空白や記号を含む `User Name` など）は、バッククォートで囲む。
+ * 引用符を外して出すと、`AS User Name` が別名 User に見えるなど、SQL として読めなくなる
+ */
+export function displayIdentifier(name: string): string {
+  if (name === '*' || name === '' || PLAIN_IDENTIFIER_RE.test(name)) return name;
+  return `\`${name.replace(/`/g, '``')}\``;
+}
+
 /** ch が引用符なしの識別子（またはキーワード）に使える文字か */
 export function isWordChar(ch: string | undefined): boolean {
   return ch !== undefined && WORD_CHAR.test(ch);
