@@ -1078,9 +1078,16 @@ function fillMissingColumnSpans(columns: SelectColumn[], ast: any): SelectColumn
 function derivedTableSourceSpan(inner: SourceSpan | undefined, alias: string | undefined): SourceSpan | undefined {
   if (!inner) return undefined;
   const masked = maskedProcessedSql();
-  let open = inner.start - 1;
-  while (open >= 0 && /\s/.test(masked[open]!)) open -= 1;
-  if (masked[open] !== '(') return inner;
+  // 中の SELECT の前に続く「(」のうち、いちばん外のものがインラインビューの始まり。
+  // `((SELECT …) UNION ALL (SELECT …)) d` では、中の SELECT の範囲の前に「(」が 2 つ並ぶ
+  let open = -1;
+  for (let i = inner.start - 1; i >= 0; i--) {
+    const ch = masked[i]!;
+    if (/\s/.test(ch)) continue;
+    if (ch !== '(') break;
+    open = i;
+  }
+  if (open < 0) return inner;
   const close = readBalancedParenEnd(masked, open);
   if (close == null) return inner;
   if (!alias) return { start: open, end: close };
@@ -1095,8 +1102,11 @@ function derivedTableSourceSpan(inner: SourceSpan | undefined, alias: string | u
     pos += as[0].length;
     skipBlank();
   }
-  const name = /^(?:`[^`]*`|[^\s,()]+)/.exec(processedSqlForNatural.slice(pos));
-  return { start: open, end: name ? pos + name[0].length : close };
+  const name = /^(?:`(?:[^`]|``)*`|[^\s,()]+)/.exec(processedSqlForNatural.slice(pos))?.[0];
+  // 取り出した語が別名と違うとき（`… ) UNION` のように、括弧の後ろが別名でないとき）は、別名を範囲に入れない
+  const unquoted = name?.startsWith('`') ? name.slice(1, -1).replace(/``/g, '`') : name;
+  if (!name || unquoted?.toUpperCase() !== alias.toUpperCase()) return { start: open, end: close };
+  return { start: open, end: pos + name.length };
 }
 
 const PARENTHESIZED_JOIN_MESSAGE =

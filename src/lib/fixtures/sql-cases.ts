@@ -1501,6 +1501,18 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
+    name: '括弧が重なる派生テーブルも、いちばん外の括弧から別名までを範囲にする',
+    category: 'subquery',
+    sql: 'SELECT d.x, v.y FROM ((SELECT a.x FROM a) UNION ALL (SELECT b.x FROM b)) AS d JOIN ((SELECT c.y FROM c)) v ON v.y = d.x',
+    expectSuccess: true,
+    assert: (q) => {
+      const sql = 'SELECT d.x, v.y FROM ((SELECT a.x FROM a) UNION ALL (SELECT b.x FROM b)) AS d JOIN ((SELECT c.y FROM c)) v ON v.y = d.x';
+      const texts = q.tables.map((t) => (t.sourceSpan ? sql.slice(t.sourceSpan.start, t.sourceSpan.end) : null));
+      const expected = ['((SELECT a.x FROM a) UNION ALL (SELECT b.x FROM b)) AS d', '((SELECT c.y FROM c)) v'];
+      if (JSON.stringify(texts) !== JSON.stringify(expected)) throw new Error(JSON.stringify(texts));
+    },
+  },
+  {
     name: '派生テーブルも SQL 上の範囲（括弧から別名まで）を持つ（JOIN 図のノードと SQL が連動する）',
     category: 'subquery',
     sql: 'SELECT v.id, w.id FROM a JOIN (SELECT 1 AS id) /* c */ AS `v` ON v.id = a.id JOIN (SELECT 2 AS id) w ON w.id = v.id',
