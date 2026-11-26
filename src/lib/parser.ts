@@ -1359,6 +1359,8 @@ function buildSelectParsedCore(ast: any): ParsedQuery {
     columns: fillMissingColumnSpans(parseColumns(ast.columns), ast),
     groupBy,
     groupByModifier: groupByModifierText(ast),
+    // `FOR UPDATE SKIP LOCKED` などの行ロックの指定。パーサーは位置を返さない
+    lockingClause: typeof ast.locking_read === 'string' && ast.locking_read ? ast.locking_read.toUpperCase() : undefined,
     orderBy,
     limit,
     limitSpan,

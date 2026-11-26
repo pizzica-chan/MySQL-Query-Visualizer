@@ -1190,8 +1190,43 @@ function describeChanges(query: ParsedQuery): QueryEffectSection | null {
   return null;
 }
 
+/**
+ * 行ロックの指定（FOR UPDATE など）。読んだ行をロックするのは、結果の行とは別の、この SQL の作用。
+ * 出典: MySQL 8.4 Reference Manual「Locking Reads」
+ */
+function describeLockingLines(query: ParsedQuery, mode: QueryEffectMode): EffectLine[] {
+  const clause = query.lockingClause;
+  if (!clause) return [];
+  const sourceSpan = query.lockingClauseSpan;
+  if (mode === 'sql') return [{ text: clause, sourceSpan }];
+
+  const shared = /\b(?:SHARE)\b/i.test(clause);
+  const lines: EffectLine[] = [
+    {
+      text: shared
+        ? `共有ロック（${clause}） — 読んだ行は、トランザクションが終わるまでほかのセッションが変更できない`
+        : `行ロック（${clause}） — 選んだ行は、トランザクションが終わるまでほかのセッションがロックも更新もできない`,
+      sourceSpan,
+    },
+  ];
+  const of = /\bOF\s+(.+?)(?=\s+(?:NOWAIT|WAIT|SKIP)\b|$)/i.exec(clause)?.[1];
+  if (of) lines.push({ text: `OF ${of} — 指定した列の表の行だけをロックする`, sourceSpan });
+  if (/\bSKIP\s+LOCKED\b/i.test(clause)) {
+    lines.push({ text: 'SKIP LOCKED — ほかのトランザクションがロックしている行は、結果に入れずに飛ばす', sourceSpan });
+  }
+  if (/\bNOWAIT\b/i.test(clause)) {
+    lines.push({ text: 'NOWAIT — ロックできない行があれば、待たずにエラーにする', sourceSpan });
+  }
+  const wait = /\bWAIT\s+(\d+)(?:\s+(SECONDS|MILLISECONDS|MICROSECONDS))?/i.exec(clause);
+  if (wait) {
+    const unit = { MILLISECONDS: 'ミリ秒', MICROSECONDS: 'マイクロ秒' }[wait[2]?.toUpperCase() ?? ''] ?? '秒';
+    lines.push({ text: `WAIT ${wait[1]} — ロックできるまで、最大 ${wait[1]} ${unit}待つ`, sourceSpan });
+  }
+  return lines;
+}
+
 function describePostProcess(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection | null {
-  const lines = describePostProcessLines(query, mode);
+  const lines = [...describePostProcessLines(query, mode), ...describeLockingLines(query, mode)];
   return lines.length > 0 ? { kind: 'info', title: '後処理', lines } : null;
 }
 

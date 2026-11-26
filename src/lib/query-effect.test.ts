@@ -1241,3 +1241,23 @@ describe('小計の行を作る GROUP BY・BINARY・LATERAL', () => {
     expect(effectLines('SELECT u.id FROM users u, (SELECT 1 y) x').some((t) => t.includes('直積'))).toBe(true);
   });
 });
+
+describe('行ロックの指定', () => {
+  const effectTexts = (sql: string) => {
+    const parsed = parseMySqlQuery(sql);
+    if (!parsed.success) throw new Error(parsed.error.message);
+    return buildQueryEffect(parsed.query, 'japanese').sections.flatMap((s) => s.lines ?? []).map((l) => l.text);
+  };
+
+  it('FOR UPDATE と LOCK IN SHARE MODE は行をロックすると書き、SKIP LOCKED も説明する', () => {
+    expect(effectTexts('SELECT u.id FROM users u WHERE u.a = 1 FOR UPDATE SKIP LOCKED')).toEqual(
+      expect.arrayContaining([
+        '行ロック（FOR UPDATE SKIP LOCKED） — 選んだ行は、トランザクションが終わるまでほかのセッションがロックも更新もできない',
+        'SKIP LOCKED — ほかのトランザクションがロックしている行は、結果に入れずに飛ばす',
+      ]),
+    );
+    expect(effectTexts('SELECT u.id FROM users u lock in share mode')).toContain(
+      '共有ロック（LOCK IN SHARE MODE） — 読んだ行は、トランザクションが終わるまでほかのセッションが変更できない',
+    );
+  });
+});

@@ -136,6 +136,9 @@ export interface ParsedQuery {
   groupBy: SqlFragment[];
   /** GROUP BY に付く修飾子（`WITH ROLLUP`）。付くと小計行が増え、列の並び順も結果を決める */
   groupByModifier?: string;
+  /** 行ロックの指定（`FOR UPDATE SKIP LOCKED` など）。文の最上位の SELECT だけが持つ */
+  lockingClause?: string;
+  lockingClauseSpan?: SourceSpan;
   orderBy: SqlFragment[];
   limit?: string;
   limitSpan?: SourceSpan;
