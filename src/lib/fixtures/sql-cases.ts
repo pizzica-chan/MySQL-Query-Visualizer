@@ -1513,6 +1513,13 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
+    name: '括弧の中で集合演算をまとめる書き方は、未対応と伝える',
+    category: 'error',
+    sql: '(SELECT x FROM t1 UNION SELECT x FROM t2) EXCEPT SELECT x FROM t3',
+    expectSuccess: false,
+    errorContains: '括弧の中で集合演算をまとめる書き方',
+  },
+  {
     name: '列を書き忘れた SELECT は、原因が分かるエラーにする',
     category: 'error',
     sql: 'SELECT FROM users',
