@@ -1298,6 +1298,14 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
       throw new Error(`「${name}」との ${joinType} に ON（結合条件）がありません。ON か USING で結合条件を書いてください`);
     }
 
+    // MySQL の joined_table の構文に FULL [OUTER] JOIN は無い（MySQL 8.4 Reference Manual「JOIN Clause」）。
+    // FULL は予約語でもないので、MySQL では `t1 FULL JOIN t2` の FULL が t1 の別名になり、両側を残す結合にはならない。
+    // 受け付けると、MySQL では動かない（または別の意味になる）SQL を FULL JOIN として説明してしまう
+    if (joinType === 'FULL JOIN') {
+      const name = tableRef.alias ?? tableRef.table;
+      throw new Error(`「${name}」との FULL JOIN は、MySQL では書けません。LEFT JOIN か RIGHT JOIN で書いてください`);
+    }
+
     joins.push({
       id: nextId('join'),
       type: joinType,

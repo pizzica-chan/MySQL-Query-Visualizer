@@ -143,24 +143,32 @@ LIMIT 100`,
     },
   },
   {
-    name: 'RIGHT JOIN + FULL JOIN + CROSS JOIN 混在',
+    name: 'RIGHT JOIN + LEFT JOIN + CROSS JOIN 混在',
     category: 'complex',
     sql: `SELECT a.id, b.name, c.val
 FROM schema_a.table_a a
 RIGHT JOIN table_b b ON b.a_id = a.id
-FULL JOIN table_c c ON c.b_id = b.id
+LEFT JOIN table_c c ON c.b_id = b.id
 CROSS JOIN table_d d
 WHERE a.deleted_at IS NULL AND b.score > 0`,
     expectSuccess: true,
     assert: (q) => {
       const types = joinTypes(q);
       if (!types.includes('RIGHT JOIN')) throw new Error('missing RIGHT JOIN');
-      if (!types.includes('FULL JOIN')) throw new Error('missing FULL JOIN');
+      if (!types.includes('LEFT JOIN')) throw new Error('missing LEFT JOIN');
       if (!types.includes('CROSS JOIN')) throw new Error('missing CROSS JOIN');
       if (q.tables[0]?.schema !== 'schema_a') throw new Error('schema');
       const wTypes = collectConditionTypes(q.where);
       if (!wTypes.includes('is_null')) throw new Error('missing IS NULL');
     },
+  },
+  {
+    // MySQL 8.4 Reference Manual「JOIN Clause」の joined_table の構文に FULL [OUTER] JOIN は無い
+    name: 'MySQL には無い FULL JOIN はエラーにする',
+    category: 'error',
+    sql: 'SELECT a.id FROM table_a a FULL OUTER JOIN table_b b ON b.a_id = a.id',
+    expectSuccess: false,
+    errorContains: 'FULL JOIN は、MySQL では書けません',
   },
   {
     name: '深くネストした WHERE（AND/OR/NOT）',
