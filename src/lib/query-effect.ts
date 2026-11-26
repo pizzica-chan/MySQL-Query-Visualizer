@@ -216,6 +216,11 @@ function describeAggregateLinesJapanese(query: ParsedQuery): EffectLine[] {
       text: `${query.groupBy.map((g) => g.text).join(', ')} ごとに集約 — 1グループ = 結果の1行`,
       sourceSpan: query.groupBy[0]?.sourceSpan,
     });
+    // WITH ROLLUP は、グループごとの行に加えて小計と総計の行（super-aggregate row）を作る。
+    // 書かないと、結果の行がグループの数より多い理由が分からない（MySQL 8.4 Reference Manual「GROUP BY Modifiers」）
+    if (query.groupByModifier) {
+      lines.push({ text: `${query.groupByModifier} — 小計と総計の行も加わる` });
+    }
   } else if (aggregateCols.length > 0) {
     lines.push({ text: '集約関数のみ — 全体を1グループとして計算（結果は最大1行）' });
   }
@@ -242,6 +247,7 @@ function describeAggregateLines(query: ParsedQuery, mode: QueryEffectMode): Effe
     for (const g of query.groupBy) {
       lines.push({ text: g.text, sourceSpan: g.sourceSpan, aggregateIndent: true });
     }
+    if (query.groupByModifier) lines.push({ text: query.groupByModifier, aggregateIndent: true });
   }
 
   const aggregateCols = query.columns.filter(hasGroupingAggregate);
@@ -692,6 +698,11 @@ function describeJoinJapanese(
   // ON / USING の無い INNER JOIN（カンマ結合を含む）と STRAIGHT_JOIN も、MySQL では CROSS JOIN と同じく
   // すべての行の組み合わせを作る。「結合条件を満たす組み合わせのみ残る」と書くと、条件があるように読める
   if (isCartesianJoin(join)) {
+    // LATERAL の派生テーブルは前の表の列を参照し、前の表の行を処理するたびに作り直される
+    // （MySQL 8.4 Reference Manual「Lateral Derived Tables」）。どの行とも組み合わせる直積とは読めない
+    if (tables.find((t) => t.id === join.targetId)?.isLateral) {
+      return `${left} の行ごとに ${right} を作り直して組み合わせる（LATERAL — ${right} は前の表の列を参照できる）`;
+    }
     const order = join.type === 'STRAIGHT JOIN' ? '（FROM 句の記述順で結合）' : '';
     return `${left} と ${right} の直積（すべての組み合わせ）${order}`;
   }
@@ -709,6 +720,9 @@ function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
   const sourceLabels = joinSourceLabels(join, tables);
   const right = tableName(join, tables, join.targetId);
   const left = sourceLabels.length === 1 ? sourceLabels[0]! : sourceLabels.join('、');
+  if (tables.find((t) => t.id === join.targetId)?.isLateral) {
+    return `LATERAL — ${left} の行ごとに ${right} を作り直して組み合わせる`;
+  }
   if (join.type === 'CROSS JOIN') return `CROSS JOIN — ${left} と ${right} のすべての組み合わせ`;
   return `${formatJoinDisplayType(join)} — ${left} と ${right} のすべての組み合わせ（結合条件が無いので CROSS JOIN と同じ）`;
 }

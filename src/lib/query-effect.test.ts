@@ -1215,3 +1215,29 @@ describe('NOT IN の一覧の中の関数の NULL', () => {
     expect(leafText('t.id NOT IN (1, NULL, IFNULL(t.a, 1))')).toContain('一覧に NULL があるので');
   });
 });
+
+describe('小計の行を作る GROUP BY・BINARY・LATERAL', () => {
+  const effectLines = (sql: string, mode: 'sql' | 'japanese' = 'japanese') => {
+    const parsed = parseMySqlQuery(sql);
+    if (!parsed.success) throw new Error(parsed.error.message);
+    return buildQueryEffect(parsed.query, mode).sections.flatMap((s) => s.lines ?? []).map((l) => l.text);
+  };
+
+  it('WITH ROLLUP は、小計と総計の行が加わると書く', () => {
+    expect(effectLines('SELECT u.d, COUNT(*) FROM users u GROUP BY u.d WITH ROLLUP')).toContain('WITH ROLLUP — 小計と総計の行も加わる');
+    expect(effectLines('SELECT u.d, COUNT(*) FROM users u GROUP BY u.d WITH ROLLUP', 'sql')).toContain('WITH ROLLUP');
+  });
+
+  it('BINARY 演算子は、大文字にして空白を挟んで表示する（文字セットの指定 _binary はそのまま）', () => {
+    const parsed = parseMySqlQuery("SELECT u.id FROM users u WHERE u.code LIKE BINARY 'A%' AND u.n = _binary'x'");
+    if (!parsed.success) throw new Error(parsed.error.message);
+    expect(parsed.query.where?.children?.map((c) => c.label)).toEqual(["u.code LIKE BINARY 'A%'", "u.n = _binary'x'"]);
+  });
+
+  it('LATERAL の派生テーブルは、直積ではなく前の表の行ごとに作り直すと書く', () => {
+    const sql = 'SELECT u.id FROM users u, LATERAL (SELECT o.id FROM orders o WHERE o.user_id = u.id LIMIT 1) x';
+    expect(effectLines(sql).some((t) => t.startsWith('u の行ごとに x（派生テーブル） を作り直して組み合わせる'))).toBe(true);
+    expect(effectLines(sql, 'sql').some((t) => t.startsWith('LATERAL — u の行ごとに'))).toBe(true);
+    expect(effectLines('SELECT u.id FROM users u, (SELECT 1 y) x').some((t) => t.includes('直積'))).toBe(true);
+  });
+});

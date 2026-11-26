@@ -33,6 +33,8 @@ export interface TableRef {
   displayName: string;
   /** FROM句の派生テーブル `(SELECT ...) AS t` */
   isDerived?: boolean;
+  /** `LATERAL (SELECT …) t`。前の表の列を参照でき、前の表の行を処理するたびに作り直される */
+  isLateral?: boolean;
   derivedQuery?: ParsedQuery;
   /** 元 SQL 内のテーブル参照位置 */
   sourceSpan?: SourceSpan;

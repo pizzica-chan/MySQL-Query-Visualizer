@@ -172,8 +172,11 @@ function formatDoubleQuotedString(value: string): string {
 }
 
 function formatQuotedLiteral(node: any): string {
-  // `_binary'x'` の文字セット指定。落とすと、照合順序の違う比較が 'x' との比較と同じに見える
-  const introducer = typeof node.prefix === 'string' && node.prefix ? node.prefix : '';
+  // `_binary'x'` の文字セット指定。落とすと、照合順序の違う比較が 'x' との比較と同じに見える。
+  // パーサーは `BINARY 'x'`（BINARY 演算子）も同じく prefix に入れる。こちらは `_` で始まらないので、
+  // 文字セットの指定と区別して、大文字にして空白を挟む（`binary'x'` と書くと SQL として読めない）
+  const prefix = typeof node.prefix === 'string' ? node.prefix : '';
+  const introducer = !prefix ? '' : prefix.startsWith('_') ? prefix : `${prefix.toUpperCase()} `;
   if (typeof node.raw === 'string' && node.raw.length > 0) {
     const raw = node.raw;
     if (raw.startsWith("'") || raw.startsWith('"')) return `${introducer}${raw}`;
@@ -1130,6 +1133,7 @@ function buildTableRef(entry: any, index: number): TableRef {
       alias,
       displayName: `${alias}（派生テーブル）`,
       isDerived: true,
+      isLateral: /^LATERAL$/i.test(String(entry.prefix ?? '')) || undefined,
       derivedQuery: span ? { ...derivedQuery, sourceSpan: span } : derivedQuery,
       sourceSpan: sourceSpan ?? derivedTableSourceSpan(span, givenAlias),
     };
