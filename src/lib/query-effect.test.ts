@@ -1164,3 +1164,39 @@ describe('集合演算の結果全体に掛かる後処理', () => {
     expect(buildUnionQueryEffect(parsed.query, 'japanese')?.wholeResult).toBeNull();
   });
 });
+
+describe('NOT IN の相手の NULL', () => {
+  const leafText = (where: string): string => {
+    const parsed = parseMySqlQuery(`SELECT t.id FROM t WHERE ${where}`);
+    if (!parsed.success) throw new Error(parsed.error.message);
+    const filter = buildQueryEffect(parsed.query, 'japanese').sections.find((s) => s.kind === 'filter');
+    return filter?.conditionRoot?.text ?? filter?.conditionRoot?.label ?? '';
+  };
+
+  it('サブクエリの NOT IN には、NULL があるとどの行も残らないことを書き添える', () => {
+    expect(leafText('t.id NOT IN (SELECT u.t_id FROM u)')).toContain('NULL が 1 つでもあると、どの行も残らない');
+    expect(leafText('t.id IN (SELECT u.t_id FROM u)')).not.toContain('NULL');
+  });
+
+  it('値の一覧に NULL を書いた NOT IN は、どの行も残らないと書く', () => {
+    expect(leafText('t.id NOT IN (1, NULL)')).toContain('一覧に NULL があるので、どの行も残らない');
+    expect(leafText("t.id NOT IN (1, 'NULL')")).not.toContain('どの行も残らない');
+    expect(leafText('t.id IN (1, NULL)')).not.toContain('どの行も残らない');
+  });
+});
+
+describe('NULL との比較', () => {
+  const leafText = (where: string): string => {
+    const parsed = parseMySqlQuery(`SELECT t.id FROM t WHERE ${where}`);
+    if (!parsed.success) throw new Error(parsed.error.message);
+    const filter = buildQueryEffect(parsed.query, 'japanese').sections.find((s) => s.kind === 'filter');
+    return filter?.conditionRoot?.text ?? filter?.conditionRoot?.label ?? '';
+  };
+
+  it('= NULL や <> NULL は真にならないことと、IS NULL で調べることを書き添える', () => {
+    expect(leafText('t.a = NULL')).toContain('NULL と比べた結果は真にならない');
+    expect(leafText('NULL <> t.a')).toContain('IS NULL / IS NOT NULL で調べる');
+    expect(leafText('t.a IS NULL')).not.toContain('真にならない');
+    expect(leafText("t.a = 'NULL'")).not.toContain('真にならない');
+  });
+});

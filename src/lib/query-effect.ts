@@ -713,18 +713,42 @@ function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
   return `${formatJoinDisplayType(join)} — ${left} と ${right} のすべての組み合わせ（結合条件が無いので CROSS JOIN と同じ）`;
 }
 
+/** 値の一覧（`(1, NULL)`）に NULL が書かれているか。文字列の中の NULL は数えない */
+function listContainsNullLiteral(label: string): boolean {
+  const masked = maskNonCode(label);
+  const open = masked.lastIndexOf('(');
+  return open >= 0 && /(?:^|,)\s*NULL\s*(?:,|$)/i.test(masked.slice(open + 1).replace(/\)\s*$/, ''));
+}
+
 function inConditionPhrase(node: ConditionNode): string {
   const isNotIn = node.operator === 'NOT IN' || /\bNOT\s+IN\b/i.test(node.label);
 
+  // NOT IN の相手に NULL が 1 つでもあると、比べた結果が真にならず、どの行も残らない。見落としやすいので書き添える
+  // （MySQL 8.4 Reference Manual「Comparison Functions and Operators」の IN() と NOT IN() の説明から）
   if (node.nestedQuery) {
     const prefix = isNotIn
-      ? '別の SELECT が返した値のどれとも一致しない'
+      ? '別の SELECT が返した値のどれとも一致しない（その値に NULL が 1 つでもあると、どの行も残らない）'
       : '別の SELECT が返した値のどれかと一致';
     return `${prefix} — ${node.label}`;
   }
 
+  if (isNotIn && listContainsNullLiteral(node.label)) {
+    return `次の値のどれとも一致しない（一覧に NULL があるので、どの行も残らない） — ${node.label}`;
+  }
   const prefix = isNotIn ? '次の値のどれとも一致しない' : '次の値のどれかと一致';
   return `${prefix} — ${node.label}`;
+}
+
+/** NULL と比べる比較演算子 */
+const NULL_COMPARISON_OPERATORS = new Set(['=', '<>', '!=', '<', '>', '<=', '>=']);
+
+/**
+ * `x = NULL` のように NULL と比べる条件。結果は UNKNOWN になり、どの行でも真にならない。
+ * NULL かどうかは IS NULL / IS NOT NULL で調べる（MySQL 8.4 Reference Manual「Working with NULL Values」）
+ */
+function comparesWithNullLiteral(node: ConditionNode): boolean {
+  if (!NULL_COMPARISON_OPERATORS.has(node.operator ?? '')) return false;
+  return /^NULL$/i.test(node.left?.trim() ?? '') || /^NULL$/i.test(node.right?.trim() ?? '');
 }
 
 function conditionPhrase(node: ConditionNode, mode: QueryEffectMode): string {
@@ -746,6 +770,9 @@ function conditionPhrase(node: ConditionNode, mode: QueryEffectMode): string {
     default:
       // NOT LIKE は、パーサーが LIKE とは別の比較として返す
       if (/^NOT\s+LIKE$/i.test(node.operator ?? '')) return `パターンに一致しない — ${node.label}`;
+      if (comparesWithNullLiteral(node)) {
+        return `NULL と比べた結果は真にならない（NULL かどうかは IS NULL / IS NOT NULL で調べる） — ${node.label}`;
+      }
       return node.label;
   }
 }
