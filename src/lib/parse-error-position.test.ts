@@ -91,6 +91,15 @@ describe('構文エラーの文', () => {
     expect(sql.slice(error.span!.start, error.span!.end)).toBe('<=>');
   });
 
+  it.each([
+    ['SELECT a FROM t EXCEPT ALL SELECT a FROM u', '1 行 17 列の「EXCEPT ALL」（重複を残す集合演算）には対応していません', 'EXCEPT ALL'],
+    ['SELECT a FROM t\nintersect  all SELECT a FROM u', '2 行 1 列の「INTERSECT ALL」（重複を残す集合演算）には対応していません', 'intersect  all'],
+  ])('SQL パーサーが読めない %s は、集合演算ごと示して対応していないと書く', (sql, expected, spanText) => {
+    const error = errorOf(sql);
+    expect(error.message).toBe(expected);
+    expect(sql.slice(error.span!.start, error.span!.end)).toBe(spanText);
+  });
+
   it('予約語を別名の位置に書いたときの英語の文を、日本語にする', () => {
     const error = errorOf('SELECT * FROM t AS OF TIMESTAMP NOW()');
     expect(error.message).toBe('「OF」は予約語なので、そのままでは別名に使えません。別名にするならバッククォート（`）で囲んでください');

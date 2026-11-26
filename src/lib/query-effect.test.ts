@@ -1260,4 +1260,47 @@ describe('行ロックの指定', () => {
       '共有ロック（LOCK IN SHARE MODE） — 読んだ行は、トランザクションが終わるまでほかのセッションが変更できない',
     );
   });
+
+  it('FOR SHARE と OF 表の名前も読み、OF は表の行だけをロックすると書く', () => {
+    expect(effectTexts('SELECT u.id FROM users u FOR SHARE SKIP LOCKED')).toEqual(
+      expect.arrayContaining([
+        '共有ロック（FOR SHARE SKIP LOCKED） — 読んだ行は、トランザクションが終わるまでほかのセッションが変更できない',
+        'SKIP LOCKED — ほかのトランザクションがロックしている行は、結果に入れずに飛ばす',
+      ]),
+    );
+    expect(effectTexts('SELECT * FROM users u JOIN orders o ON o.user_id = u.id FOR UPDATE OF u, o NOWAIT')).toEqual(
+      expect.arrayContaining([
+        'OF u, o — 指定した表の行だけをロックする',
+        'NOWAIT — ロックできない行があれば、待たずにエラーにする',
+      ]),
+    );
+  });
+
+  it('行ロックの行は、SQL の中の指定を指す（後ろのコメントと ; は含めない）', () => {
+    const sql = '  SELECT u.id FROM users u WHERE u.a = 1\nFOR   UPDATE /* x */ ;';
+    const parsed = parseMySqlQuery(sql);
+    if (!parsed.success) throw new Error(parsed.error.message);
+    const line = buildQueryEffect(parsed.query, 'japanese')
+      .sections.flatMap((s) => s.lines ?? [])
+      .find((l) => l.text.startsWith('行ロック'));
+    expect(line?.text).toContain('行ロック（FOR UPDATE）');
+    expect(sql.slice(line!.sourceSpan!.start, line!.sourceSpan!.end)).toBe('FOR   UPDATE');
+  });
+
+  it.each([
+    ['SELECT * FROM emp PARTITION (p0, p1) e WHERE e.x = 1', 'emp（e） の PARTITION (p0, p1) — 表のうち、指定したパーティションの行だけを読む'],
+    ['DELETE FROM emp PARTITION (p0) WHERE x = 1', 'emp の PARTITION (p0) — 表のうち、指定したパーティションの行だけを対象にする'],
+  ])('表の後ろの PARTITION を作用説明に書き、行は SQL の中の指定を指す: %s', (sql, expected) => {
+    const parsed = parseMySqlQuery(sql);
+    if (!parsed.success) throw new Error(parsed.error.message);
+    const line = buildQueryEffect(parsed.query, 'japanese')
+      .sections.flatMap((s) => s.lines ?? [])
+      .find((l) => l.text === expected);
+    expect(line).toBeDefined();
+    expect(sql.slice(line!.sourceSpan!.start, line!.sourceSpan!.end)).toMatch(/^PARTITION \(p0(, p1)?\)$/);
+  });
+
+  it('集合演算の文の行ロックは、これまでどおり SQL パーサーに任せる', () => {
+    expect(() => effectTexts('SELECT u.id FROM users u UNION SELECT o.id FROM orders o FOR UPDATE')).not.toThrow();
+  });
 });

@@ -16,8 +16,25 @@ import type { ConditionNode, ParsedQuery, SourceSpan, SqlFragment } from './type
 export type { CodeRegion };
 export { findCodeRegions, maskNonCode } from './sql-lex';
 
+/** 文の最後の行ロックの指定（`FOR SHARE SKIP LOCKED` など）。sourceSpan は前処理に渡した SQL の座標 */
+export interface LockingClauseInfo {
+  text: string;
+  sourceSpan: SourceSpan;
+}
+
+/** 表の後ろの `PARTITION (p0, p1)`。sourceSpan は前処理に渡した SQL の座標 */
+export interface TableModifierInfo {
+  kind: 'partition';
+  text: string;
+  sourceSpan: SourceSpan;
+}
+
 export interface PreprocessResult {
   sql: string;
+  /** 取り除いた、文の最後の FOR UPDATE / FOR SHARE。parser.ts が最上位の SELECT に持たせる */
+  lockingClause?: LockingClauseInfo;
+  /** 取り除いた、表の後ろの PARTITION (…)。読む行を変えるので、parser.ts が直前の表に持たせて作用説明に出す */
+  tableModifiers: TableModifierInfo[];
   naturalJoinStarts: number[];
   straightJoinHintSelectStarts: number[];
   /** straightJoinHintSelectStarts と同じ順。元 SQL 上の SELECT … STRAIGHT_JOIN 範囲 */
@@ -472,8 +489,57 @@ function quoteUpdateSetDefault(state: ProcessState, recorded: RecordedStarts): v
   }
 }
 
+/**
+ * 文の最後の `FOR UPDATE` / `FOR SHARE`（`OF 表`・`NOWAIT`・`SKIP LOCKED` を含む）を空白に置き換え、書き方を記録する。
+ * MySQL は `FOR {UPDATE | SHARE} [OF tbl_name [, tbl_name] ...] [NOWAIT | SKIP LOCKED]` を書ける
+ * （MySQL 8.4 Reference Manual「SELECT Statement」「Locking Reads」）が、SQL パーサーは `FOR SHARE` と `OF` を読めない。
+ * 集合演算の文と、括弧の中の指定は、どの SELECT の指定かを決めずに済むよう、これまでどおりパーサーに任せる
+ */
+const LOCKING_CLAUSE_START_RE = /\bFOR\s+(?:UPDATE|SHARE)\b/gi;
+const LOCKING_CLAUSE_RE = /^FOR\s+(?:UPDATE|SHARE)\b(?:\s+OF\s+[^;()]+?)?(?:\s+(?:NOWAIT|SKIP\s+LOCKED))?\s*;?\s*$/i;
+
+function stripTrailingLockingClause(state: ProcessState): LockingClauseInfo | undefined {
+  const masked = maskNonCode(state.sql);
+  if (/\b(?:UNION|INTERSECT|EXCEPT)\b/i.test(masked)) return undefined;
+  const last = [...masked.matchAll(LOCKING_CLAUSE_START_RE)].pop();
+  if (!last) return undefined;
+  const start = last.index;
+  const before = masked.slice(0, start);
+  if ((before.match(/\(/g)?.length ?? 0) !== (before.match(/\)/g)?.length ?? 0)) return undefined;
+  if (!LOCKING_CLAUSE_RE.test(masked.slice(start))) return undefined;
+  const semicolon = masked.indexOf(';', start);
+  // 後ろのコメントは含めない（マスク後の文字列では空白になっている）
+  const end = start + masked.slice(start, semicolon < 0 ? undefined : semicolon).trimEnd().length;
+  const span = originalSpanForProcessedRange(state, start, end);
+  const text = state.sql.slice(start, end).replace(/\s+/g, ' ');
+  spliceProcessed(state, start, end, ' '.repeat(end - start));
+  return { text, sourceSpan: span };
+}
+
+/**
+ * 表の後ろの `PARTITION (p0, p1)` の書き方と位置を記録する。取り除くのは TABLE_PARTITION_HINT_RE の置き換え。
+ * 指定したパーティションの行だけを読むので、読む行が変わる（MySQL 8.4 Reference Manual「Partition Selection」）
+ */
+function collectTablePartitions(state: ProcessState): TableModifierInfo[] {
+  const masked = maskNonCode(state.sql);
+  const modifiers: TableModifierInfo[] = [];
+  for (const match of masked.matchAll(/\bPARTITION\s*\(/gi)) {
+    const end = readBalancedParenEnd(masked, match.index + match[0].length - 1);
+    if (end == null) continue;
+    modifiers.push({
+      kind: 'partition',
+      text: state.sql.slice(match.index, end).replace(/\s+/g, ' '),
+      sourceSpan: originalSpanForProcessedRange(state, match.index, end),
+    });
+  }
+  return modifiers;
+}
+
 export function preprocessSqlForParser(sql: string): PreprocessResult {
   const state = initState(sql);
+  // 位置を記録するより前、ほかの書き換えより前に取り除く（前処理に渡した SQL の座標のまま記録できる）
+  const lockingClause = stripTrailingLockingClause(state);
+  const tableModifiers = collectTablePartitions(state);
   const naturalJoinStarts: number[] = [];
   const straightJoinHintSelectStarts: number[] = [];
   const straightJoinHintOriginalSpans: SourceSpan[] = [];
@@ -505,6 +571,8 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
 
   return {
     sql: state.sql,
+    lockingClause,
+    tableModifiers,
     naturalJoinStarts,
     straightJoinHintSelectStarts,
     straightJoinHintOriginalSpans,

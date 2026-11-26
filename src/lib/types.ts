@@ -38,6 +38,15 @@ export interface TableRef {
   derivedQuery?: ParsedQuery;
   /** 元 SQL 内のテーブル参照位置 */
   sourceSpan?: SourceSpan;
+  /** 表の後ろの、読む行を変える指定（`PARTITION (p0)`）。書いた順 */
+  modifiers?: TableModifier[];
+}
+
+export interface TableModifier {
+  kind: 'partition';
+  /** SQL に書いたとおりの指定（空白は 1 つにまとめる） */
+  text: string;
+  sourceSpan: SourceSpan;
 }
 
 export interface UnionBranch {

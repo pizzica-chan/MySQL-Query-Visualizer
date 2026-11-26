@@ -1135,11 +1135,28 @@ function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSe
         }
       }
     }
+    pushTableModifierLines(lines, query);
   }
 
   if (lines.length === 0 && !presenceGroups) return null;
 
   return { kind: 'scope', title: scopeSectionTitle(query, mode), lines, presenceGroups };
+}
+
+/**
+ * 表の後ろの PARTITION (…)。指定したパーティションの行だけを読む・対象にする
+ * （MySQL 8.4 Reference Manual「Partition Selection」。SELECT・UPDATE・DELETE で書ける）
+ */
+function pushTableModifierLines(lines: EffectLine[], query: ParsedQuery): void {
+  const verb = query.statementType === 'SELECT' ? '読む' : '対象にする';
+  for (const table of query.tables) {
+    for (const modifier of table.modifiers ?? []) {
+      lines.push({
+        text: `${tablePrimaryName(table)} の ${modifier.text} — 表のうち、指定したパーティションの行だけを${verb}`,
+        sourceSpan: modifier.sourceSpan,
+      });
+    }
+  }
 }
 
 function describeFilterSection(
@@ -1210,7 +1227,8 @@ function describeLockingLines(query: ParsedQuery, mode: QueryEffectMode): Effect
     },
   ];
   const of = /\bOF\s+(.+?)(?=\s+(?:NOWAIT|WAIT|SKIP)\b|$)/i.exec(clause)?.[1];
-  if (of) lines.push({ text: `OF ${of} — 指定した列の表の行だけをロックする`, sourceSpan });
+  // MySQL の OF の後ろは表の名前（`FOR UPDATE OF tbl_name`）。Oracle の FOR UPDATE OF は列の名前を書くので、文が違う
+  if (of) lines.push({ text: `OF ${of} — 指定した表の行だけをロックする`, sourceSpan });
   if (/\bSKIP\s+LOCKED\b/i.test(clause)) {
     lines.push({ text: 'SKIP LOCKED — ほかのトランザクションがロックしている行は、結果に入れずに飛ばす', sourceSpan });
   }

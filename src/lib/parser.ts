@@ -29,6 +29,7 @@ import type {
   DeleteTarget,
   SqlFragment,
   SourceSpan,
+  TableModifier,
   TableRef,
   UnionTail,
 } from './types';
@@ -1642,6 +1643,54 @@ function parseDeleteAstCore(ast: any, rawSql: string): ParsedQuery {
   };
 }
 
+/** 解析結果に含まれる表すべて。派生テーブル・サブクエリ・UNION のブランチ・WITH の中までたどる */
+function allTablesOf(query: ParsedQuery): TableRef[] {
+  const tables: TableRef[] = [];
+  const seen = new Set<ParsedQuery>();
+  const visitCondition = (node: ConditionNode | undefined): void => {
+    if (!node) return;
+    node.children?.forEach(visitCondition);
+    if (node.nestedQuery) visitQuery(node.nestedQuery);
+  };
+  const visitQuery = (q: ParsedQuery): void => {
+    if (seen.has(q)) return;
+    seen.add(q);
+    tables.push(...q.tables);
+    visitCondition(q.where);
+    visitCondition(q.having);
+    q.joins.forEach((join) => visitCondition(join.conditionRoot));
+    q.tables.forEach((table) => table.derivedQuery && visitQuery(table.derivedQuery));
+    q.unionBranches?.forEach((branch) => visitQuery(branch.query));
+    q.ctes?.forEach((cte) => visitQuery(cte.query));
+    q.embeddedSubqueries?.forEach(visitQuery);
+  };
+  visitQuery(query);
+  return tables;
+}
+
+/**
+ * 前処理で取り除いた表の後ろの PARTITION (…) を、その表に持たせる。PARTITION は表の名前のすぐ後ろ（別名の前）に書くので、
+ * 指定より前から始まる表のうち、いちばん近いものの指定とする。同じ表を別のオブジェクトとして持つことがあるので、
+ * 同じ位置から始まる表すべてに持たせる
+ */
+function attachTableModifiers(query: ParsedQuery, modifiers: TableModifier[]): ParsedQuery {
+  if (modifiers.length === 0) return query;
+  const tables = allTablesOf(query).filter((t) => t.sourceSpan);
+  for (const modifier of modifiers) {
+    let best: number | undefined;
+    for (const table of tables) {
+      const start = table.sourceSpan!.start;
+      if (start <= modifier.sourceSpan.start && (best === undefined || start > best)) best = start;
+    }
+    if (best === undefined) continue;
+    for (const table of tables) {
+      if (table.sourceSpan!.start !== best) continue;
+      if (!table.modifiers?.includes(modifier)) table.modifiers = [...(table.modifiers ?? []), modifier];
+    }
+  }
+  return query;
+}
+
 export function parseMySqlQuery(sql: string): ParseResult {
   resetIds();
 
@@ -1681,6 +1730,8 @@ export function parseMySqlQuery(sql: string): ParseResult {
       straightJoinHintOriginalSpans: straightSpans,
       processedToOriginal,
       renamedFunctions: renamed,
+      lockingClause: strippedLocking,
+      tableModifiers: strippedModifiers,
     } = preprocessSqlForParser(trimmed);
     processedToInputForError = processedToOriginal.map(toInputOffset);
     renamedFunctions = renamed;
@@ -1729,8 +1780,13 @@ export function parseMySqlQuery(sql: string): ParseResult {
     }
 
     const processedToInput = leadingTrim > 0 ? processedToOriginal.map(toInputOffset) : processedToOriginal;
+    // 表の後ろの PARTITION (…) は、範囲を入力 sql の座標にずらしてから、直前の表に持たせる
+    const tableModifiers = strippedModifiers.map((m) => ({
+      ...m,
+      sourceSpan: { start: toInputOffset(m.sourceSpan.start), end: toInputOffset(m.sourceSpan.end) },
+    }));
     const remap = (query: ParsedQuery) =>
-      trimParsedQuerySpanEnds(remapParsedQuerySpans(processedToInput, query, sql), sql);
+      attachTableModifiers(trimParsedQuerySpanEnds(remapParsedQuerySpans(processedToInput, query, sql), sql), tableModifiers);
 
     if (first.type === 'select') {
       // `SELECT … UNION (SELECT …)` は右側のブランチがエラーにならずに AST から消える。
@@ -1744,7 +1800,19 @@ export function parseMySqlQuery(sql: string): ParseResult {
           },
         };
       }
-      const query = parseSelectQuery(first, sql);
+      const parsed = parseSelectQuery(first, sql);
+      // 前処理で取り除いた文の最後の FOR UPDATE / FOR SHARE は、書いたとおりに表示する（OF の後ろの表の名前を大文字にしない）。
+      // 範囲は前処理に渡した SQL の座標なので、入力 sql の座標へずらす。remap はこの範囲を動かさない
+      const query = strippedLocking
+        ? {
+            ...parsed,
+            lockingClause: strippedLocking.text,
+            lockingClauseSpan: {
+              start: toInputOffset(strippedLocking.sourceSpan.start),
+              end: toInputOffset(strippedLocking.sourceSpan.end),
+            },
+          }
+        : parsed;
       return { success: true, query: remap(query) };
     }
 
@@ -1808,6 +1876,22 @@ export function parseMySqlQuery(sql: string): ParseResult {
           detail: message,
           position: nullSafe.start,
           span: nullSafe,
+        },
+      };
+    }
+    // SQL パーサーは INTERSECT ALL と EXCEPT ALL（重複を残す集合演算）を読めず、ALL の位置でエラーにする。
+    // 「「ALL」で構文を解釈できません」では原因が分からないので、演算子ごと示して対応していないと書く
+    const setAll = /\b(INTERSECT|EXCEPT)\s+$/i.exec(maskNonCode(sql).slice(0, rawSpan.start));
+    if (setAll && /^ALL\b/i.test(sql.slice(rawSpan.start))) {
+      const operatorSpan = { start: setAll.index, end: rawSpan.start + 'ALL'.length };
+      const at = lineColumnAt(sql, operatorSpan.start);
+      return {
+        success: false,
+        error: {
+          message: `${at.line} 行 ${at.column} 列の「${setAll[1]!.toUpperCase()} ALL」（重複を残す集合演算）には対応していません`,
+          detail: message,
+          position: operatorSpan.start,
+          span: operatorSpan,
         },
       };
     }
