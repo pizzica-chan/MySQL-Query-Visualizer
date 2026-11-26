@@ -5,7 +5,7 @@ import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { NO_JOIN_CONDITION, formatJoinConditionLabel } from './join-condition';
 import { findMisboundLogicalOperator, fixLogicalOperatorPrecedence } from './logical-precedence';
-import { findExecutableComment, findUnclosedLiteral, isWordChar } from './sql-lex';
+import { findExecutableComment, findUnclosedLiteral, isWordChar, readBalancedParenEnd } from './sql-lex';
 import {
   maskNonCode,
   preprocessSqlForParser,
@@ -1070,6 +1070,35 @@ function fillMissingColumnSpans(columns: SelectColumn[], ast: any): SelectColumn
   });
 }
 
+/**
+ * インラインビューの範囲（`(SELECT …) v`）。パーサは FROM の項目としての位置を返さないので、
+ * 中の SELECT の範囲から、囲む括弧と後ろの別名まで広げる。範囲が無いと、JOIN 図のノードや
+ * 作用の説明の行をクリックしても、SQL と連動しない
+ */
+function derivedTableSourceSpan(inner: SourceSpan | undefined, alias: string | undefined): SourceSpan | undefined {
+  if (!inner) return undefined;
+  const masked = maskedProcessedSql();
+  let open = inner.start - 1;
+  while (open >= 0 && /\s/.test(masked[open]!)) open -= 1;
+  if (masked[open] !== '(') return inner;
+  const close = readBalancedParenEnd(masked, open);
+  if (close == null) return inner;
+  if (!alias) return { start: open, end: close };
+  // 括弧と別名のあいだの空白・コメント・AS を飛ばす（伏せた SQL では、コメントは空白になっている）
+  let pos = close;
+  const skipBlank = () => {
+    while (pos < masked.length && /\s/.test(masked[pos]!) && processedSqlForNatural[pos] !== '`') pos += 1;
+  };
+  skipBlank();
+  const as = /^AS(?![\w$#])/i.exec(masked.slice(pos));
+  if (as) {
+    pos += as[0].length;
+    skipBlank();
+  }
+  const name = /^(?:`[^`]*`|[^\s,()]+)/.exec(processedSqlForNatural.slice(pos));
+  return { start: open, end: name ? pos + name[0].length : close };
+}
+
 const PARENTHESIZED_JOIN_MESSAGE =
   '括弧でまとめた JOIN（例: a LEFT JOIN (b JOIN c ON …) ON …）には対応していません';
 
@@ -1081,7 +1110,8 @@ function buildTableRef(entry: any, index: number): TableRef {
   if (Array.isArray(entry.expr)) throw new Error(PARENTHESIZED_JOIN_MESSAGE);
 
   if (entry.expr?.ast?.type === 'select') {
-    const alias = entry.as ?? entry.alias ?? `derived_${index}`;
+    const givenAlias = entry.as ?? entry.alias;
+    const alias = givenAlias ?? `derived_${index}`;
     const derivedQuery = buildNestedSelect(entry.expr.ast);
     const span = toSourceSpan(entry.expr?.loc) ?? derivedQuery.sourceSpan;
     return {
@@ -1091,7 +1121,7 @@ function buildTableRef(entry: any, index: number): TableRef {
       displayName: `${alias}（派生テーブル）`,
       isDerived: true,
       derivedQuery: span ? { ...derivedQuery, sourceSpan: span } : derivedQuery,
-      sourceSpan,
+      sourceSpan: sourceSpan ?? derivedTableSourceSpan(span, givenAlias),
     };
   }
 

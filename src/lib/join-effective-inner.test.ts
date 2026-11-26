@@ -571,9 +571,9 @@ describe('join-effective-inner', () => {
         ],
       );
 
-      expect(line.startsWith('o と order_items（oi）は実質 INNER JOIN')).toBe(true);
+      expect(line.startsWith('o と order_items（oi） は実質 INNER JOIN')).toBe(true);
       expect(line).toContain('後続の INNER JOIN により');
-      expect(line).toContain('SQL上は LEFT JOIN');
+      expect(line).toContain('SQL 上は LEFT JOIN');
       expect(line).not.toMatch(/^o の行をすべて残し/);
     });
 
@@ -609,8 +609,8 @@ describe('join-effective-inner', () => {
         [{ kind: 'inner_join', label: 'INNER JOIN table_d（d）' }],
       );
 
-      expect(line.startsWith('b と table_a（a）は実質 INNER JOIN')).toBe(true);
-      expect(line).toContain('SQL上は RIGHT JOIN');
+      expect(line.startsWith('b と table_a（a） は実質 INNER JOIN')).toBe(true);
+      expect(line).toContain('SQL 上は RIGHT JOIN');
       expect(line).toContain('後続の INNER JOIN により');
     });
   });
@@ -648,5 +648,31 @@ describe('join-effective-inner', () => {
     ])('未結合行では成り立たない条件は従来どおり根拠にする: %s', (_name, sql) => {
       expect(analyzeEffectiveInnerJoins(parseSql(sql))).toHaveLength(1);
     });
+  });
+});
+
+describe('後続の外部結合が実質 INNER JOIN になると、その結合条件で前の外部結合も実質 INNER JOIN になる', () => {
+  const sql =
+    'SELECT a.id FROM table_a a LEFT JOIN table_b b ON b.a_id = a.id LEFT JOIN table_c c ON c.b_id = b.id WHERE c.z > 0';
+
+  it('c が WHERE で必須になり、c と結び付く b も必須になる', () => {
+    const analyses = analyzeEffectiveInnerJoins(parseSql(sql));
+    expect(analyses).toHaveLength(2);
+    const [first, second] = analyses;
+    expect(first!.reasons.map((r) => r.kind)).toEqual(['inner_join']);
+    expect(formatEffectiveInnerCausePhrase(first!.reasons)).toBe('後続の実質 INNER JOIN により');
+    expect(second!.reasons.map((r) => r.kind)).toEqual(['where']);
+  });
+
+  it('後続の外部結合が実質 INNER JOIN でなければ、前の外部結合はそのまま', () => {
+    const analyses = analyzeEffectiveInnerJoins(parseSql(sql.replace(' WHERE c.z > 0', ' WHERE a.z > 0')));
+    expect(analyses).toEqual([]);
+  });
+
+  it('後続の結合条件が前の表を NULL のままでも通すなら、前の外部結合はそのまま', () => {
+    const analyses = analyzeEffectiveInnerJoins(
+      parseSql(sql.replace('ON c.b_id = b.id', 'ON c.a_id = a.id')),
+    );
+    expect(analyses).toHaveLength(1);
   });
 });

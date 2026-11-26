@@ -1501,6 +1501,18 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
+    name: '派生テーブルも SQL 上の範囲（括弧から別名まで）を持つ（JOIN 図のノードと SQL が連動する）',
+    category: 'subquery',
+    sql: 'SELECT v.id, w.id FROM a JOIN (SELECT 1 AS id) /* c */ AS `v` ON v.id = a.id JOIN (SELECT 2 AS id) w ON w.id = v.id',
+    expectSuccess: true,
+    assert: (q) => {
+      const sql = 'SELECT v.id, w.id FROM a JOIN (SELECT 1 AS id) /* c */ AS `v` ON v.id = a.id JOIN (SELECT 2 AS id) w ON w.id = v.id';
+      const texts = q.tables.map((t) => (t.sourceSpan ? sql.slice(t.sourceSpan.start, t.sourceSpan.end) : null));
+      const expected = ['a', '(SELECT 1 AS id) /* c */ AS `v`', '(SELECT 2 AS id) w'];
+      if (JSON.stringify(texts) !== JSON.stringify(expected)) throw new Error(JSON.stringify(texts));
+    },
+  },
+  {
     name: 'FROM の無い SELECT の列も、SQL 上の範囲を持つ',
     category: 'regression',
     sql: "SELECT 1, 'a' AS x, NOW()",
