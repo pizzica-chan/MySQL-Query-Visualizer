@@ -509,10 +509,15 @@ function endpointsFromJoinCondition(
 ): string[] {
   if (!condition) return [];
   const found = new Set<string>();
-  const re = /(?<![\w.`])(`?[A-Za-z_][\w]*`?)\s*\./g;
+  // `.` でつないだ名前の並び（`u.id`、`db.users.id`）。最後は列の名前で、その前が修飾。
+  // 修飾がデータベース名付き（`db.users`）なら、その並びのまま探し、無ければ最後の名前（`users`）で探す
+  const re = /(?<![\w.`])((?:`[^`]+`|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:`[^`]+`|[A-Za-z_][\w$]*|\*))+)/g;
   for (const match of condition.matchAll(re)) {
-    const raw = match[1]?.replace(/`/g, '') ?? '';
-    const key = nameMap.get(normalizeExpr(raw));
+    const parts = (match[1]!.match(/`[^`]+`|[^.\s]+/g) ?? []).map((part) => part.replace(/`/g, ''));
+    const qualifier = parts.slice(0, -1);
+    if (qualifier.length === 0) continue;
+    const key =
+      nameMap.get(normalizeExpr(qualifier.join('.'))) ?? nameMap.get(normalizeExpr(qualifier[qualifier.length - 1]!));
     if (key) found.add(key);
   }
   return [...found].sort();

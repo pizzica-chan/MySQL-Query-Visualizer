@@ -1030,3 +1030,29 @@ describe('compareQueryResults — 文字列リテラル内のテーブル参照'
     expect(compareQueryResults(left, inner).equalForResultSet).toBe(true);
   });
 });
+
+describe('データベース名付きの表の結合', () => {
+  it('INNER JOIN の記述順入れ替えは結果集合として同じ（結合条件が直前の表以外を参照し、出力列に関数がある形）', () => {
+    const a = mustParse(
+      'SELECT shop.orders.id, UPPER(shop.users.name), shop.payments.amount FROM shop.orders INNER JOIN shop.users ON shop.orders.user_id = shop.users.id INNER JOIN shop.payments ON shop.payments.order_id = shop.orders.id',
+    );
+    const b = mustParse(
+      'SELECT shop.orders.id, UPPER(shop.users.name), shop.payments.amount FROM shop.users INNER JOIN shop.orders ON shop.orders.user_id = shop.users.id INNER JOIN shop.payments ON shop.payments.order_id = shop.orders.id',
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(true);
+    expect(diff.categories.find((c) => c.id === 'joins')?.status).toBe('same');
+  });
+
+  it('LEFT JOIN の保全側入れ替えは結果が異なると判定する', () => {
+    const a = mustParse(
+      'SELECT shop.users.id FROM shop.users LEFT JOIN shop.orders ON shop.users.id = shop.orders.user_id',
+    );
+    const b = mustParse(
+      'SELECT shop.users.id FROM shop.orders LEFT JOIN shop.users ON shop.orders.user_id = shop.users.id',
+    );
+    const diff = compareQueryResults(a, b);
+    expect(diff.equalForResultSet).toBe(false);
+    expect(diff.categories.find((c) => c.id === 'joins')?.status).toBe('different');
+  });
+});
