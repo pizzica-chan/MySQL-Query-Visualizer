@@ -1200,3 +1200,18 @@ describe('NULL との比較', () => {
     expect(leafText("t.a = 'NULL'")).not.toContain('真にならない');
   });
 });
+
+describe('NOT IN の一覧の中の関数の NULL', () => {
+  const leafText = (where: string): string => {
+    const parsed = parseMySqlQuery(`SELECT t.id FROM t WHERE ${where}`);
+    if (!parsed.success) throw new Error(parsed.error.message);
+    const filter = buildQueryEffect(parsed.query, 'japanese').sections.find((s) => s.kind === 'filter');
+    return filter?.conditionRoot?.text ?? filter?.conditionRoot?.label ?? '';
+  };
+
+  it('関数の引数の NULL は一覧の値ではないので、どの行も残らないとは書かない', () => {
+    expect(leafText('t.id NOT IN (IFNULL(t.a, NULL), 2)')).not.toContain('どの行も残らない');
+    expect(leafText('t.id NOT IN (2, IFNULL(t.a, NULL))')).not.toContain('どの行も残らない');
+    expect(leafText('t.id NOT IN (1, NULL, IFNULL(t.a, 1))')).toContain('一覧に NULL があるので');
+  });
+});

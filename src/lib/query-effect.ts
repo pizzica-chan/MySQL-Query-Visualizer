@@ -716,8 +716,18 @@ function crossJoinPhrase(join: JoinEdge, tables: TableRef[]): string {
 /** 値の一覧（`(1, NULL)`）に NULL が書かれているか。文字列の中の NULL は数えない */
 function listContainsNullLiteral(label: string): boolean {
   const masked = maskNonCode(label);
-  const open = masked.lastIndexOf('(');
-  return open >= 0 && /(?:^|,)\s*NULL\s*(?:,|$)/i.test(masked.slice(open + 1).replace(/\)\s*$/, ''));
+  const inList = /\bIN\s*\(/i.exec(masked);
+  if (!inList) return false;
+  const open = inList.index + inList[0].length - 1;
+  const close = readBalancedParenEnd(masked, open);
+  if (close === null) return false;
+  // 一覧の中の括弧（`IFNULL(x, NULL)` のような関数の引数）は、一覧の値ではないので伏せる
+  let items = masked.slice(open + 1, close - 1);
+  for (let previous = ''; previous !== items; ) {
+    previous = items;
+    items = items.replace(/\([^()]*\)/g, (group) => ' '.repeat(group.length));
+  }
+  return /(?:^|,)\s*NULL\s*(?:,|$)/i.test(items);
 }
 
 function inConditionPhrase(node: ConditionNode): string {
