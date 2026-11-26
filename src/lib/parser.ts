@@ -51,6 +51,9 @@ let straightJoinHintOriginalSpans: SourceSpan[] = [];
 let embeddedSubqueryAsts: any[] = [];
 /** 前処理で置き換えた関数名（大文字の仮の名前 → 元の名前） */
 let renamedFunctions = new Map<string, string>();
+/** maskedProcessedSql() の結果と、その元にした processedSqlForNatural */
+let maskedProcessed = '';
+let maskedProcessedFor = '';
 
 function nextId(prefix: string): string {
   nodeCounter += 1;
@@ -65,6 +68,8 @@ function resetIds(): void {
   straightJoinHintOriginalSpans = [];
   embeddedSubqueryAsts = [];
   renamedFunctions = new Map();
+  maskedProcessed = '';
+  maskedProcessedFor = '';
 }
 
 function noteEmbeddedSubquery(ast: any): void {
@@ -986,6 +991,85 @@ function parseColumns(columns: any[]): SelectColumn[] {
   });
 }
 
+/** 前処理後の SQL の、文字列・コメント・バッククォートを伏せたもの。列の範囲を補うときに使う */
+function maskedProcessedSql(): string {
+  if (maskedProcessedFor !== processedSqlForNatural) {
+    maskedProcessed = maskNonCode(processedSqlForNatural);
+    maskedProcessedFor = processedSqlForNatural;
+  }
+  return maskedProcessed;
+}
+
+function keywordAt(masked: string, pos: number, keyword: string): boolean {
+  if (masked.slice(pos, pos + keyword.length).toUpperCase() !== keyword) return false;
+  return !/[\w$.]/.test(masked[pos - 1] ?? '') && !/[\w$]/.test(masked[pos + keyword.length] ?? '');
+}
+
+const SELECT_MODIFIERS_RE =
+  /^(?:\s*(?:DISTINCTROW|DISTINCT|ALL|HIGH_PRIORITY|STRAIGHT_JOIN|SQL_SMALL_RESULT|SQL_BIG_RESULT|SQL_BUFFER_RESULT|SQL_NO_CACHE|SQL_CACHE|SQL_CALC_FOUND_ROWS)\b)+/i;
+/** 列の並びの後ろに来る句。FROM の無い SELECT（`SELECT 1, 'a'`）でも、列の並びの終わりが分かる */
+const SELECT_LIST_END_KEYWORDS = ['FROM', 'INTO', 'WHERE', 'GROUP', 'HAVING', 'WINDOW', 'ORDER', 'LIMIT', 'FOR', 'UNION', 'EXCEPT', 'INTERSECT'];
+
+/**
+ * パーサが位置（loc）を返さない列（CASE 式・文字列や数値・NULL など）の範囲を補う。
+ * 範囲が無いと、その列をクリックしても、エディタのカーソルを置いても、SQL と連動しない。
+ * SELECT の範囲の中で、括弧の深さ 0 の SELECT から FROM（無ければ次の句か SELECT の終わり）までを、
+ * 深さ 0 のカンマで区切る（WITH の定義やサブクエリは括弧の中にあるので数えない）。
+ * 区切った数が列の数と合わないときは補わない
+ */
+function fillMissingColumnSpans(columns: SelectColumn[], ast: any): SelectColumn[] {
+  if (columns.every((column) => column.sourceSpan)) return columns;
+  const astStart = ast?.loc?.start?.offset;
+  const astEnd = ast?.loc?.end?.offset;
+  if (typeof astStart !== 'number' || typeof astEnd !== 'number') return columns;
+  const sql = processedSqlForNatural;
+  const masked = maskedProcessedSql();
+
+  let listStart: number | undefined;
+  let listEnd: number | undefined;
+  const commas: number[] = [];
+  let depth = 0;
+  for (let i = astStart; i < astEnd; i++) {
+    const ch = masked[i]!;
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    if (depth !== 0) continue;
+    if (listStart === undefined) {
+      if (keywordAt(masked, i, 'SELECT')) {
+        listStart = i + 'SELECT'.length;
+        const modifier = SELECT_MODIFIERS_RE.exec(masked.slice(listStart, astEnd));
+        if (modifier) listStart += modifier[0].length;
+        i = listStart - 1;
+      }
+    } else if (ch === ',') {
+      commas.push(i);
+    } else if (SELECT_LIST_END_KEYWORDS.some((keyword) => keywordAt(masked, i, keyword))) {
+      listEnd = i;
+      break;
+    }
+  }
+  if (listStart === undefined) return columns;
+  listEnd ??= astEnd;
+
+  const bounds = [listStart, ...commas, listEnd];
+  if (bounds.length - 1 !== columns.length) return columns;
+  return columns.map((column, index) => {
+    if (column.sourceSpan) return column;
+    let start = index === 0 ? bounds[0]! : bounds[index]! + 1;
+    let end = bounds[index + 1]!;
+    // 文字列の中も伏せてあるので、空白かどうかは前処理後の SQL の文字で見る。
+    // 範囲の後ろのコメントは trimParsedQuerySpanEnds が除く
+    for (;;) {
+      while (start < end && /\s/.test(sql[start]!)) start += 1;
+      const comment = /^(?:(?:--|#)[^\n]*|\/\*[\s\S]*?\*\/)/.exec(sql.slice(start, end));
+      if (!comment) break;
+      start += comment[0].length;
+    }
+    while (end > start && /\s/.test(sql[end - 1]!)) end -= 1;
+    return end > start ? { ...column, sourceSpan: { start, end } } : column;
+  });
+}
+
 const PARENTHESIZED_JOIN_MESSAGE =
   '括弧でまとめた JOIN（例: a LEFT JOIN (b JOIN c ON …) ON …）には対応していません';
 
@@ -1004,7 +1088,7 @@ function buildTableRef(entry: any, index: number): TableRef {
       id: nextId('tbl'),
       table: alias,
       alias,
-      displayName: `${alias} (派生テーブル)`,
+      displayName: `${alias}（派生テーブル）`,
       isDerived: true,
       derivedQuery: span ? { ...derivedQuery, sourceSpan: span } : derivedQuery,
       sourceSpan,
@@ -1221,7 +1305,7 @@ function buildSelectParsedCore(ast: any): ParsedQuery {
     joins,
     where,
     having,
-    columns: parseColumns(ast.columns),
+    columns: fillMissingColumnSpans(parseColumns(ast.columns), ast),
     groupBy,
     groupByModifier: groupByModifierText(ast),
     orderBy,

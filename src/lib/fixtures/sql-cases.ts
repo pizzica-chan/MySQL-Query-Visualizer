@@ -1489,6 +1489,29 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
+    name: 'CASE 式・文字列・数値・NULL の列も、SQL 上の範囲を持つ（クリックとカーソルで SQL と連動する）',
+    category: 'regression',
+    sql: "SELECT SQL_NO_CACHE DISTINCT CASE WHEN u.x > 1 THEN 'a' END k, 'lit' AS l, # comment, with comma\n  NULL, \"dq,str\" s, u.id FROM users u",
+    expectSuccess: true,
+    assert: (q) => {
+      const sql = "SELECT SQL_NO_CACHE DISTINCT CASE WHEN u.x > 1 THEN 'a' END k, 'lit' AS l, # comment, with comma\n  NULL, \"dq,str\" s, u.id FROM users u";
+      const texts = q.columns.map((c) => (c.sourceSpan ? sql.slice(c.sourceSpan.start, c.sourceSpan.end) : null));
+      const expected = ["CASE WHEN u.x > 1 THEN 'a' END k", "'lit' AS l", 'NULL', '"dq,str" s', 'u.id'];
+      if (JSON.stringify(texts) !== JSON.stringify(expected)) throw new Error(JSON.stringify(texts));
+    },
+  },
+  {
+    name: 'FROM の無い SELECT の列も、SQL 上の範囲を持つ',
+    category: 'regression',
+    sql: "SELECT 1, 'a' AS x, NOW()",
+    expectSuccess: true,
+    assert: (q) => {
+      const sql = "SELECT 1, 'a' AS x, NOW()";
+      const texts = q.columns.map((c) => (c.sourceSpan ? sql.slice(c.sourceSpan.start, c.sourceSpan.end) : null));
+      if (JSON.stringify(texts) !== JSON.stringify(['1', "'a' AS x", 'NOW()'])) throw new Error(JSON.stringify(texts));
+    },
+  },
+  {
     name: 'SET の値の外に書いた DEFAULT は列の名前として読ませない',
     category: 'error',
     sql: 'SELECT a FROM users WHERE a = DEFAULT',
