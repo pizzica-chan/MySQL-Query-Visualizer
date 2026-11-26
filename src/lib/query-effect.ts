@@ -338,10 +338,12 @@ function tablePrimaryName(table: TableRef): string {
     const base = table.alias || table.table;
     return derivedTableLabelAlreadyPresent(base) ? base : `${base}（派生テーブル）`;
   }
+  // schema 付きの表は schema も書く。対象テーブルの欄（displayName）と同じ名前にする
+  const physical = table.schema ? `${table.schema}.${table.table}` : table.table;
   if (table.alias && table.alias !== table.table) {
-    return `${table.table}（${table.alias}）`;
+    return `${physical}（${table.alias}）`;
   }
-  return table.table;
+  return physical;
 }
 
 function tableRefByName(tables: TableRef[], name: string): TableRef | undefined {
@@ -1220,6 +1222,11 @@ export function buildQueryEffect(query: ParsedQuery, mode: QueryEffectMode = 'sq
 export interface UnionQueryEffect {
   branches: Array<{ operator?: string; effect: QueryEffect }>;
   unionNotes: string[];
+  /**
+   * 集合演算の結果全体に掛かる ORDER BY・OFFSET・行制限。無ければ null。
+   * 各ブランチの説明には出ないので、別に出さないと、並び順や件数の上限が画面から消える
+   */
+  wholeResult: QueryEffectSection | null;
 }
 
 export function buildUnionQueryEffect(
@@ -1233,5 +1240,26 @@ export function buildUnionQueryEffect(
       operator: branch.operator,
       effect: buildQueryEffect(branch.query, mode),
     })),
+    wholeResult: describeUnionWholeResult(query, mode),
   };
+}
+
+function describeUnionWholeResult(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection | null {
+  // 結果全体の ORDER BY / LIMIT は unionTail にある。最上位の orderBy / limit と DISTINCT は、最初のブランチのもの
+  const tail = query.unionTail;
+  if (!tail) return null;
+  const lines = describePostProcessLines(
+    {
+      ...query,
+      distinct: false,
+      orderBy: tail.orderBy,
+      limit: tail.limit,
+      limitSpan: tail.limitSpan,
+      offset: tail.offset,
+      offsetSpan: tail.offsetSpan,
+      limitCommaOffset: tail.limitCommaOffset,
+    },
+    mode,
+  );
+  return lines.length > 0 ? { kind: 'info', title: '集合演算の結果全体の後処理', lines } : null;
 }
