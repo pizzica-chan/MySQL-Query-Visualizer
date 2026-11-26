@@ -1525,6 +1525,13 @@ WHERE t.a = 1 OR t.b = 2 AND (t.c = 3 OR t.d = 4)`,
     },
   },
   {
+    name: 'ON の無い LEFT JOIN は、MySQL では書けないのでエラーにする（ON の無い JOIN は書ける）',
+    category: 'error',
+    sql: 'SELECT a.x FROM a LEFT JOIN b',
+    expectSuccess: false,
+    errorContains: '「b」との LEFT JOIN に ON（結合条件）がありません',
+  },
+  {
     name: '括弧の中で集合演算をまとめる書き方は、未対応と伝える',
     category: 'error',
     sql: '(SELECT x FROM t1 UNION SELECT x FROM t2) EXCEPT SELECT x FROM t3',
