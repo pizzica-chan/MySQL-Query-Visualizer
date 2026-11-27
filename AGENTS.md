@@ -40,14 +40,32 @@ src/lib/fixtures/ 全テストが共有する SQL ケース集と不変条件ア
 ```
 入力 SQL
   → sql-preprocess: node-sql-parser が扱えない MySQL 構文を書き換え、
+                    取り除いた修飾子と句（文の最後の FOR UPDATE / FOR SHARE、PARTITION (…)、IGNORE など）を位置付きで記録し、
                     同時に processedToOriginal（位置対応表）を作る
   → node-sql-parser で AST 化
-  → parser.ts で ParsedQuery へ変換
-  → remapParsedQuerySpans で全 sourceSpan を元 SQL の座標へ戻す
+  → parser.ts で ParsedQuery へ変換（記録した行ロックと IGNORE を最上位の文に持たせる）
+  → remapParsedQuerySpans で全 sourceSpan を元 SQL の座標へ戻し、trimParsedQuerySpanEnds で範囲の後ろの空白とコメントを除き、
+    attachTableModifiers で、記録した PARTITION (…) をその表に持たせる
 ```
 
 SQL 前後比較（`query-result-diff.ts`）は、構文カテゴリのシグネチャ比較を主軸に、
 合接クエリ範囲でのみ `cq-equivalence.ts` が意味等価を厳密に証明する二段構成。
+
+## 変更を報告する前に確かめること
+
+これまでの不具合の多くは、次のどれかを確かめずに直したことから出ている。直したら、報告する前に 1 つずつ確かめる。
+
+1. **MySQL で書ける SQL か**。MySQL Reference Manual の構文と、その構文の説明にある制限を確かめる。書けない形はエラーにする（`FULL JOIN` を受け付け、ケース集にも成功する SQL として載っていた）。ケース集に `expectSuccess: true` で足す SQL も、MySQL で動くかを確かめる。
+2. **前処理で取り除いたものを、作用説明から消していないか**。修飾子や句を取り除くときは、`REMOVED_MODIFIER_HANDLING`（sql-preprocess.ts）に扱いを書く。記録して作用説明に出すか、結果の行も SQL の作用も変えない理由を書く。`preprocess-removed.test.ts` が、取り除く修飾子のすべてに扱いが決まっていることと、出すと決めたものが作用説明に出ていることを確かめている（`UPDATE IGNORE` の IGNORE と、表の後ろの `PARTITION (…)` を黙って取り除いていた）。
+3. **SQL を渡して確かめたか**。作用説明のテストは、`ParsedQuery` を手で組み立てずに、`parseMySqlQuery` に SQL を渡して書く。説明の文を用意しても、パーサーがその SQL を読めず、文まで届かないことがある（`FOR SHARE` と `FOR UPDATE OF` の説明の文があったのに、構文エラーになっていた）。
+4. **同じ仕組みの、別の形でも試したか**。1 つの形で直したら、次の形も試す。
+   - 演算子: 種類を替えた形と、左右を入れ替えた形
+   - 結合: INNER・LEFT・RIGHT・CROSS・STRAIGHT_JOIN・NATURAL・カンマ結合
+   - 位置: SQL の途中と最後、サブクエリと派生テーブルの中、UNION のブランチ
+   - 文: SELECT・UPDATE・DELETE（複数のテーブルを使う UPDATE と DELETE を含む）
+5. **エラー文が、正しい SQL を直すように案内していないか**。MySQL で書けるのに読めない構文は、未対応と書く（`EXCEPT ALL` に「「ALL」で構文を解釈できません」と出ていた）。
+6. **Oracle 版も確かめたか**（下の「Oracle 版と同じ作りのファイルが多い」）。説明の文を持ってくるときは、その方言の公式のリファレンスで意味を確かめる（`FOR UPDATE OF` の後ろに書くのは、Oracle では列、MySQL では表。Oracle 版の文を持ってきて、「指定した列の表」と書いていた）。
+7. **足したテストが、直す前のコードで失敗するか**（下の「テストや `npm run check:browser` の確認項目を足したら」）。
 
 ## 変更時に踏みやすい落とし穴
 
@@ -85,7 +103,7 @@ SQL 前後比較（`query-result-diff.ts`）は、構文カテゴリのシグネ
 
 - **SQL パーサーは、文字列・数値・NULL・CASE 式・CAST・FROM 句のサブクエリに位置（`loc`）を返さない**。列の範囲は `fillMissingColumnSpans`、派生テーブルは `derivedTableSourceSpan` で補っている（parser.ts）。範囲や位置に頼る処理を足すときは、これらの形でもテストする。
 
-- **SQL パーサーは、MySQL では書けない SQL も受け付ける**（ON の無い `LEFT JOIN` など）。受け付けたまま説明すると、MySQL では動かない SQL の作用を見せてしまう。新しい書き方に対応するときは、MySQL Reference Manual の構文で書けるかを確かめ、書けない形はエラーにする。
+- **SQL パーサーは、MySQL では書けない SQL も受け付ける**（ON の無い `LEFT JOIN`、MySQL には無い `FULL JOIN` など）。受け付けたまま説明すると、MySQL では動かない SQL の作用を見せてしまう。新しい書き方に対応するときは、MySQL Reference Manual の構文で書けるかを確かめ、書けない形はエラーにする。
 
 - **作用説明に、SQL の結果についての説明（NULL の扱い・小計の行・行ロックなど）を足すときは、公式のリファレンスで確かめ、コードのコメントに出典を書く**。ページの文を文言どおりに確かめられないときは、確かめられた範囲だけを書き、コメントにもそう書く。
 

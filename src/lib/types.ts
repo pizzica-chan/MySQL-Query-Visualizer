@@ -148,6 +148,8 @@ export interface ParsedQuery {
   /** 行ロックの指定（`FOR UPDATE SKIP LOCKED` など）。文の最上位の SELECT だけが持つ */
   lockingClause?: string;
   lockingClauseSpan?: SourceSpan;
+  /** `UPDATE IGNORE` / `DELETE IGNORE` の IGNORE の位置。エラーになった行で文を止めずに飛ばす */
+  dmlIgnoreSpan?: SourceSpan;
   orderBy: SqlFragment[];
   limit?: string;
   limitSpan?: SourceSpan;

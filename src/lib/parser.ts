@@ -1732,6 +1732,7 @@ export function parseMySqlQuery(sql: string): ParseResult {
       renamedFunctions: renamed,
       lockingClause: strippedLocking,
       tableModifiers: strippedModifiers,
+      dmlIgnoreSpan: strippedIgnore,
     } = preprocessSqlForParser(trimmed);
     processedToInputForError = processedToOriginal.map(toInputOffset);
     renamedFunctions = renamed;
@@ -1785,6 +1786,11 @@ export function parseMySqlQuery(sql: string): ParseResult {
       ...m,
       sourceSpan: { start: toInputOffset(m.sourceSpan.start), end: toInputOffset(m.sourceSpan.end) },
     }));
+    // UPDATE IGNORE / DELETE IGNORE の IGNORE。範囲は入力 sql の座標にずらしてから持たせる（remap はこの範囲を動かさない）
+    const withIgnore = (query: ParsedQuery): ParsedQuery =>
+      strippedIgnore
+        ? { ...query, dmlIgnoreSpan: { start: toInputOffset(strippedIgnore.start), end: toInputOffset(strippedIgnore.end) } }
+        : query;
     const remap = (query: ParsedQuery) =>
       attachTableModifiers(trimParsedQuerySpanEnds(remapParsedQuerySpans(processedToInput, query, sql), sql), tableModifiers);
 
@@ -1817,12 +1823,12 @@ export function parseMySqlQuery(sql: string): ParseResult {
     }
 
     if (first.type === 'update') {
-      const query = remap(parseUpdateAst(first, sql));
+      const query = remap(withIgnore(parseUpdateAst(first, sql)));
       return multiTableOrderLimitError(query, sql) ?? { success: true, query };
     }
 
     if (first.type === 'delete') {
-      const query = parseDeleteAst(first, sql);
+      const query = withIgnore(parseDeleteAst(first, sql));
       // `DELETE FROM u JOIN x ON …` や `DELETE FROM u, x` は MySQL では構文エラー（複数のテーブルを使う DELETE は、
       // 削除するテーブルを DELETE の直後か USING の前に書く。MySQL 8.4 リファレンス 15.2.2）。
       // SQL パーサーは削除対象の無い文として読むので、そのまま表示すると何を削除するのかが出ない

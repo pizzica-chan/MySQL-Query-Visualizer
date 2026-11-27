@@ -35,6 +35,8 @@ export interface PreprocessResult {
   lockingClause?: LockingClauseInfo;
   /** 取り除いた、表の後ろの PARTITION (…)。読む行を変えるので、parser.ts が直前の表に持たせて作用説明に出す */
   tableModifiers: TableModifierInfo[];
+  /** 取り除いた UPDATE IGNORE / DELETE IGNORE の IGNORE（前処理に渡した SQL の座標） */
+  dmlIgnoreSpan?: SourceSpan;
   naturalJoinStarts: number[];
   straightJoinHintSelectStarts: number[];
   /** straightJoinHintSelectStarts と同じ順。元 SQL 上の SELECT … STRAIGHT_JOIN 範囲 */
@@ -212,8 +214,32 @@ const TABLE_PARTITION_HINT_RE = /\bPARTITION\s*\(/i;
 const NATURAL_JOIN_RE =
   /\bNATURAL\s+((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+)?(?:OUTER\s+)?JOIN\b/i;
 
+/**
+ * 前処理で取り除く修飾子と、作用説明での扱い。shown は記録して作用説明に出すもの、そうでないものは、
+ * 結果の行も SQL の作用も変えない理由を reason に書く（MySQL 8.4 Reference Manual の SELECT・UPDATE・DELETE・Index Hints）。
+ * 修飾子を取り除く処理を足すときは、ここに足す。黙って取り除くと、その作用が作用説明から消える
+ * （UPDATE IGNORE の IGNORE を取り除き、エラーの行を飛ばすことを説明していなかった）。preprocess-removed.test.ts が確かめる
+ */
+export const REMOVED_MODIFIER_HANDLING: Record<string, { shown: boolean; reason: string }> = {
+  ALL: { shown: false, reason: '既定の動き（重複した行も残す）と同じ' },
+  DISTINCT: { shown: true, reason: 'SELECT DISTINCT に置き換えて残す' },
+  DISTINCTROW: { shown: true, reason: 'DISTINCT と同じ意味なので、SELECT DISTINCT に置き換えて残す' },
+  HIGH_PRIORITY: { shown: false, reason: '表のロックを待つ順番だけを変える' },
+  STRAIGHT_JOIN: { shown: true, reason: '位置を記録し、結合の順を指定したと作用説明に書く' },
+  SQL_SMALL_RESULT: { shown: false, reason: '一時表の使い方を選ぶオプティマイザへの指定' },
+  SQL_BIG_RESULT: { shown: false, reason: '一時表の使い方を選ぶオプティマイザへの指定' },
+  SQL_BUFFER_RESULT: { shown: false, reason: '結果を一時表に入れてから返す指定で、返す行は変えない' },
+  SQL_NO_CACHE: { shown: false, reason: '非推奨で、何もしない' },
+  SQL_CALC_FOUND_ROWS: { shown: false, reason: 'FOUND_ROWS() で読む件数を数えるだけで、返す行は変えない' },
+  LOW_PRIORITY: { shown: false, reason: 'ほかのセッションが読み終わるまで実行を遅らせるだけ' },
+  QUICK: { shown: false, reason: 'MyISAM で削除のときに索引の葉をまとめないだけ' },
+  IGNORE: { shown: true, reason: '位置を記録し、エラーになった行を飛ばすと作用説明に書く' },
+  'USE/FORCE/IGNORE INDEX': { shown: false, reason: '行を探すのに使う索引を指定するだけ' },
+  PARTITION: { shown: true, reason: '書き方と位置を記録し、指定したパーティションの行だけを読むと作用説明に書く' },
+};
+
 /** SELECT 直後にだけ現れる修飾子。列名・エイリアスとしては消さない */
-const SELECT_MODIFIERS = new Set([
+export const SELECT_MODIFIERS = new Set([
   'ALL',
   'DISTINCT',
   'DISTINCTROW',
@@ -227,10 +253,10 @@ const SELECT_MODIFIERS = new Set([
 ]);
 
 /** UPDATE 直後のオプション修飾子 */
-const UPDATE_OPTION_MODIFIERS = new Set(['LOW_PRIORITY', 'IGNORE']);
+export const UPDATE_OPTION_MODIFIERS = new Set(['LOW_PRIORITY', 'IGNORE']);
 
 /** DELETE 直後のオプション修飾子 */
-const DELETE_OPTION_MODIFIERS = new Set(['LOW_PRIORITY', 'QUICK', 'IGNORE']);
+export const DELETE_OPTION_MODIFIERS = new Set(['LOW_PRIORITY', 'QUICK', 'IGNORE']);
 
 function skipMaskedWhitespace(masked: string, pos: number): number {
   let i = pos;
@@ -257,6 +283,8 @@ interface ModifierStrip {
   start: number;
   end: number;
   inserted: string;
+  /** UPDATE / DELETE の IGNORE の範囲 */
+  ignore?: { start: number; end: number };
   recordStraightJoin?: boolean;
   /** STRAIGHT_JOIN トークン末尾（後続の SQL_SMALL_RESULT 等は含めない） */
   straightJoinEnd?: number;
@@ -305,15 +333,17 @@ function collectDmlOptionStrips(
     let optionEnd = start + keyword.length;
     let i = skipMaskedWhitespace(masked, optionEnd);
     let found = false;
+    let ignore: { start: number; end: number } | undefined;
     while (true) {
       const token = readWord(masked, i);
       if (!token || !modifiers.has(token.word.toUpperCase())) break;
       found = true;
+      if (token.word.toUpperCase() === 'IGNORE') ignore = { start: i, end: token.end };
       optionEnd = token.end;
       i = skipMaskedWhitespace(masked, token.end);
     }
     if (!found) continue;
-    strips.push({ start, end: optionEnd, inserted: keyword });
+    strips.push({ start, end: optionEnd, inserted: keyword, ...(ignore ? { ignore } : {}) });
   }
   return strips;
 }
@@ -324,7 +354,7 @@ function stripStatementOptionModifiers(
   straightJoinHintSelectStarts: number[],
   straightJoinHintOriginalSpans: SourceSpan[],
   recorded?: RecordedStarts,
-): void {
+): SourceSpan | undefined {
   const masked = maskNonCode(state.sql);
   const strips = [
     ...collectSelectModifierStrips(masked),
@@ -332,14 +362,18 @@ function stripStatementOptionModifiers(
     ...collectDmlOptionStrips(masked, 'DELETE', DELETE_OPTION_MODIFIERS),
   ].sort((a, b) => b.start - a.start);
 
+  let dmlIgnoreSpan: SourceSpan | undefined;
   for (const strip of strips) {
     if (strip.recordStraightJoin) {
       const spanEnd = strip.straightJoinEnd ?? strip.end;
       straightJoinHintSelectStarts.push(strip.start);
       straightJoinHintOriginalSpans.push(originalSpanForProcessedRange(state, strip.start, spanEnd));
     }
+    // 文は 1 つだけなので、UPDATE / DELETE の IGNORE も 1 つ。後ろから処理するので、最後に見たものが先頭の文のもの
+    if (strip.ignore) dmlIgnoreSpan = originalSpanForProcessedRange(state, strip.ignore.start, strip.ignore.end);
     spliceProcessed(state, strip.start, strip.end, strip.inserted, recorded);
   }
+  return dmlIgnoreSpan;
 }
 
 /** 複数テーブルの DELETE の対象に書くテーブル名（スキーマ付き・バッククォート付き・末尾の .* を含む） */
@@ -550,7 +584,7 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
     { pattern: TABLE_PARTITION_HINT_RE, replace: () => '' },
   ], recorded);
 
-  stripStatementOptionModifiers(state, straightJoinHintSelectStarts, straightJoinHintOriginalSpans, recorded);
+  const dmlIgnoreSpan = stripStatementOptionModifiers(state, straightJoinHintSelectStarts, straightJoinHintOriginalSpans, recorded);
   rewriteMultiTableDelete(state, recorded);
   quoteUpdateSetDefault(state, recorded);
 
@@ -573,6 +607,7 @@ export function preprocessSqlForParser(sql: string): PreprocessResult {
     sql: state.sql,
     lockingClause,
     tableModifiers,
+    dmlIgnoreSpan,
     naturalJoinStarts,
     straightJoinHintSelectStarts,
     straightJoinHintOriginalSpans,

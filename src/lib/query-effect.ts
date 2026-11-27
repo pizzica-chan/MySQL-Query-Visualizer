@@ -1243,8 +1243,25 @@ function describeLockingLines(query: ParsedQuery, mode: QueryEffectMode): Effect
   return lines;
 }
 
+/**
+ * UPDATE IGNORE / DELETE IGNORE。エラーで文を止めずに、その行を飛ばす（MySQL 8.4 Reference Manual の UPDATE:
+ * Rows for which duplicate-key conflicts occur on a unique key value are not updated. Rows updated to values that would
+ * cause data conversion errors are updated to the closest valid values instead。DELETE: The IGNORE modifier causes MySQL
+ * to ignore ignorable errors during the process of deleting rows / Errors that are ignored … are returned as warnings）
+ */
+function describeIgnoreLines(query: ParsedQuery, mode: QueryEffectMode): EffectLine[] {
+  const sourceSpan = query.dmlIgnoreSpan;
+  if (!sourceSpan) return [];
+  if (mode === 'sql') return [{ text: 'IGNORE', sourceSpan }];
+  const text =
+    query.statementType === 'UPDATE'
+      ? 'IGNORE — 更新の途中でエラーになっても、文を止めない。一意キーの値が重複する行は更新せず、型に合わない値は、いちばん近い正しい値にして更新する（エラーは警告になる）'
+      : 'IGNORE — 削除の途中で、無視できるエラーになっても、文を止めない（エラーは警告になる）';
+  return [{ text, sourceSpan }];
+}
+
 function describePostProcess(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSection | null {
-  const lines = [...describePostProcessLines(query, mode), ...describeLockingLines(query, mode)];
+  const lines = [...describeIgnoreLines(query, mode), ...describePostProcessLines(query, mode), ...describeLockingLines(query, mode)];
   return lines.length > 0 ? { kind: 'info', title: '後処理', lines } : null;
 }
 
