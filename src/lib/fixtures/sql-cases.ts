@@ -167,6 +167,12 @@ WHERE a.deleted_at IS NULL AND b.score > 0`,
       ['WHERE の集約関数', 'SELECT u.id FROM users u WHERE COUNT(*) > 1', '集約関数は WHERE に書けません'],
       ['WHERE のウィンドウ関数', 'SELECT u.id FROM users u WHERE ROW_NUMBER() OVER (ORDER BY u.id) = 1', 'ウィンドウ関数（OVER (…)）は WHERE に書けません'],
       ['NATURAL JOIN と USING', 'SELECT * FROM users u NATURAL JOIN orders o USING (user_id)', 'NATURAL JOIN には、ON も USING も書けません'],
+      ['別名の無い派生テーブル', 'SELECT * FROM (SELECT id FROM users) WHERE id = 1', '派生テーブル）には別名が要ります'],
+      ['Oracle の FETCH FIRST', 'SELECT id FROM users ORDER BY id FETCH FIRST 5 ROWS ONLY', '「FETCH」は MySQL にありません'],
+      ['Oracle の OFFSET … ROWS', 'SELECT id FROM users ORDER BY id OFFSET 5 ROWS', '「OFFSET … ROWS」は MySQL にありません'],
+      ['Oracle の MINUS', 'SELECT id FROM users MINUS SELECT user_id FROM orders', '「MINUS」は MySQL にありません'],
+      ['Oracle の (+)', 'SELECT u.id FROM users u, orders o WHERE u.id = o.user_id(+)', '「(+)」は Oracle の外部結合の書き方'],
+      ['Oracle の CONNECT BY', 'SELECT e.id FROM emp e START WITH e.mgr IS NULL CONNECT BY PRIOR e.id = e.mgr', 'MySQL にありません。WITH RECURSIVE'],
     ] as const
   ).map(([what, sql, errorContains]) => ({
     name: `MySQL では書けない形（${what}）はエラーにする`,

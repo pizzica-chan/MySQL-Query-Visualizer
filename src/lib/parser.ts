@@ -732,6 +732,22 @@ function parseComparisonWithSubquery(node: any): ConditionNode {
   return parseComparison(node);
 }
 
+/**
+ * `NOT EXISTS (SELECT …)` の位置。SQL パーサーはこの形の条件に位置を返さない（`EXISTS (…)` には返す）ので、
+ * 中の SELECT の位置から、前の `NOT EXISTS (` と後ろの `)` まで広げる。広げられなければ位置を持たせない
+ */
+function notExistsLoc(node: any): any | undefined {
+  const inner = extractSubquerySelectAst(node.expr)?.loc;
+  if (typeof inner?.start?.offset !== 'number' || typeof inner?.end?.offset !== 'number') return undefined;
+  const masked = maskedProcessedSql();
+  const head = /NOT\s+EXISTS\s*\(\s*$/i.exec(masked.slice(0, inner.start.offset));
+  if (!head) return undefined;
+  let end = inner.end.offset;
+  while (end < masked.length && /\s/.test(masked[end]!)) end += 1;
+  if (masked[end] !== ')') return undefined;
+  return { start: { offset: head.index }, end: { offset: end + 1 } };
+}
+
 function parseConditionTree(node: any): ConditionNode | undefined {
   if (!node) return undefined;
 
@@ -855,7 +871,7 @@ function parseConditionTree(node: any): ConditionNode | undefined {
             label: subAst ? `${op} ${summarizeSelect(subAst)}` : `${op} (subquery)`,
             nestedQuery: subAst ? buildNestedSelect(subAst) : undefined,
           },
-          node,
+          node.loc ? node : { loc: notExistsLoc(node) },
         );
       }
 
@@ -1125,7 +1141,12 @@ function buildTableRef(entry: any, index: number): TableRef {
 
   if (entry.expr?.ast?.type === 'select') {
     const givenAlias = entry.as ?? entry.alias;
-    const alias = givenAlias ?? `derived_${index}`;
+    // 派生テーブルには別名が要る（MySQL 8.4 Reference Manual「Derived Tables」: The [AS] tbl_name clause is mandatory because
+    // every table in a FROM clause must have a name）。受け付けると、仮の名前 derived_0 を画面に出してしまう
+    if (!givenAlias) {
+      throw new Error('FROM 句のサブクエリ（派生テーブル）には別名が要ります。閉じ括弧の後ろに別名を書いてください（例: (SELECT …) AS t）');
+    }
+    const alias = givenAlias;
     const derivedQuery = buildNestedSelect(entry.expr.ast);
     const span = toSourceSpan(entry.expr?.loc) ?? derivedQuery.sourceSpan;
     return {
@@ -1757,6 +1778,33 @@ function misplacedFunctionError(ast: any, sql: string, processedToInput: number[
   return null;
 }
 
+/**
+ * Oracle の書き方で、MySQL には無いもの。SQL パーサーは原因の分からない構文エラーにするか、MINUS のように受け付けてしまう。
+ * - 行制限は LIMIT だけ（MySQL 8.4 Reference Manual の SELECT の構文。FETCH FIRST と OFFSET … ROWS は無い）
+ * - MINUS は無い（「Set Operations」: Some database systems, such as Oracle, use MINUS … This is not supported in MySQL）
+ * - (+) の外部結合と、CONNECT BY の階層問い合わせは無い
+ */
+const ORACLE_ONLY_SYNTAX: Array<{ pattern: RegExp; message: string }> = [
+  { pattern: /\bFETCH\s+(?:FIRST|NEXT)\b/i, message: '「FETCH」は MySQL にありません。行の数を制限するなら LIMIT で書いてください' },
+  { pattern: /\bOFFSET\s+\S+\s+ROWS?\b/i, message: '「OFFSET … ROWS」は MySQL にありません。LIMIT … OFFSET … で書いてください' },
+  { pattern: /\bMINUS\b(?=\s+(?:ALL\s+|DISTINCT\s+)?(?:SELECT\b|\())/i, message: '「MINUS」は MySQL にありません。EXCEPT と書いてください' },
+  { pattern: /\(\s*\+\s*\)/, message: '「(+)」は Oracle の外部結合の書き方で、MySQL にはありません。LEFT JOIN … ON で書いてください' },
+  { pattern: /\b(?:CONNECT\s+BY|START\s+WITH)\b/i, message: '階層問い合わせ（START WITH / CONNECT BY）は MySQL にありません。WITH RECURSIVE で書いてください' },
+];
+
+function oracleOnlySyntaxError(trimmed: string, leadingTrim: number, sql: string): ParseResult | null {
+  const masked = maskNonCode(trimmed);
+  const hits = ORACLE_ONLY_SYNTAX.map(({ pattern, message }) => ({ match: pattern.exec(masked), message }))
+    .filter((hit): hit is { match: RegExpExecArray; message: string } => hit.match !== null)
+    .sort((a, b) => a.match.index - b.match.index);
+  const first = hits[0];
+  if (!first) return null;
+  const start = first.match.index + leadingTrim;
+  const end = start + first.match[0].length;
+  const { line, column } = lineColumnAt(sql, start);
+  return { success: false, error: { message: `${line} 行 ${column} 列の${first.message}`, position: start, span: { start, end } } };
+}
+
 export function parseMySqlQuery(sql: string): ParseResult {
   resetIds();
 
@@ -1785,6 +1833,8 @@ export function parseMySqlQuery(sql: string): ParseResult {
   // ずらさないと、空行や字下げで始まる SQL でエディタの強調位置がその分だけ手前にずれる
   const leadingTrim = sql.length - sql.trimStart().length;
   const toInputOffset = (offset: number): number => offset + leadingTrim;
+  const oracleOnly = oracleOnlySyntaxError(trimmed, leadingTrim, sql);
+  if (oracleOnly) return oracleOnly;
   /** 前処理後の SQL 上のオフセットと、入力 sql 上のオフセットの対応表。構文エラーの位置を戻すのに使う */
   let processedToInputForError: number[] | null = null;
 
