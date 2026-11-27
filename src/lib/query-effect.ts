@@ -1095,7 +1095,10 @@ function describeScope(query: ParsedQuery, mode: QueryEffectMode): QueryEffectSe
   const effectiveInnerByJoin = effectiveInnerAnalysisByJoinId(query);
 
   if (query.tables.length === 0) {
-    lines.push({ text: '対象テーブルが指定されていません' });
+    // FROM の無い SELECT（`SELECT 1 + 1`）は、表を読まずに式の値を 1 行だけ返す
+    lines.push({
+      text: query.statementType === 'SELECT' ? 'FROM が無いので、表を読まずに式の値を 1 行だけ返す' : '対象テーブルが指定されていません',
+    });
   } else {
     if (query.ctes?.length) {
       for (const cte of query.ctes) {
