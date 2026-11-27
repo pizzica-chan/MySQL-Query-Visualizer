@@ -109,3 +109,17 @@ describe('effect-text-highlight', () => {
     expect(segments.some((s) => s.kind === 'column' && s.text === 'u.id')).toBe(true);
   });
 });
+
+describe('effect-text-highlight — 日本語の名前', () => {
+  it('日本語の名前の修飾付きの列も、ASCII の名前と同じく列として色を付ける。語の途中からは始めない', () => {
+    const parsed = parseMySqlQuery('SELECT 社員.名前 FROM 社員 JOIN 部署 ON 部署.id = 社員.部署id');
+    if (!parsed.success) throw new Error(parsed.error.message);
+    expect(kinds('結合条件「部署.id = 社員.部署id」', parsed.query)).toEqual([
+      { kind: 'string', text: '「' },
+      { kind: 'column', text: '部署.id' },
+      { kind: 'column', text: '社員.部署id' },
+      { kind: 'string', text: '」' },
+    ]);
+    expect(kinds('列の部署.id', parsed.query).some((s) => s.text === '列の部署.id')).toBe(false);
+  });
+});
