@@ -405,6 +405,11 @@ export const RESULT_DIFF_PAIRS: ResultDiffPair[] = [
     'SELECT ユーザー.名前 FROM ユーザー WHERE ユーザー.状態 = 1',
     'SELECT `ユーザー`.`名前` FROM `ユーザー` WHERE `ユーザー`.`状態` = 1',
   ),
+  // --- LIMIT の書き方（LIMIT offset, row_count と LIMIT row_count OFFSET offset は同じ。OFFSET 0 は OFFSET 無しと同じ） ---
+  same('LIMIT 5, 10 と LIMIT 10 OFFSET 5', 'SELECT a.id FROM a ORDER BY a.id LIMIT 5, 10', 'SELECT a.id FROM a ORDER BY a.id LIMIT 10 OFFSET 5'),
+  same('LIMIT 10 と LIMIT 10 OFFSET 0', 'SELECT a.id FROM a ORDER BY a.id LIMIT 10', 'SELECT a.id FROM a ORDER BY a.id LIMIT 10 OFFSET 0'),
+  different('LIMIT 5, 10 と LIMIT 5 OFFSET 10', 'SELECT a.id FROM a ORDER BY a.id LIMIT 5, 10', 'SELECT a.id FROM a ORDER BY a.id LIMIT 5 OFFSET 10'),
+  different('OFFSET 0 と OFFSET 1', 'SELECT a.id FROM a ORDER BY a.id LIMIT 10 OFFSET 0', 'SELECT a.id FROM a ORDER BY a.id LIMIT 10 OFFSET 1'),
   // --- UNION DISTINCT（UNION と同じ意味。MySQL 8.4 リファレンス 15.2.18） ---
   same('UNION DISTINCT と UNION', 'SELECT a.x FROM a UNION DISTINCT SELECT b.x FROM b', 'SELECT a.x FROM a UNION SELECT b.x FROM b'),
   different('UNION DISTINCT と UNION ALL', 'SELECT a.x FROM a UNION DISTINCT SELECT b.x FROM b', 'SELECT a.x FROM a UNION ALL SELECT b.x FROM b'),

@@ -129,6 +129,28 @@ function topLevelOrderByRange(query: ParsedQuery, masked: string): Range[] {
   return [{ start: first - keyword[0].length, end: orderByClauseEnd(masked, scanFrom) }];
 }
 
+/**
+ * 最上位の LIMIT 句の範囲（`LIMIT 5, 10` と `LIMIT 10 OFFSET 5`）。件数と飛ばす行の数は LIMIT カテゴリが比べるので、
+ * 書き方の違い（`,` と OFFSET）をここでは数えない。SQL パーサーは数値に位置を返さないので、括弧の外にある最後の LIMIT から、
+ * 次の句（FOR・LOCK・INTO）か `;` までを句とする
+ */
+function topLevelLimitRange(query: ParsedQuery, masked: string): Range[] {
+  const owner = query.unionBranches?.length ? query.unionTail : query;
+  if (!owner?.limit && !owner?.offset) return [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < masked.length; i += 1) {
+    const ch = masked[i]!;
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (depth === 0 && /[Ll]/.test(ch) && !/[\w$]/.test(masked[i - 1] ?? ' ') && /^limit\b/i.test(masked.slice(i, i + 6))) start = i;
+  }
+  if (start < 0) return [];
+  let end = start + 'limit'.length;
+  while (end < masked.length && masked[end] !== ';' && !/^(?:for|lock|into)\b/i.test(masked.slice(end, end + 5))) end += 1;
+  return [{ start, end }];
+}
+
 function visitCondition(node: ConditionNode | undefined, visit: (query: ParsedQuery) => void): void {
   if (!node) return;
   if (node.nestedQuery) visitQueryTree(node.nestedQuery, visit);
@@ -224,6 +246,7 @@ function tokenize(query: ParsedQuery, ignoredNames: Set<string>): string[] {
     ...indexHintRanges(masked),
     ...lockingClauseRanges(masked),
     ...topLevelOrderByRange(query, masked),
+    ...topLevelLimitRange(query, masked),
     ...multiTableDeleteRanges(query, masked),
     ...setOperatorDistinctRanges(masked),
   ];

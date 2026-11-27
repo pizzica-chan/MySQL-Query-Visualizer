@@ -814,12 +814,14 @@ function resultTail(query: ParsedQuery): UnionTail {
   return query.unionTail ?? { orderBy: [] };
 }
 
+/**
+ * LIMIT と OFFSET の比較用シグネチャ。`LIMIT 5, 10` と `LIMIT 10 OFFSET 5` は同じ行を返す（MySQL 8.4 Reference Manual の
+ * SELECT: For compatibility with PostgreSQL, MySQL also supports the LIMIT row_count OFFSET offset syntax）ので、書き方は比べない。
+ * 最初の行の位置は 0 なので、OFFSET 0 は OFFSET が無いのと同じ
+ */
 function limitSignature(query: UnionTail): string {
-  return [
-    normalizeExpr(query.limit),
-    normalizeExpr(query.offset),
-    query.limitCommaOffset ? 'comma' : 'offset',
-  ].join('|');
+  const offset = normalizeExpr(query.offset);
+  return [normalizeExpr(query.limit), offset === '0' ? '' : offset].join('|');
 }
 
 function unionBranchSignature(branch: UnionBranch): string {
