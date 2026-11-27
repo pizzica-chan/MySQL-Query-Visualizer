@@ -1376,14 +1376,18 @@ function buildSelectParsedCore(ast: any): ParsedQuery {
   let having = parseConditionTree(ast.having);
   if (having) having = enrichConditionTree(having);
 
-  const groupBy: SqlFragment[] = toArray<any>(ast.groupby?.columns ?? ast.groupby).map((g: any) => ({
+  const groupEntries = toArray<any>(ast.groupby?.columns ?? ast.groupby);
+  const groupSpans = groupEntries.some((g: any) => !g?.loc) ? clauseItemSpans(ast, 'GROUP', groupEntries.length) : [];
+  const groupBy: SqlFragment[] = groupEntries.map((g: any, index: number) => ({
     text: exprToString(g),
-    sourceSpan: toSourceSpan(g.loc),
+    sourceSpan: toSourceSpan(g.loc) ?? groupSpans[index],
   }));
 
-  const orderBy: SqlFragment[] = toArray<any>(ast.orderby).map((o: any) => ({
+  const orderEntries = toArray<any>(ast.orderby);
+  const orderSpans = orderEntries.some((o: any) => !o?.expr?.loc) ? clauseItemSpans(ast, 'ORDER', orderEntries.length) : [];
+  const orderBy: SqlFragment[] = orderEntries.map((o: any, index: number) => ({
     text: `${exprToString(o.expr)}${o.type ? ` ${o.type}` : ''}`,
-    sourceSpan: orderByEntrySourceSpan(o, processedSqlForNatural),
+    sourceSpan: orderByEntrySourceSpan(o, processedSqlForNatural) ?? orderSpans[index],
   }));
 
   const { limit, offset, limitSpan, offsetSpan, limitCommaOffset } = parseLimitOffset(ast);
@@ -1615,6 +1619,58 @@ function parseLimitClause(limitAst: any): {
     offsetSpan: secondSpan,
     limitCommaOffset: false,
   };
+}
+
+/**
+ * GROUP BY / ORDER BY の項目の範囲（前処理後の SQL の座標）を、SQL の文から求める。SQL パーサーは数値（`ORDER BY 2`）や
+ * CASE 式に位置を返さないので、その項目は作用説明をクリックしても SQL を選べなかった。この SELECT の範囲の中で、括弧の外にある
+ * 最後のキーワードから、括弧の外の `,` で項目を区切る。区切った数が項目の数と合わないときは使わない
+ */
+function clauseItemSpans(ast: any, keyword: 'GROUP' | 'ORDER', count: number): Array<SourceSpan | undefined> {
+  const start = locStartOffset(ast);
+  const end = ast?.loc?.end?.offset;
+  if (start == null || typeof end !== 'number' || count === 0) return [];
+  const masked = maskedProcessedSql();
+  const keywordRe = keyword === 'GROUP' ? /^GROUP\s+BY\b/i : /^ORDER\s+(?:SIBLINGS\s+)?BY\b/i;
+  const stopRe = /^(?:HAVING|ORDER|UNION|INTERSECT|MINUS|EXCEPT|FETCH|OFFSET|LIMIT|FOR|WINDOW|LOCK|INTO|WITH)\b/i;
+  const atWord = (i: number) => /[A-Za-z]/.test(masked[i] ?? '') && !/[\w$#]/.test(masked[i - 1] ?? ' ');
+  let depth = 0;
+  let clauseStart = -1;
+  for (let i = start; i < end; i += 1) {
+    const ch = masked[i]!;
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (depth === 0 && atWord(i)) {
+      const hit = keywordRe.exec(masked.slice(i, i + 24));
+      if (hit) clauseStart = i + hit[0].length;
+    }
+  }
+  if (clauseStart < 0) return [];
+  const spans: Array<SourceSpan | undefined> = [];
+  const pushItem = (from: number, to: number) => {
+    const text = masked.slice(from, to);
+    const lead = text.length - text.trimStart().length;
+    const body = text.trim();
+    spans.push(body ? { start: from + lead, end: from + lead + body.length } : undefined);
+  };
+  depth = 0;
+  let itemStart = clauseStart;
+  let i = clauseStart;
+  for (; i < masked.length; i += 1) {
+    const ch = masked[i]!;
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      if (depth === 0) break;
+      depth -= 1;
+    } else if (depth === 0 && ch === ',') {
+      pushItem(itemStart, i);
+      itemStart = i + 1;
+    } else if (depth === 0 && (ch === ';' || (keyword === 'GROUP' && atWord(i) && stopRe.test(masked.slice(i, i + 12))))) {
+      break;
+    }
+  }
+  pushItem(itemStart, i);
+  return spans.length === count ? spans : [];
 }
 
 function parseLimitOffset(ast: any): {
