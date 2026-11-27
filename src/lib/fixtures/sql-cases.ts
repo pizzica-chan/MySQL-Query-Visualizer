@@ -162,6 +162,25 @@ WHERE a.deleted_at IS NULL AND b.score > 0`,
       if (!wTypes.includes('is_null')) throw new Error('missing IS NULL');
     },
   },
+  ...(
+    [
+      ['WHERE の集約関数', 'SELECT u.id FROM users u WHERE COUNT(*) > 1', '集約関数は WHERE に書けません'],
+      ['WHERE のウィンドウ関数', 'SELECT u.id FROM users u WHERE ROW_NUMBER() OVER (ORDER BY u.id) = 1', 'ウィンドウ関数（OVER (…)）は WHERE に書けません'],
+      ['NATURAL JOIN と USING', 'SELECT * FROM users u NATURAL JOIN orders o USING (user_id)', 'NATURAL JOIN には、ON も USING も書けません'],
+    ] as const
+  ).map(([what, sql, errorContains]) => ({
+    name: `MySQL では書けない形（${what}）はエラーにする`,
+    category: 'error' as const,
+    sql,
+    expectSuccess: false,
+    errorContains,
+  })),
+  {
+    name: 'WHERE のサブクエリの中の集約関数と、HAVING の集約関数は読む',
+    category: 'subquery',
+    sql: 'SELECT u.id FROM users u WHERE u.score > (SELECT MAX(x.score) FROM users x) GROUP BY u.id HAVING COUNT(*) > 1',
+    expectSuccess: true,
+  },
   {
     // MySQL 8.4 Reference Manual「JOIN Clause」の joined_table の構文に FULL [OUTER] JOIN は無い
     name: 'MySQL には無い FULL JOIN はエラーにする',

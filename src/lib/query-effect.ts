@@ -160,7 +160,7 @@ function describePostProcessLinesJapanese(query: ParsedQuery): EffectLine[] {
   if (distinctLine) lines.push({ text: distinctLine });
   if (query.orderBy.length > 0) {
     lines.push({
-      text: `並び順 — ${query.orderBy.map((o) => o.text).join(', ')}`,
+      text: `並び順 — ${query.orderBy.map((o) => positionItemText(o.text, query)).join(', ')}`,
       sourceSpan: query.orderBy[0]?.sourceSpan,
     });
   }
@@ -204,6 +204,15 @@ function formatLimitSummary(query: ParsedQuery): string {
   return '';
 }
 
+/** ORDER BY と GROUP BY の項目が、SELECT の列の位置（`ORDER BY 2`）なら、その列を書き添える */
+function positionItemText(item: string, query: ParsedQuery): string {
+  const position = /^\s*(\d+)(?:\s+(?:ASC|DESC))?\s*$/i.exec(item);
+  if (!position) return item;
+  const column = query.columns[Number(position[1]) - 1];
+  // 列の位置は 1 から数える整数（MySQL 8.4 Reference Manual の SELECT: Column positions are integers and begin with 1。非推奨）
+  return column ? `${item}（SELECT の ${position[1]} 列目: ${column.alias ?? column.expression}）` : item;
+}
+
 function describeAggregateLinesJapanese(query: ParsedQuery): EffectLine[] {
   if (query.statementType !== 'SELECT') return [];
 
@@ -213,7 +222,7 @@ function describeAggregateLinesJapanese(query: ParsedQuery): EffectLine[] {
 
   if (query.groupBy.length > 0) {
     lines.push({
-      text: `${query.groupBy.map((g) => g.text).join(', ')} ごとに集約 — 1グループ = 結果の1行`,
+      text: `${query.groupBy.map((g) => positionItemText(g.text, query)).join(', ')} ごとに集約 — 1グループ = 結果の1行`,
       sourceSpan: query.groupBy[0]?.sourceSpan,
     });
     // WITH ROLLUP は、グループごとの行に加えて小計と総計の行（super-aggregate row）を作る。

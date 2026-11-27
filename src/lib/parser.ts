@@ -1288,6 +1288,10 @@ function parseFromClause(from: any[]): { tables: TableRef[]; joins: JoinEdge[] }
     const isNatural = isNaturalJoinEntry(entry, prevEntry);
     let { condition, parts, conditionRoot } = parseJoinConditionFromEntry(entry, prevTable, tableRef);
 
+    // NATURAL JOIN は同じ名前の列で結ぶので、ON も USING も書けない（MySQL 8.4 Reference Manual「JOIN Clause」の joined_table）
+    if (isNatural && (entry.on || entry.using)) {
+      throw new Error(`「${tableRef.alias ?? tableRef.table}」との NATURAL JOIN には、ON も USING も書けません`);
+    }
     if (isNatural && condition === NO_JOIN_CONDITION) {
       condition = 'NATURAL JOIN';
     }
@@ -1691,6 +1695,68 @@ function attachTableModifiers(query: ParsedQuery, modifiers: TableModifier[]): P
   return query;
 }
 
+/** AST の中の SELECT・UPDATE・DELETE をすべて集める（サブクエリ・UNION のブランチ・WITH の中を含む） */
+function statementAsts(node: any, out: any[] = [], seen = new Set<any>()): any[] {
+  if (!node || typeof node !== 'object' || seen.has(node)) return out;
+  seen.add(node);
+  if (Array.isArray(node)) {
+    node.forEach((item) => statementAsts(item, out, seen));
+    return out;
+  }
+  if (node.type === 'select' || node.type === 'update' || node.type === 'delete') out.push(node);
+  for (const [key, value] of Object.entries(node)) {
+    if (key !== 'loc') statementAsts(value, out, seen);
+  }
+  return out;
+}
+
+/** 1 つの問い合わせのブロックの中で、条件に合う AST のノードを探す。サブクエリ（別の SELECT）の中には入らない */
+function findInBlockAst(node: any, match: (n: any) => boolean): any | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = findInBlockAst(item, match);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (node.type === 'select' || node.ast) return undefined;
+  if (match(node)) return node;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'loc') continue;
+    const found = findInBlockAst(value, match);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * WHERE に書けない関数。SQL パーサーは受け付けるので、MySQL では動かない SQL を説明してしまう。
+ * - 集約関数は WHERE に書けない（行を絞ったあとで集約するので。集約した値で絞るなら HAVING）
+ * - ウィンドウ関数は SELECT の列と ORDER BY にだけ書ける（MySQL 8.4 Reference Manual「Window Function Concepts and
+ *   Syntax」: Window functions are permitted only in the select list and ORDER BY clause）
+ */
+function misplacedFunctionError(ast: any, sql: string, processedToInput: number[]): ParseResult | null {
+  for (const statement of statementAsts(ast)) {
+    const aggregate = findInBlockAst(statement.where, (n) => n.type === 'aggr_func' && !n.over);
+    const windowed = findInBlockAst(statement.where, (n) => Boolean(n.over));
+    const node = aggregate ?? windowed;
+    if (!node) continue;
+    const message = aggregate
+      ? '集約関数は WHERE に書けません。集約した値で絞るなら HAVING に書いてください'
+      : 'ウィンドウ関数（OVER (…)）は WHERE に書けません。サブクエリの外側で絞ってください';
+    const start = processedToInput[node.loc?.start?.offset ?? -1];
+    const last = processedToInput[(node.loc?.end?.offset ?? 0) - 1];
+    if (start === undefined || last === undefined) return { success: false, error: { message } };
+    // パーサーの位置は後ろの空白まで延びるので、範囲から除く
+    let end = last + 1;
+    while (end > start + 1 && /\s/.test(sql[end - 1] ?? '')) end -= 1;
+    const at = lineColumnAt(sql, start);
+    return { success: false, error: { message: `${at.line} 行 ${at.column} 列の${message}`, position: start, span: { start, end } } };
+  }
+  return null;
+}
+
 export function parseMySqlQuery(sql: string): ParseResult {
   resetIds();
 
@@ -1750,6 +1816,8 @@ export function parseMySqlQuery(sql: string): ParseResult {
     });
     // パーサーは WHERE などの中で AND と OR を同じ優先順位で結び付けるので、MySQL の優先順位で組み直す
     fixLogicalOperatorPrecedence(ast);
+    const misplaced = misplacedFunctionError(ast, sql, processedToInputForError);
+    if (misplaced) return misplaced;
     const misbound = findMisboundLogicalOperator(ast);
     if (misbound) {
       return {

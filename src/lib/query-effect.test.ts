@@ -1154,7 +1154,8 @@ describe('集合演算の結果全体に掛かる後処理', () => {
     const parsed = parseMySqlQuery('SELECT DISTINCT x FROM t1 UNION ALL SELECT y FROM t2 ORDER BY 1 DESC LIMIT 3');
     if (!parsed.success) throw new Error(parsed.error.message);
     const effect = buildUnionQueryEffect(parsed.query, 'japanese');
-    expect(effect?.wholeResult?.lines?.map((l) => l.text)).toEqual(['並び順 — 1 DESC', '件数上限 — 最大 3 行']);
+    // 集合演算の結果の列の位置は、最初のブランチの SELECT の列で数える
+    expect(effect?.wholeResult?.lines?.map((l) => l.text)).toEqual(['並び順 — 1 DESC（SELECT の 1 列目: x）', '件数上限 — 最大 3 行']);
     expect(effect?.branches.every((b) => !b.effect.summary.includes('最大'))).toBe(true);
   });
 
@@ -1239,6 +1240,16 @@ describe('小計の行を作る GROUP BY・BINARY・LATERAL', () => {
     expect(effectLines(sql).some((t) => t.startsWith('u の行ごとに x（派生テーブル） を作り直して組み合わせる'))).toBe(true);
     expect(effectLines(sql, 'sql').some((t) => t.startsWith('LATERAL — u の行ごとに'))).toBe(true);
     expect(effectLines('SELECT u.id FROM users u, (SELECT 1 y) x').some((t) => t.includes('直積'))).toBe(true);
+  });
+});
+
+describe('列の位置', () => {
+  it('ORDER BY と GROUP BY の列の位置は、SELECT の何列目かを書き添える', () => {
+    const parsed = parseMySqlQuery('SELECT u.dept_id, COUNT(*) c FROM users u GROUP BY 1 ORDER BY 2 DESC, 1 + 0');
+    if (!parsed.success) throw new Error(parsed.error.message);
+    const texts = buildQueryEffect(parsed.query, 'japanese').sections.flatMap((s) => s.lines ?? []).map((l) => l.text);
+    expect(texts).toContain('並び順 — 2 DESC（SELECT の 2 列目: c）, 1 + 0');
+    expect(texts).toContain('1（SELECT の 1 列目: u.dept_id） ごとに集約 — 1グループ = 結果の1行');
   });
 });
 
