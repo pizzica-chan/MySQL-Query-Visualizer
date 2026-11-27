@@ -5,7 +5,14 @@ import { Parser } from 'node-sql-parser/build/mysql';
 import { normalizeConditionTree } from './condition-tree-normalize';
 import { NO_JOIN_CONDITION, formatJoinConditionLabel } from './join-condition';
 import { findMisboundLogicalOperator, fixLogicalOperatorPrecedence } from './logical-precedence';
-import { displayIdentifier, findExecutableComment, findUnclosedLiteral, isWordChar, readBalancedParenEnd } from './sql-lex';
+import {
+  displayIdentifier,
+  findExecutableComment,
+  findUnclosedLiteral,
+  isWordChar,
+  maskLiteralsAndComments,
+  readBalancedParenEnd,
+} from './sql-lex';
 import {
   maskNonCode,
   preprocessSqlForParser,
@@ -1805,6 +1812,65 @@ function oracleOnlySyntaxError(trimmed: string, leadingTrim: number, sql: string
   return { success: false, error: { message: `${line} 行 ${column} 列の${first.message}`, position: start, span: { start, end } } };
 }
 
+/**
+ * JOIN の ON から、FROM 句でその JOIN より後ろにある表を参照していないか。ON で参照できるのは、その JOIN までに出てきた表と
+ * 外側の問い合わせの表だけで、後ろの表を参照すると MySQL はエラーにする（Unknown column … in 'on clause'）。SQL パーサーは
+ * 受け付けるので、MySQL では動かない SQL を説明してしまう。正しい SQL をエラーにしないよう、ほかの問い合わせのブロックにも
+ * ある名前（外側の問い合わせやサブクエリの表）は調べない
+ */
+function forwardJoinReferenceError(query: ParsedQuery, sql: string): ParseResult | null {
+  const withNames = maskLiteralsAndComments(sql);
+  const blocks: ParsedQuery[] = [];
+  const seen = new Set<ParsedQuery>();
+  const visitCondition = (node: ConditionNode | undefined): void => {
+    if (!node) return;
+    node.children?.forEach(visitCondition);
+    if (node.nestedQuery) visitBlock(node.nestedQuery);
+  };
+  const visitBlock = (q: ParsedQuery): void => {
+    if (seen.has(q)) return;
+    seen.add(q);
+    blocks.push(q);
+    visitCondition(q.where);
+    visitCondition(q.having);
+    q.joins.forEach((join) => visitCondition(join.conditionRoot));
+    q.tables.forEach((table) => table.derivedQuery && visitBlock(table.derivedQuery));
+    q.unionBranches?.forEach((branch) => visitBlock(branch.query));
+    q.ctes?.forEach((cte) => visitBlock(cte.query));
+    q.embeddedSubqueries?.forEach(visitBlock);
+  };
+  visitBlock(query);
+  const key = (t: TableRef) => (t.alias ?? t.table).toLowerCase();
+  const reference = /(?<![\p{L}\p{N}\p{M}_$`.])(`(?:[^`]|``)*`|[\p{L}\p{N}\p{M}_$]+)\s*\.\s*(?:`(?:[^`]|``)*`|[\p{L}\p{N}\p{M}_$]+)/gu;
+  for (const block of blocks) {
+    const elsewhere = new Set(blocks.filter((b) => b !== block).flatMap((b) => b.tables.map(key)));
+    for (const join of block.joins) {
+      if (!join.sourceSpan || !join.conditionRoot) continue;
+      const targetIndex = block.tables.findIndex((t) => t.id === join.targetId);
+      if (targetIndex < 0) continue;
+      const visible = new Set(block.tables.slice(0, targetIndex + 1).map(key));
+      const later = new Set(block.tables.slice(targetIndex + 1).map(key));
+      const text = withNames.slice(join.sourceSpan.start, join.sourceSpan.end);
+      for (const match of text.matchAll(reference)) {
+        const raw = match[1]!;
+        const name = (raw.startsWith('`') ? raw.slice(1, -1).replace(/``/g, '`') : raw).toLowerCase();
+        if (!later.has(name) || visible.has(name) || elsewhere.has(name)) continue;
+        const start = join.sourceSpan.start + match.index!;
+        const { line, column } = lineColumnAt(sql, start);
+        return {
+          success: false,
+          error: {
+            message: `${line} 行 ${column} 列の「${match[0]}」は、この JOIN より後ろの表を参照しています。ON では、それまでに結合した表だけを参照できます`,
+            position: start,
+            span: { start, end: start + match[0].length },
+          },
+        };
+      }
+    }
+  }
+  return null;
+}
+
 export function parseMySqlQuery(sql: string): ParseResult {
   resetIds();
 
@@ -1937,7 +2003,8 @@ export function parseMySqlQuery(sql: string): ParseResult {
             },
           }
         : parsed;
-      return { success: true, query: remap(query) };
+      const mapped = remap(query);
+      return forwardJoinReferenceError(mapped, sql) ?? { success: true, query: mapped };
     }
 
     if (first.type === 'update') {
